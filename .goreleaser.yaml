@@ -1,0 +1,62 @@
+# .goreleaser.yaml
+version: 2
+
+project_name: bgp-stream
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: bgp-streamer
+    main: ./cmd/bgp-streamer/main.go
+    binary: bgp-streamer
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -tags=ebitengine
+
+  - id: bgp-viewer
+    main: ./cmd/bgp-viewer/main.go
+    binary: bgp-viewer
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -tags=ebitengine
+
+# Since Ebitengine requires CGO for Linux builds, we usually need
+# libgl1-mesa-dev, libxcursor-dev, libxrandr-dev, etc. installed
+# on the build machine.
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - audio/**/*
+      - PROXMOX.md
+      - README.md
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
