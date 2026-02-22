@@ -55,6 +55,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
             libgl1-mesa-dev \
@@ -64,7 +65,16 @@ jobs:
             libxi-dev \
             libxxf86vm-dev \
             libasound2-dev \
-            pkg-config
+            pkg-config \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libgl1-mesa-dev:arm64 \
+            libxcursor-dev:arm64 \
+            libxrandr-dev:arm64 \
+            libxinerama-dev:arm64 \
+            libxi-dev:arm64 \
+            libxxf86vm-dev:arm64 \
+            libasound2-dev:arm64
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -80,7 +90,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: latest
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

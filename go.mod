@@ -7,6 +7,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/hajimehoshi/ebiten/v2 v2.9.8
+	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/paulmach/go.geojson v1.5.0
 	golang.org/x/image v0.36.0
@@ -24,7 +25,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-text/typesetting v0.3.0 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
-	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/jezek/xgb v1.1.1 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
