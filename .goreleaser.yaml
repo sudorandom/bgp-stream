@@ -67,7 +67,6 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     files:
       - audio/**/*
-      - PROXMOX.md
       - README.md
 
 checksum:
