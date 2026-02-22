@@ -55,7 +55,25 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # Enable arm64 architecture
           sudo dpkg --add-architecture arm64
+
+          # Fix apt sources for arm64 on ubuntu-24.04 (noble)
+          # We need to force existing sources to be amd64-only
+          # and add a new source for arm64 pointing to ports.ubuntu.com
+
+          # Replace "Types: deb" with "Types: deb\nArchitectures: amd64" in the default sources file
+          # This applies to all entries in the file, including the security repo
+          sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64/g' /etc/apt/sources.list.d/ubuntu.sources
+
+          # Add the arm64 source
+          echo "Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main universe restricted multiverse
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg" | sudo tee /etc/apt/sources.list.d/arm64.sources
+
           sudo apt-get update
           sudo apt-get install -y \
             libgl1-mesa-dev \
