@@ -53,6 +53,9 @@ COPY audio/ ./audio/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
+# Add dummy audio device configuration
+RUN printf 'pcm.!default {\n    type plug\n    slave.pcm "null"\n}' > /etc/asound.conf
+
 # Set environment variables
 ENV DISPLAY=:99
 ENV LIBGL_ALWAYS_SOFTWARE=1
