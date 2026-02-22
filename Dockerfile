@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y \
     x11-xserver-utils \
     libgl1-mesa-dri \
     mesa-va-drivers \
+    intel-media-va-driver \
     libva-drm2 \
     libx11-6 \
     libxcursor1 \
@@ -52,6 +53,9 @@ COPY --from=builder /app/bgp-streamer .
 COPY audio/ ./audio/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
+
+# Add dummy audio device configuration
+RUN printf 'pcm.!default {\n    type plug\n    slave.pcm "null"\n}' > /etc/asound.conf
 
 # Set environment variables
 ENV DISPLAY=:99
