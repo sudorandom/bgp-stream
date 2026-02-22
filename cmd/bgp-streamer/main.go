@@ -133,6 +133,13 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 		log.Fatal(err)
 	}
 
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Fatalf("ffmpeg process exited with error: %v", err)
+		}
+		log.Fatal("ffmpeg process exited unexpectedly")
+	}()
+
 	log.Printf("Warming up connection using %s (5s)...", vcodec)
 	time.Sleep(5 * time.Second)
 }
