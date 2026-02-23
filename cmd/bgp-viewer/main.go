@@ -22,6 +22,7 @@ func main() {
 	go engine.StartAudioPlayer()
 	go engine.StartBufferLoop()
 	go engine.StartMetricsLoop()
+	go engine.StartMemoryWatcher()
 
 	ebiten.SetWindowSize(1280, 720)
 	ebiten.SetWindowTitle("BGP Real-Time Map Viewer")

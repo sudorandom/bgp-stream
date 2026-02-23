@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,7 +92,8 @@ type Engine struct {
 	prefixToCityCache map[uint32]cacheEntry
 	cacheMu           sync.Mutex
 
-	cityBuffer         map[string]*BufferedCity
+	cityBuffer         map[uint64]*BufferedCity
+	cityBufferPool     sync.Pool
 	bufferMu           sync.Mutex
 	visualQueue        []*QueuedPulse
 	queueMu            sync.Mutex
@@ -134,19 +136,33 @@ func NewEngine(width, height int, scale float64) *Engine {
 	m, _ := text.NewGoTextFaceSource(bytes.NewReader(gomono.TTF))
 
 	return &Engine{
-		Width:              width,
-		Height:             height,
-		FPS:                30,
-		Scale:              scale,
-		countryHubs:        make(map[string][]CityHub),
-		prefixToCityCache:  make(map[uint32]cacheEntry),
-		cityBuffer:         make(map[string]*BufferedCity),
+		Width:             width,
+		Height:            height,
+		FPS:               30,
+		Scale:             scale,
+		countryHubs:       make(map[string][]CityHub),
+		prefixToCityCache: make(map[uint32]cacheEntry),
+		cityBuffer:        make(map[uint64]*BufferedCity),
+		cityBufferPool: sync.Pool{
+			New: func() interface{} {
+				return &BufferedCity{}
+			},
+		},
 		nextPulseEmittedAt: time.Now(),
 		fontSource:         s,
 		monoSource:         m,
 		countryActivity:    make(map[string]int),
 		history:            make([]MetricSnapshot, 60),
 	}
+}
+
+func (e *Engine) StartMemoryWatcher() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		for range ticker.C {
+			debug.FreeOSMemory()
+		}
+	}()
 }
 
 func (e *Engine) InitAudio() {
@@ -418,6 +434,7 @@ func (e *Engine) loadPrefixData() error {
 	cachePath := "data/prefix-dump-cache.json"
 	if data, err := os.ReadFile(cachePath); err == nil {
 		if err := json.Unmarshal(data, &e.prefixData); err == nil {
+			debug.FreeOSMemory()
 			return nil
 		}
 	}
@@ -523,6 +540,7 @@ func (e *Engine) loadPrefixData() error {
 		events = append(events, event{allRanges[i].Start, false, &allRanges[i]})
 		events = append(events, event{allRanges[i].End, true, &allRanges[i]})
 	}
+	allRanges = nil // Clear early to free memory
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].pos != events[j].pos {
 			return events[i].pos < events[j].pos
@@ -572,6 +590,7 @@ func (e *Engine) loadPrefixData() error {
 		hasActive = getBest() != nil
 		lastPos = pos
 	}
+	events = nil // Clear events slice as it is no longer needed
 
 	// STAGE 2: Indexing
 	locToIdx := make(map[string]int)
@@ -596,6 +615,7 @@ func (e *Engine) loadPrefixData() error {
 		json.NewEncoder(f).Encode(e.prefixData)
 		f.Close()
 	}
+	debug.FreeOSMemory()
 	return nil
 }
 
@@ -705,7 +725,7 @@ func (e *Engine) StartBufferLoop() {
 		e.bufferMu.Lock()
 		var nextBatch []*QueuedPulse
 		// Convert buffered city activity into discrete pulse events for each type
-		for _, d := range e.cityBuffer {
+		for key, d := range e.cityBuffer {
 			if d.With > 0 {
 				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "with", Count: d.With})
 			}
@@ -715,9 +735,11 @@ func (e *Engine) StartBufferLoop() {
 			if d.New > 0 {
 				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "new", Count: d.New})
 			}
+			// Reset and return to pool
+			*d = BufferedCity{}
+			e.cityBufferPool.Put(d)
+			delete(e.cityBuffer, key)
 		}
-		// Reset the buffer for the next 500ms window
-		e.cityBuffer = make(map[string]*BufferedCity)
 		e.bufferMu.Unlock()
 
 		if len(nextBatch) == 0 {
@@ -757,12 +779,16 @@ func (e *Engine) StartBufferLoop() {
 }
 
 func (e *Engine) recordEvent(lat, lng float64, cc, eventType string) {
-	key := fmt.Sprintf("%.2f|%.2f", lat, lng)
+	// Use bit manipulation to create a unique uint64 key for cityBuffer
+	// This avoids expensive fmt.Sprintf allocations on every BGP event
+	key := math.Float64bits(lat) ^ (math.Float64bits(lng) << 1)
 	e.bufferMu.Lock()
 	defer e.bufferMu.Unlock()
 	b, ok := e.cityBuffer[key]
 	if !ok {
-		b = &BufferedCity{Lat: lat, Lng: lng}
+		b = e.cityBufferPool.Get().(*BufferedCity)
+		b.Lat = lat
+		b.Lng = lng
 		e.cityBuffer[key] = b
 	}
 

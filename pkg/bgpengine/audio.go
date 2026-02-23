@@ -63,7 +63,6 @@ func (e *Engine) playTrack(path string) error {
 		if err != nil {
 			return err
 		}
-		defer player.Close()
 		player.Play()
 		log.Printf("Playing (local): %s", path)
 		
@@ -81,6 +80,7 @@ func (e *Engine) playTrack(path string) error {
 			if remaining <= 0 { break }
 			time.Sleep(100 * time.Millisecond)
 		}
+		player.Close() // Ensure it is closed
 		return nil
 	}
 

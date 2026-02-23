@@ -86,6 +86,7 @@ func main() {
 	go engine.StartAudioPlayer()
 	go engine.StartBufferLoop()
 	go engine.StartMetricsLoop()
+	go engine.StartMemoryWatcher()
 
 	if *headlessFlag {
 		log.Println("Running in HEADLESS mode (Rendering active).")
