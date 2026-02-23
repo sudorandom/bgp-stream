@@ -1,9 +1,15 @@
 #!/bin/bash
 set -x
 
+# Clean up stale Xvfb lock files if they exist
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+
 # Start Xvfb in the background
 Xvfb :99 -ac -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
 XVFB_PID=$!
+
+# Ensure Xvfb is cleaned up on exit
+trap "kill $XVFB_PID" EXIT
 
 # Wait for Xvfb to be ready
 echo "Waiting for Xvfb (PID $XVFB_PID) to start..."

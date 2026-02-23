@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -16,6 +17,7 @@ import (
 var (
 	qualityFlag  = flag.String("quality", "1080p", "Stream quality: 1080p or 4k")
 	headlessFlag = flag.Bool("headless", false, "Run without a local window (more stable for 24/7 streams)")
+	outputFlag   = flag.String("output", "", "Output destination (file path or RTMP URL). Overrides YouTube stream key.")
 	streamKey    = os.Getenv("YOUTUBE_STREAM_KEY")
 	ffmpegStdin  *os.File
 	pixelBuffer  []byte
@@ -104,12 +106,20 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 	if vcodec == "libx264" {
 		ffmpegArgs = append(ffmpegArgs, "-preset", "veryfast", "-crf", "18", "-x264-params", "keyint=60:min-keyint=60:scenecut=0:bframes=2", "-color_range", "1")
 	}
-	ffmpegArgs = append(ffmpegArgs, "-c:a", "aac", "-b:a", "128k", "-f", "flv")
+	ffmpegArgs = append(ffmpegArgs, "-c:a", "aac", "-b:a", "128k")
 
-	output := "test.flv"
-	if streamKey != "" {
-		output = "rtmp://a.rtmp.youtube.com/live2/" + streamKey
-		log.Printf("YouTube Stream Key detected. Preparing to go LIVE in %s.", *qualityFlag)
+	output := *outputFlag
+	if output == "" {
+		if streamKey != "" {
+			output = "rtmp://a.rtmp.youtube.com/live2/" + streamKey
+			log.Printf("YouTube Stream Key detected. Preparing to go LIVE in %s.", *qualityFlag)
+		} else {
+			output = "test.flv"
+		}
+	}
+
+	if strings.HasPrefix(output, "rtmp://") || strings.HasPrefix(output, "rtmps://") || strings.HasSuffix(output, ".flv") {
+		ffmpegArgs = append(ffmpegArgs, "-f", "flv")
 	}
 
 	ffmpegArgs = append(ffmpegArgs, output)

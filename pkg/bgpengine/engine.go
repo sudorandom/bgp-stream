@@ -689,11 +689,15 @@ func (e *Engine) ListenToBGP() {
 	}
 }
 
+// StartBufferLoop runs a background loop that periodically processes buffered BGP events.
+// It aggregates high-frequency events into batches, shuffles them to prevent visual 
+// clustering, and paces their release into the visual queue to ensure smooth animations.
 func (e *Engine) StartBufferLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	for range ticker.C {
 		e.bufferMu.Lock()
 		var nextBatch []*QueuedPulse
+		// Convert buffered city activity into discrete pulse events for each type
 		for _, d := range e.cityBuffer {
 			if d.With > 0 {
 				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "with", Count: d.With})
@@ -705,22 +709,33 @@ func (e *Engine) StartBufferLoop() {
 				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "new", Count: d.New})
 			}
 		}
+		// Reset the buffer for the next 500ms window
 		e.cityBuffer = make(map[string]*BufferedCity)
 		e.bufferMu.Unlock()
+
 		if len(nextBatch) == 0 {
 			continue
 		}
+
+		// Shuffle the batch so events from different geographic locations are interleaved
 		rand.Shuffle(len(nextBatch), func(i, j int) { nextBatch[i], nextBatch[j] = nextBatch[j], nextBatch[i] })
+		
+		// Spread the batch evenly across the next 500ms interval
 		spacing := 500 * time.Millisecond / time.Duration(len(nextBatch))
 		now := time.Now()
 		if e.nextPulseEmittedAt.Before(now) {
 			e.nextPulseEmittedAt = now
 		}
+
 		e.queueMu.Lock()
 		for i, p := range nextBatch {
+			// Schedule the pulse to be processed by the Update() loop at a specific time
 			p.ScheduledTime = e.nextPulseEmittedAt.Add(time.Duration(i) * spacing)
 			e.visualQueue = append(e.visualQueue, p)
 		}
+
+		// Advance the next emission baseline, capping the visual backlog to 2 seconds 
+		// to prevent the visualization from falling too far behind real-time spikes.
 		e.nextPulseEmittedAt = e.nextPulseEmittedAt.Add(500 * time.Millisecond)
 		if e.nextPulseEmittedAt.After(now.Add(2 * time.Second)) {
 			e.nextPulseEmittedAt = now.Add(2 * time.Second)
