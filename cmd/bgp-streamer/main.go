@@ -18,9 +18,10 @@ var (
 	qualityFlag  = flag.String("quality", "1080p", "Stream quality: 1080p or 4k")
 	headlessFlag = flag.Bool("headless", false, "Run without a local window (more stable for 24/7 streams)")
 	outputFlag   = flag.String("output", "", "Output destination (file path or RTMP URL). Overrides YouTube stream key.")
-	softwareFlag = flag.Bool("software", false, "Force software encoding (libx264) even if hardware acceleration is available")
-	deviceFlag   = flag.String("device", "/dev/dri/renderD128", "VA-API render device path (Linux only)")
-	streamKey    = os.Getenv("YOUTUBE_STREAM_KEY")
+	softwareFlag    = flag.Bool("software", false, "Force software encoding (libx264) even if hardware acceleration is available")
+	deviceFlag      = flag.String("device", "/dev/dri/renderD128", "VA-API render device path (Linux only)")
+	vaapiDriverFlag = flag.String("vaapi-driver", "", "Force a specific VA-API driver (e.g., iHD, i965, radeonsi)")
+	streamKey       = os.Getenv("YOUTUBE_STREAM_KEY")
 	ffmpegStdin  *os.File
 	pixelBuffer  []byte
 )
@@ -78,17 +79,22 @@ func main() {
 
 func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate string) {
 	vcodec := "libx264"
-	var hwArgs []string
+	var globalHWArgs []string
+	var outputHWArgs []string
+
 	if !*softwareFlag {
 		switch runtime.GOOS {
 		case "darwin":
 			vcodec = "h264_videotoolbox"
-			hwArgs = []string{"-realtime", "true", "-q:v", "65", "-color_range", "1"}
+			outputHWArgs = []string{"-realtime", "true", "-q:v", "65", "-color_range", "1"}
 		case "linux":
 			if _, err := os.Stat(*deviceFlag); err == nil {
 				vcodec = "h264_vaapi"
-				hwArgs = []string{
-					"-vaapi_device", *deviceFlag,
+				globalHWArgs = []string{
+					"-init_hw_device", "vaapi=gpu:" + *deviceFlag,
+					"-filter_hw_device", "gpu",
+				}
+				outputHWArgs = []string{
 					"-vf", "format=nv12,hwupload",
 					"-color_range", "1",
 				}
@@ -96,8 +102,7 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 		}
 	}
 
-	ffmpegArgs := []string{}
-	ffmpegArgs = append(ffmpegArgs, hwArgs...)
+	ffmpegArgs := append([]string{}, globalHWArgs...)
 	ffmpegArgs = append(ffmpegArgs,
 		"-thread_queue_size", "1024",
 		"-f", "rawvideo", "-pixel_format", "rgba", "-video_size", fmt.Sprintf("%dx%d", width, height),
@@ -110,11 +115,17 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 		"-maxrate", maxBitrate,
 		"-bufsize", "30000k",
 		"-g", "60",
-		"-pix_fmt", "yuv420p",
 	)
+
+	if vcodec != "h264_vaapi" {
+		ffmpegArgs = append(ffmpegArgs, "-pix_fmt", "yuv420p")
+	}
+
 	if vcodec == "libx264" {
 		ffmpegArgs = append(ffmpegArgs, "-preset", "veryfast", "-crf", "18", "-x264-params", "keyint=60:min-keyint=60:scenecut=0:bframes=2", "-color_range", "1")
 	}
+
+	ffmpegArgs = append(ffmpegArgs, outputHWArgs...)
 	ffmpegArgs = append(ffmpegArgs, "-c:a", "aac", "-b:a", "128k")
 
 	output := *outputFlag
@@ -133,6 +144,14 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 
 	ffmpegArgs = append(ffmpegArgs, output)
 	cmd := exec.Command("ffmpeg", ffmpegArgs...)
+
+	// Pass environment variables for VA-API debugging and driver selection
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, "LIBVA_MESSAGES=1")
+	if *vaapiDriverFlag != "" {
+		cmd.Env = append(cmd.Env, "LIBVA_DRIVER_NAME="+*vaapiDriverFlag)
+	}
+
 	pipe, err := cmd.StdinPipe()
 	if err != nil {
 		log.Fatal(err)
