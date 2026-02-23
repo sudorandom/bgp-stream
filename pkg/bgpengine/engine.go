@@ -735,10 +735,15 @@ func (e *Engine) StartBufferLoop() {
 		}
 
 		e.queueMu.Lock()
-		for i, p := range nextBatch {
-			// Schedule the pulse to be processed by the Update() loop at a specific time
-			p.ScheduledTime = e.nextPulseEmittedAt.Add(time.Duration(i) * spacing)
-			e.visualQueue = append(e.visualQueue, p)
+		// Cap the visual backlog to prevent memory exhaustion during massive BGP spikes
+		if len(e.visualQueue) < 5000 {
+			for i, p := range nextBatch {
+				// Schedule the pulse to be processed by the Update() loop at a specific time
+				p.ScheduledTime = e.nextPulseEmittedAt.Add(time.Duration(i) * spacing)
+				e.visualQueue = append(e.visualQueue, p)
+			}
+		} else {
+			log.Printf("Dropping batch of %d pulses (Queue size: %d)", len(nextBatch), len(e.visualQueue))
 		}
 
 		// Advance the next emission baseline, capping the visual backlog to 2 seconds
@@ -809,9 +814,14 @@ func (e *Engine) getPrefixCoords(ip uint32) (float64, float64, string) {
 	if lat != 0 || lng != 0 {
 		e.cacheMu.Lock()
 		if len(e.prefixToCityCache) > 100000 {
+			// Aggressively clear 20% of the cache to avoid constant cleanup
+			count := 0
 			for k := range e.prefixToCityCache {
 				delete(e.prefixToCityCache, k)
-				break
+				count++
+				if count > 20000 {
+					break
+				}
 			}
 		}
 		e.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc}

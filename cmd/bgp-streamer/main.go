@@ -43,16 +43,24 @@ func main() {
 	engine := bgpengine.NewEngine(width, height, scale)
 	pixelBuffer = make([]byte, width*height*4)
 
+	// Use a pool of buffers to avoid constant allocations
+	bufferPool := &sync.Pool{
+		New: func() interface{} {
+			return make([]byte, width*height*4)
+		},
+	}
+
 	// Configure Stream Output with a non-blocking buffer
 	frameChan := make(chan []byte, 2)
 	engine.OnFrame = func(screen *ebiten.Image) {
 		if ffmpegStdin != nil {
-			buf := make([]byte, width*height*4)
+			buf := bufferPool.Get().([]byte)
 			screen.ReadPixels(buf)
 			select {
 			case frameChan <- buf:
 			default:
-				// Skip frame if FFmpeg is falling behind
+				// Skip frame if FFmpeg is falling behind and return buffer to pool
+				bufferPool.Put(buf)
 			}
 		}
 	}
@@ -62,6 +70,7 @@ func main() {
 			if ffmpegStdin != nil {
 				ffmpegStdin.Write(buf)
 			}
+			bufferPool.Put(buf)
 		}
 	}()
 
