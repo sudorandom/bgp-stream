@@ -27,7 +27,8 @@ RUN go build -o bgp-streamer ./cmd/bgp-streamer/main.go
 FROM debian:bookworm-slim
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y \
     ffmpeg \
     xvfb \
     x11-xserver-utils \
