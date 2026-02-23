@@ -19,6 +19,7 @@ var (
 	headlessFlag = flag.Bool("headless", false, "Run without a local window (more stable for 24/7 streams)")
 	outputFlag   = flag.String("output", "", "Output destination (file path or RTMP URL). Overrides YouTube stream key.")
 	softwareFlag = flag.Bool("software", false, "Force software encoding (libx264) even if hardware acceleration is available")
+	deviceFlag   = flag.String("device", "/dev/dri/renderD128", "VA-API render device path (Linux only)")
 	streamKey    = os.Getenv("YOUTUBE_STREAM_KEY")
 	ffmpegStdin  *os.File
 	pixelBuffer  []byte
@@ -84,13 +85,10 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 			vcodec = "h264_videotoolbox"
 			hwArgs = []string{"-realtime", "true", "-q:v", "65", "-color_range", "1"}
 		case "linux":
-			if _, err := os.Stat("/dev/dri/renderD128"); err == nil {
+			if _, err := os.Stat(*deviceFlag); err == nil {
 				vcodec = "h264_vaapi"
 				hwArgs = []string{
-					"-init_hw_device", "vaapi=va:/dev/dri/renderD128",
-					"-hwaccel", "vaapi",
-					"-hwaccel_output_format", "vaapi",
-					"-hwaccel_device", "va",
+					"-vaapi_device", *deviceFlag,
 					"-vf", "format=nv12,hwupload",
 					"-color_range", "1",
 				}
@@ -98,13 +96,14 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 		}
 	}
 
-	ffmpegArgs := []string{
+	ffmpegArgs := []string{}
+	ffmpegArgs = append(ffmpegArgs, hwArgs...)
+	ffmpegArgs = append(ffmpegArgs,
 		"-thread_queue_size", "1024",
 		"-f", "rawvideo", "-pixel_format", "rgba", "-video_size", fmt.Sprintf("%dx%d", width, height),
 		"-framerate", "30", "-i", "pipe:0",
 		"-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "pipe:3",
-	}
-	ffmpegArgs = append(ffmpegArgs, hwArgs...)
+	)
 	ffmpegArgs = append(ffmpegArgs,
 		"-c:v", vcodec,
 		"-b:v", bitrate,

@@ -33,6 +33,8 @@ RUN apt-get update && apt-get install -y \
     x11-xserver-utils \
     libgl1-mesa-dri \
     mesa-va-drivers \
+    intel-media-va-driver-non-free \
+    vainfo \
     libva-drm2 \
     libx11-6 \
     libxcursor1 \
