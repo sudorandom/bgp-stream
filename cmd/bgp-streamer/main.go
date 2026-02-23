@@ -21,6 +21,7 @@ var (
 	softwareFlag    = flag.Bool("software", false, "Force software encoding (libx264) even if hardware acceleration is available")
 	deviceFlag      = flag.String("device", "/dev/dri/renderD128", "VA-API render device path (Linux only)")
 	vaapiDriverFlag = flag.String("vaapi-driver", "", "Force a specific VA-API driver (e.g., iHD, i965, radeonsi)")
+	debugFlag       = flag.Bool("debug", false, "Enable verbose logging for debugging")
 	streamKey       = os.Getenv("YOUTUBE_STREAM_KEY")
 	ffmpegStdin  *os.File
 	pixelBuffer  []byte
@@ -89,20 +90,31 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 			outputHWArgs = []string{"-realtime", "true", "-q:v", "65", "-color_range", "1"}
 		case "linux":
 			if _, err := os.Stat(*deviceFlag); err == nil {
-				vcodec = "h264_vaapi"
-				globalHWArgs = []string{
-					"-init_hw_device", "vaapi=gpu:" + *deviceFlag,
-					"-filter_hw_device", "gpu",
+				// Check for read/write permissions
+				f, err := os.OpenFile(*deviceFlag, os.O_RDWR, 0)
+				if err != nil {
+					log.Printf("WARNING: Device %s exists but cannot be opened for RW: %v. Using software encoding.", *deviceFlag, err)
+				} else {
+					f.Close()
+					vcodec = "h264_vaapi"
+					globalHWArgs = []string{"-vaapi_device", *deviceFlag}
+					outputHWArgs = []string{
+						"-vf", "format=nv12,hwupload",
+						"-color_range", "1",
+					}
 				}
-				outputHWArgs = []string{
-					"-vf", "format=nv12,hwupload",
-					"-color_range", "1",
-				}
+			} else if *debugFlag {
+				log.Printf("DEBUG: Render device %s NOT found.", *deviceFlag)
 			}
 		}
 	}
 
-	ffmpegArgs := append([]string{}, globalHWArgs...)
+	var ffmpegArgs []string
+	if *debugFlag {
+		ffmpegArgs = append(ffmpegArgs, "-loglevel", "debug")
+	}
+
+	ffmpegArgs = append(ffmpegArgs, globalHWArgs...)
 	ffmpegArgs = append(ffmpegArgs,
 		"-thread_queue_size", "1024",
 		"-f", "rawvideo", "-pixel_format", "rgba", "-video_size", fmt.Sprintf("%dx%d", width, height),
