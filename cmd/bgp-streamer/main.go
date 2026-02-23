@@ -15,16 +15,16 @@ import (
 )
 
 var (
-	qualityFlag  = flag.String("quality", "1080p", "Stream quality: 1080p or 4k")
-	headlessFlag = flag.Bool("headless", false, "Run without a local window (more stable for 24/7 streams)")
-	outputFlag   = flag.String("output", "", "Output destination (file path or RTMP URL). Overrides YouTube stream key.")
+	qualityFlag     = flag.String("quality", "1080p", "Stream quality: 1080p or 4k")
+	headlessFlag    = flag.Bool("headless", false, "Run without a local window (more stable for 24/7 streams)")
+	outputFlag      = flag.String("output", "", "Output destination (file path or RTMP URL). Overrides YouTube stream key.")
 	softwareFlag    = flag.Bool("software", false, "Force software encoding (libx264) even if hardware acceleration is available")
 	deviceFlag      = flag.String("device", "/dev/dri/renderD128", "VA-API render device path (Linux only)")
 	vaapiDriverFlag = flag.String("vaapi-driver", "", "Force a specific VA-API driver (e.g., iHD, i965, radeonsi)")
 	debugFlag       = flag.Bool("debug", false, "Enable verbose logging for debugging")
 	streamKey       = os.Getenv("YOUTUBE_STREAM_KEY")
-	ffmpegStdin  *os.File
-	pixelBuffer  []byte
+	ffmpegStdin     *os.File
+	pixelBuffer     []byte
 )
 
 func main() {
@@ -43,13 +43,27 @@ func main() {
 	engine := bgpengine.NewEngine(width, height, scale)
 	pixelBuffer = make([]byte, width*height*4)
 
-	// Configure Stream Output
+	// Configure Stream Output with a non-blocking buffer
+	frameChan := make(chan []byte, 2)
 	engine.OnFrame = func(screen *ebiten.Image) {
 		if ffmpegStdin != nil {
-			screen.ReadPixels(pixelBuffer)
-			ffmpegStdin.Write(pixelBuffer)
+			buf := make([]byte, width*height*4)
+			screen.ReadPixels(buf)
+			select {
+			case frameChan <- buf:
+			default:
+				// Skip frame if FFmpeg is falling behind
+			}
 		}
 	}
+
+	go func() {
+		for buf := range frameChan {
+			if ffmpegStdin != nil {
+				ffmpegStdin.Write(buf)
+			}
+		}
+	}()
 
 	engine.InitPulseTexture()
 	if err := engine.LoadData(); err != nil {

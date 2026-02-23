@@ -36,15 +36,10 @@ func (e *Engine) StartAudioPlayer() {
 				continue
 			}
 
-			// Shuffle playlist
-			rand.Shuffle(len(playlists), func(i, j int) {
-				playlists[i], playlists[j] = playlists[j], playlists[i]
-			})
-
-			for _, path := range playlists {
-				if err := e.playTrack(path); err != nil {
-					log.Printf("Failed to play track %s: %v", path, err)
-				}
+			// Pick a random track
+			path := playlists[rand.Intn(len(playlists))]
+			if err := e.playTrack(path); err != nil {
+				log.Printf("Failed to play track %s: %v", path, err)
 			}
 		}
 	}()
