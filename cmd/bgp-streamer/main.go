@@ -18,6 +18,7 @@ var (
 	qualityFlag  = flag.String("quality", "1080p", "Stream quality: 1080p or 4k")
 	headlessFlag = flag.Bool("headless", false, "Run without a local window (more stable for 24/7 streams)")
 	outputFlag   = flag.String("output", "", "Output destination (file path or RTMP URL). Overrides YouTube stream key.")
+	softwareFlag = flag.Bool("software", false, "Force software encoding (libx264) even if hardware acceleration is available")
 	streamKey    = os.Getenv("YOUTUBE_STREAM_KEY")
 	ffmpegStdin  *os.File
 	pixelBuffer  []byte
@@ -77,14 +78,23 @@ func main() {
 func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate string) {
 	vcodec := "libx264"
 	var hwArgs []string
-	switch runtime.GOOS {
-	case "darwin":
-		vcodec = "h264_videotoolbox"
-		hwArgs = []string{"-realtime", "true", "-q:v", "65", "-color_range", "1"}
-	case "linux":
-		if _, err := os.Stat("/dev/dri/renderD128"); err == nil {
-			vcodec = "h264_vaapi"
-			hwArgs = []string{"-vaapi_device", "/dev/dri/renderD128", "-vf", "format=nv12,hwupload", "-color_range", "1"}
+	if !*softwareFlag {
+		switch runtime.GOOS {
+		case "darwin":
+			vcodec = "h264_videotoolbox"
+			hwArgs = []string{"-realtime", "true", "-q:v", "65", "-color_range", "1"}
+		case "linux":
+			if _, err := os.Stat("/dev/dri/renderD128"); err == nil {
+				vcodec = "h264_vaapi"
+				hwArgs = []string{
+					"-init_hw_device", "vaapi=va:/dev/dri/renderD128",
+					"-hwaccel", "vaapi",
+					"-hwaccel_output_format", "vaapi",
+					"-hwaccel_device", "va",
+					"-vf", "format=nv12,hwupload",
+					"-color_range", "1",
+				}
+			}
 		}
 	}
 

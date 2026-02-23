@@ -132,7 +132,7 @@ type MetricSnapshot struct {
 func NewEngine(width, height int, scale float64) *Engine {
 	s, _ := text.NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
 	m, _ := text.NewGoTextFaceSource(bytes.NewReader(gomono.TTF))
-	
+
 	return &Engine{
 		Width:              width,
 		Height:             height,
@@ -348,15 +348,22 @@ func (e *Engine) loadRemoteCityData() error {
 	var meta struct {
 		MaxYear int `json:"max_year"`
 	}
-	json.NewDecoder(resp.Body).Decode(&meta)
-	resp, _ = http.Get(fmt.Sprintf("https://map.kmcd.dev/data/city-dominance/%d.json", meta.MaxYear))
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return err
+	}
+	resp, err = http.Get(fmt.Sprintf("https://map.kmcd.dev/data/city-dominance/%d.json", meta.MaxYear))
+	if err != nil {
+		return err
+	}
 	defer resp.Body.Close()
 	var cities []struct {
 		Country             string
 		Coordinates         []float64
 		LogicalDominanceIPs float64 `json:"logical_dominance_ips"`
 	}
-	json.NewDecoder(resp.Body).Decode(&cities)
+	if err := json.NewDecoder(resp.Body).Decode(&cities); err != nil {
+		return err
+	}
 	for _, c := range cities {
 		hubs := e.countryHubs[c.Country]
 		weight := c.LogicalDominanceIPs
@@ -690,7 +697,7 @@ func (e *Engine) ListenToBGP() {
 }
 
 // StartBufferLoop runs a background loop that periodically processes buffered BGP events.
-// It aggregates high-frequency events into batches, shuffles them to prevent visual 
+// It aggregates high-frequency events into batches, shuffles them to prevent visual
 // clustering, and paces their release into the visual queue to ensure smooth animations.
 func (e *Engine) StartBufferLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -719,7 +726,7 @@ func (e *Engine) StartBufferLoop() {
 
 		// Shuffle the batch so events from different geographic locations are interleaved
 		rand.Shuffle(len(nextBatch), func(i, j int) { nextBatch[i], nextBatch[j] = nextBatch[j], nextBatch[i] })
-		
+
 		// Spread the batch evenly across the next 500ms interval
 		spacing := 500 * time.Millisecond / time.Duration(len(nextBatch))
 		now := time.Now()
@@ -734,7 +741,7 @@ func (e *Engine) StartBufferLoop() {
 			e.visualQueue = append(e.visualQueue, p)
 		}
 
-		// Advance the next emission baseline, capping the visual backlog to 2 seconds 
+		// Advance the next emission baseline, capping the visual backlog to 2 seconds
 		// to prevent the visualization from falling too far behind real-time spikes.
 		e.nextPulseEmittedAt = e.nextPulseEmittedAt.Add(500 * time.Millisecond)
 		if e.nextPulseEmittedAt.After(now.Add(2 * time.Second)) {
