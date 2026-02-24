@@ -28,23 +28,12 @@ FROM debian:bookworm-slim
 
 # Install runtime dependencies
 RUN sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
-    apt-get update && apt-get install -y \
-    ffmpeg \
-    xvfb \
-    x11-xserver-utils \
-    libgl1-mesa-dri \
-    mesa-va-drivers \
-    intel-media-va-driver-non-free \
-    vainfo \
-    libva-drm2 \
-    libx11-6 \
-    libxcursor1 \
-    libxrandr2 \
-    libxinerama1 \
-    libxi6 \
-    libasound2 \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get update && \
+    export ARCH=$(dpkg --print-architecture) && \
+    packages="ffmpeg xvfb x11-xserver-utils libgl1-mesa-dri mesa-va-drivers vainfo libva-drm2 libx11-6 libxcursor1 libxrandr2 libxinerama1 libxi6 libasound2 ca-certificates" && \
+    if [ "$ARCH" = "amd64" ]; then packages="$packages intel-media-va-driver-non-free"; fi && \
+    apt-get install -y $packages && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -61,7 +50,6 @@ RUN printf 'pcm.!default {\n    type plug\n    slave.pcm "null"\n}' > /etc/asoun
 
 # Set environment variables
 ENV DISPLAY=:99
-ENV LIBGL_ALWAYS_SOFTWARE=1
 
 # The entrypoint script handles starting Xvfb
 ENTRYPOINT ["./entrypoint.sh"]
