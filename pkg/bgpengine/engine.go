@@ -36,6 +36,31 @@ import (
 
 type Location []interface{}
 
+type EventType int
+
+const (
+	EventUnknown EventType = iota
+	EventNew
+	EventUpdate
+	EventWithdrawal
+	EventGossip
+)
+
+func (t EventType) String() string {
+	switch t {
+	case EventNew:
+		return "new"
+	case EventUpdate:
+		return "upd"
+	case EventWithdrawal:
+		return "with"
+	case EventGossip:
+		return "gossip"
+	default:
+		return "unknown"
+	}
+}
+
 type PrefixData struct {
 	L []Location `json:"l"`
 	R []uint32   `json:"r"`
@@ -51,26 +76,26 @@ type Pulse struct {
 	StartTime time.Time
 	Color     color.RGBA
 	MaxRadius float64
-	Type      string
+	Type      EventType
 }
 
 type QueuedPulse struct {
 	Lat, Lng      float64
-	Type          string
+	Type          EventType
 	Count         int
 	ScheduledTime time.Time
 }
 
 type BufferedCity struct {
-	Lat, Lng              float64
+	Lat, Lng               float64
 	New, Upd, With, Gossip int
 }
 
 var (
-	ColorGossip = color.RGBA{0, 191, 255, 255}  // Deep Sky Blue (Propagation)
-	ColorNew    = color.RGBA{57, 255, 20, 255}   // Hacker Green (New Announcement)
-	ColorUpd    = color.RGBA{148, 0, 211, 255}   // Deep Violet/Purple (Path Change)
-	ColorWith   = color.RGBA{255, 50, 50, 255}   // Red (Withdrawal)
+	ColorGossip = color.RGBA{0, 191, 255, 255} // Deep Sky Blue (Propagation)
+	ColorNew    = color.RGBA{57, 255, 20, 255} // Hacker Green (New Announcement)
+	ColorUpd    = color.RGBA{148, 0, 211, 255} // Deep Violet/Purple (Path Change)
+	ColorWith   = color.RGBA{255, 50, 50, 255} // Red (Withdrawal)
 
 	// Lighter versions for UI text and trendlines
 	ColorGossipUI = color.RGBA{135, 206, 250, 255} // Light Sky Blue
@@ -126,7 +151,7 @@ type Engine struct {
 	windowNote, windowPeer, windowOpen             int64
 
 	rateNew, rateUpd, rateWith, rateGossip float64
-	rateNote, ratePeer, rateOpen float64
+	rateNote, ratePeer, rateOpen           float64
 
 	countryActivity map[string]int
 	topHubs         []struct {
@@ -160,7 +185,7 @@ type Engine struct {
 
 	recentlySeen map[uint32]struct {
 		Time time.Time
-		Type string
+		Type EventType
 	}
 
 	SeenDB    *utils.DiskTrie
@@ -216,21 +241,21 @@ func NewEngine(width, height int, scale float64) *Engine {
 				return &BufferedCity{}
 			},
 		},
-		nextPulseEmittedAt: time.Now(),
-		fontSource:         s,
-		monoSource:         m,
-		countryActivity:    make(map[string]int),
-		history:            make([]MetricSnapshot, 60),
-		hubChangedAt:       make(map[string]time.Time),
-		lastHubs:           make(map[string]int),
-		hubPosition:        make(map[string]int),
-		lastMetricsUpdate:  time.Now(),
-		VisualHubs:         make(map[string]*VisualHub),
+		nextPulseEmittedAt:  time.Now(),
+		fontSource:          s,
+		monoSource:          m,
+		countryActivity:     make(map[string]int),
+		history:             make([]MetricSnapshot, 60),
+		hubChangedAt:        make(map[string]time.Time),
+		lastHubs:            make(map[string]int),
+		hubPosition:         make(map[string]int),
+		lastMetricsUpdate:   time.Now(),
+		VisualHubs:          make(map[string]*VisualHub),
 		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 5s = 5 mins
-		VisualImpact:       make(map[string]*VisualImpact),
+		VisualImpact:        make(map[string]*VisualImpact),
 		recentlySeen: make(map[uint32]struct {
 			Time time.Time
-			Type string
+			Type EventType
 		}),
 		cityCoords: make(map[string][2]float32),
 	}
@@ -266,13 +291,13 @@ func (e *Engine) Update() error {
 		if now.Sub(p.ScheduledTime) < 2*time.Second {
 			var c color.RGBA
 			switch p.Type {
-			case "new":
+			case EventNew:
 				c = ColorNew
-			case "upd":
+			case EventUpdate:
 				c = ColorUpd
-			case "with":
+			case EventWithdrawal:
 				c = ColorWith
-			case "gossip":
+			case EventGossip:
 				c = ColorGossip
 			}
 			e.AddPulse(p.Lat, p.Lng, c, p.Count, p.Type)
@@ -284,7 +309,7 @@ func (e *Engine) Update() error {
 	for cc, vh := range e.VisualHubs {
 		// Smoothly interpolate Y position
 		vh.DisplayY += (vh.TargetY - vh.DisplayY) * 0.2
-		
+
 		// Interpolate Alpha
 		vh.Alpha += (vh.TargetAlpha - vh.Alpha) * 0.2
 
@@ -311,7 +336,7 @@ func (e *Engine) Update() error {
 	active := e.pulses[:0]
 	for _, p := range e.pulses {
 		duration := 1500 * time.Millisecond
-		if p.Type == "new" {
+		if p.Type == EventNew {
 			duration = 3000 * time.Millisecond // Discoveries last twice as long
 		}
 		if now.Sub(p.StartTime) < duration {
@@ -397,7 +422,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
 		totalDuration := 1.5
-		if p.Type == "new" {
+		if p.Type == EventNew {
 			totalDuration = 3.0
 		}
 		progress := elapsed / totalDuration
@@ -406,19 +431,22 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		}
 
 		baseAlpha := 0.6
-		if p.Type == "new" {
+		if p.Type == EventNew {
 			baseAlpha = 0.8 // Brighter for discovery
 		}
-		if p.Type == "gossip" {
+		if p.Type == EventWithdrawal {
+			baseAlpha = 0.3 // More subtle for withdrawals
+		}
+		if p.Type == EventGossip {
 			baseAlpha = 0.2
 		}
 
 		scale := (3 + progress*p.MaxRadius) / float64(imgW) * 2.0
-		if p.Type == "with" {
+		if p.Type == EventWithdrawal {
 			// Imploding effect: starts large and shrinks to point
 			scale = (3 + (1.0-progress)*p.MaxRadius) / float64(imgW) * 2.0
 		}
-		if p.Type == "new" {
+		if p.Type == EventNew {
 			// Ease-out expansion: starts fast, slows down
 			easeOut := 1.0 - math.Pow(1.0-progress, 3)
 			scale = (3 + easeOut*p.MaxRadius) / float64(imgW) * 2.5
@@ -883,16 +911,16 @@ func (e *Engine) StartBufferLoop() {
 		// Convert buffered city activity into discrete pulse events for each type
 		for key, d := range e.cityBuffer {
 			if d.With > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "with", Count: d.With})
+				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventWithdrawal, Count: d.With})
 			}
 			if d.Upd > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "upd", Count: d.Upd})
+				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventUpdate, Count: d.Upd})
 			}
 			if d.New > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "new", Count: d.New})
+				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventNew, Count: d.New})
 			}
 			if d.Gossip > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "gossip", Count: d.Gossip})
+				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventGossip, Count: d.Gossip})
 			}
 			// Reset and return to pool
 			*d = BufferedCity{}
@@ -948,7 +976,7 @@ func (e *Engine) StartBufferLoop() {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc, eventType, prefix string) {
+func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, prefix string) {
 	// 1. Track prefix impact (latest bucket)
 	if prefix != "" {
 		e.metricsMu.Lock()
@@ -981,16 +1009,16 @@ func (e *Engine) recordEvent(lat, lng float64, cc, eventType, prefix string) {
 		e.countryActivity[cc]++
 	}
 	switch eventType {
-	case "new":
+	case EventNew:
 		b.New++
 		e.windowNew++
-	case "upd":
+	case EventUpdate:
 		b.Upd++
 		e.windowUpd++
-	case "with":
+	case EventWithdrawal:
 		b.With++
 		e.windowWith++
-	case "gossip":
+	case EventGossip:
 		b.Gossip++
 		e.windowGossip++
 	}
@@ -1030,7 +1058,7 @@ func (e *Engine) getPrefixCoords(ip uint32) (float64, float64, string) {
 			lng, _ = loc[1].(float64)
 			cc, _ = loc[2].(string)
 			city, _ = loc[3].(string)
-			
+
 			// If lookup gave us a city but no coords, try to resolve it
 			if lat == 0 && lng == 0 && city != "" {
 				lat, lng, cc = e.resolveCityToCoords(city, cc)
@@ -1231,7 +1259,7 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 	}
 }
 
-func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType string) {
+func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType EventType) {
 	lat += (rand.Float64() - 0.5) * 0.8
 	lng += (rand.Float64() - 0.5) * 0.8
 	x, y := e.project(lat, lng)
@@ -1243,6 +1271,11 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType s
 			baseRad, growth = 20.0, 32.0
 		}
 		radius := baseRad + math.Log10(float64(count)+1.0)*growth
+
+		if eventType == EventWithdrawal {
+			radius *= 0.4 // Significantly smaller for withdrawals
+		}
+
 		if radius > 240 {
 			radius = 240
 		}

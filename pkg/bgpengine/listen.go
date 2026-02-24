@@ -34,11 +34,11 @@ func (e *Engine) ListenToBGP() {
 			for ip, entry := range pendingWithdrawals {
 				if now.After(entry.Time) {
 					if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-						e.recordEvent(lat, lng, cc, "with", entry.Prefix)
+						e.recordEvent(lat, lng, cc, EventWithdrawal, entry.Prefix)
 						e.recentlySeen[ip] = struct {
 							Time time.Time
-							Type string
-						}{Time: now, Type: "with"}
+							Type EventType
+						}{Time: now, Type: EventWithdrawal}
 					}
 					delete(pendingWithdrawals, ip)
 				}
@@ -117,9 +117,9 @@ func (e *Engine) ListenToBGP() {
 					}
 
 					// If we've seen a WITHDRAWAL for this prefix very recently, it's gossip
-					if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == "with" {
+					if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
 						if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-							e.recordEvent(lat, lng, cc, "gossip", prefix)
+							e.recordEvent(lat, lng, cc, EventGossip, prefix)
 						}
 						continue
 					}
@@ -139,21 +139,21 @@ func (e *Engine) ListenToBGP() {
 						}
 
 						// Retroactive Path Change Detection:
-						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == "with" {
+						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
 							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-								e.recordEvent(lat, lng, cc, "upd", prefix)
+								e.recordEvent(lat, lng, cc, EventUpdate, prefix)
 								e.recentlySeen[ip] = struct {
 									Time time.Time
-									Type string
-								}{Time: now, Type: "upd"}
+									Type EventType
+								}{Time: now, Type: EventUpdate}
 							}
 							continue
 						}
 
 						// Normal Gossip Detection
-						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && (last.Type == "new" || last.Type == "upd" || last.Type == "gossip") {
+						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
 							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-								e.recordEvent(lat, lng, cc, "gossip", prefix)
+								e.recordEvent(lat, lng, cc, EventGossip, prefix)
 							}
 							continue
 						}
@@ -162,11 +162,11 @@ func (e *Engine) ListenToBGP() {
 							// Found a matching announcement for a pending withdrawal: this is a Path Change
 							delete(pendingWithdrawals, ip)
 							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-								e.recordEvent(lat, lng, cc, "upd", prefix)
+								e.recordEvent(lat, lng, cc, EventUpdate, prefix)
 								e.recentlySeen[ip] = struct {
 									Time time.Time
-									Type string
-								}{Time: now, Type: "upd"}
+									Type EventType
+								}{Time: now, Type: EventUpdate}
 							}
 						} else {
 							// Check if we've EVER seen this prefix before (across sessions)
@@ -181,11 +181,11 @@ func (e *Engine) ListenToBGP() {
 							if isNew {
 								// Truly new announcement (Discovery)
 								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-									e.recordEvent(lat, lng, cc, "new", prefix)
+									e.recordEvent(lat, lng, cc, EventNew, prefix)
 									e.recentlySeen[ip] = struct {
 										Time time.Time
-										Type string
-									}{Time: now, Type: "new"}
+										Type EventType
+									}{Time: now, Type: EventNew}
 
 									if e.SeenDB != nil {
 										if err := e.SeenDB.BatchInsertRaw(map[string][]byte{prefix: []byte{1}}); err != nil {
@@ -196,11 +196,11 @@ func (e *Engine) ListenToBGP() {
 							} else {
 								// We've seen this before, so this is just a path change (Re-discovery)
 								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-									e.recordEvent(lat, lng, cc, "upd", prefix)
+									e.recordEvent(lat, lng, cc, EventUpdate, prefix)
 									e.recentlySeen[ip] = struct {
 										Time time.Time
-										Type string
-									}{Time: now, Type: "upd"}
+										Type EventType
+									}{Time: now, Type: EventUpdate}
 								}
 							}
 						}
