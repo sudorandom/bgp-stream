@@ -758,7 +758,18 @@ func (e *Engine) StartBufferLoop() {
 
 		e.queueMu.Lock()
 		// Cap the visual backlog to prevent memory exhaustion during massive BGP spikes
-		if len(e.visualQueue) < 5000 {
+		maxQueueSize := 5000
+		currentSize := len(e.visualQueue)
+
+		if currentSize < maxQueueSize {
+			if currentSize+len(nextBatch) > maxQueueSize {
+				log.Printf("Truncating batch of %d pulses to fit queue (Current: %d, Max: %d)", len(nextBatch), currentSize, maxQueueSize)
+				nextBatch = nextBatch[:maxQueueSize-currentSize]
+				if len(nextBatch) > 0 {
+					spacing = 500 * time.Millisecond / time.Duration(len(nextBatch))
+				}
+			}
+
 			for i, p := range nextBatch {
 				// Schedule the pulse to be processed by the Update() loop at a specific time
 				p.ScheduledTime = e.nextPulseEmittedAt.Add(time.Duration(i) * spacing)
