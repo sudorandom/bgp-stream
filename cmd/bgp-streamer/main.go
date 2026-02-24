@@ -210,9 +210,26 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			log.Fatalf("ffmpeg process exited with error: %v", err)
+			log.Printf("ffmpeg process exited with error: %v", err)
+		} else {
+			log.Println("ffmpeg process exited normally")
 		}
-		log.Fatal("ffmpeg process exited unexpectedly")
+		
+		// Close pipes to signal other goroutines
+		if ffmpegStdin != nil {
+			ffmpegStdin.Close()
+			ffmpegStdin = nil
+		}
+		if engine.AudioWriter != nil {
+			if closer, ok := engine.AudioWriter.(io.Closer); ok {
+				closer.Close()
+			}
+			engine.AudioWriter = nil
+		}
+		
+		log.Println("Stream connection lost. Exiting in 10s...")
+		time.Sleep(10*time.Second)
+		os.Exit(1)
 	}()
 
 	log.Printf("Warming up connection using %s (5s)...", vcodec)

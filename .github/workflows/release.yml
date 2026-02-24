@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -32,7 +33,9 @@ jobs:
           images: ghcr.io/${{ github.repository }}/bgp-streamer
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=snapshot,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -44,6 +47,7 @@ jobs:
 
   goreleaser:
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v4

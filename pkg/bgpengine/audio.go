@@ -36,10 +36,17 @@ func (e *Engine) StartAudioPlayer() {
 				continue
 			}
 
+			// If we were streaming and the writer is gone, stop the player
+			if e.audioContext == nil && e.AudioWriter == nil {
+				log.Println("AudioWriter is nil, stopping audio player goroutine.")
+				return
+			}
+
 			// Pick a random track
 			path := playlists[rand.Intn(len(playlists))]
 			if err := e.playTrack(path); err != nil {
 				log.Printf("Failed to play track %s: %v", path, err)
+				time.Sleep(5 * time.Second) // Wait before retrying to avoid hammering the system on failures
 			}
 		}
 	}()
@@ -111,6 +118,7 @@ func (e *Engine) playTrack(path string) error {
 				}
 				
 				if _, err := e.AudioWriter.Write(buf[:n]); err != nil {
+					log.Printf("Stream write error: %v", err)
 					return err
 				}
 			}
