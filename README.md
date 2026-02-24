@@ -2,7 +2,7 @@
 
 A high-performance, real-time BGP (Border Gateway Protocol) visualizer. Watch the heartbeat of the internet's routing layer as it happens.
 
-![BGP Stream Screenshot](https://via.placeholder.com/800x450.png?text=BGP+Stream+Visualization)
+![BGP Stream Screenshot](images/screenshot.png)
 
 ## Overview
 
