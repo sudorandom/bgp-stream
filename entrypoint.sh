@@ -10,15 +10,15 @@ mkfifo /tmp/audio.pipe
 # Default settings (1080p)
 WIDTH=1920
 HEIGHT=1080
-SCALE=300.0
-BITRATE="9000k"
-MAXRATE="15000k"
+SCALE=380.0
+BITRATE="6000k"
+MAXRATE="9000k"
 
 # Check if 4k is requested via environment or arguments
 if [[ "$*" == *"4k"* ]] || [ "$QUALITY" == "4k" ]; then
     WIDTH=3840
     HEIGHT=2160
-    SCALE=600.0
+    SCALE=760.0
     BITRATE="18000k"
     MAXRATE="25000k"
 fi
@@ -68,7 +68,7 @@ if [ -c "/dev/dri/renderD128" ]; then
 fi
 
 # Run the viewer in the background.
-# Open the pipe for both read and write (3<>) to avoid blocking
+# We open the pipe for both read and write (3<>) to avoid blocking
 # and ensure the pipe stays open.
 exec 3<> /tmp/audio.pipe
 stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" -audio-fd 3 "${ARGS[@]}" 2>&1 &

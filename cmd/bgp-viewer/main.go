@@ -12,7 +12,7 @@ import (
 var (
 	renderWidth  = flag.Int("width", 1920, "Internal rendering width")
 	renderHeight = flag.Int("height", 1080, "Internal rendering height")
-	renderScale  = flag.Float64("scale", 300.0, "Internal rendering scale")
+	renderScale  = flag.Float64("scale", 380.0, "Internal rendering scale")
 	windowWidth  = flag.Int("window-width", 0, "Initial window width (defaults to render width)")
 	windowHeight = flag.Int("window-height", 0, "Initial window height (defaults to render height)")
 	tpsFlag      = flag.Int("tps", 30, "Ticks per second (engine updates)")
@@ -55,6 +55,7 @@ func main() {
 	}
 
 	ebiten.SetWindowSize(w, h)
+	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	if err := ebiten.RunGame(engine); err != nil {
 		log.Fatal(err)
 	}
