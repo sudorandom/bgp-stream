@@ -47,8 +47,23 @@ func (e *Engine) StartAudioPlayer() {
 }
 
 func (e *Engine) playTrack(path string) error {
-	e.CurrentSong = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	e.songChangedAt = time.Now()
+	fullTitle := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	artist, song := "", fullTitle
+	if parts := strings.SplitN(fullTitle, " - ", 2); len(parts) == 2 {
+		artist = parts[0]
+		song = parts[1]
+	}
+
+	// If this is the first song, set it immediately
+	if e.CurrentSong == "" {
+		e.CurrentSong = song
+		e.CurrentArtist = artist
+		e.songChangedAt = time.Now()
+	} else {
+		e.NextSong = song
+		e.NextArtist = artist
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -98,6 +113,15 @@ func (e *Engine) playTrack(path string) error {
 				return err
 			}
 		}
+
+		// Update CurrentSong at the end of the track (after the fade)
+		if e.NextSong != "" {
+			e.CurrentSong = e.NextSong
+			e.CurrentArtist = e.NextArtist
+			e.NextSong = ""
+			e.NextArtist = ""
+			e.songChangedAt = time.Now()
+		}
 		return nil
 	}
 
@@ -129,5 +153,14 @@ func (e *Engine) playTrack(path string) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	player.Close() // Ensure it is closed
+
+	// Update CurrentSong at the end of the track (after the fade)
+	if e.NextSong != "" {
+		e.CurrentSong = e.NextSong
+		e.CurrentArtist = e.NextArtist
+		e.NextSong = ""
+		e.NextArtist = ""
+		e.songChangedAt = time.Now()
+	}
 	return nil
 }

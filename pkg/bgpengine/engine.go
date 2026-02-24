@@ -62,17 +62,27 @@ type QueuedPulse struct {
 }
 
 type BufferedCity struct {
-	Lat, Lng       float64
-	New, Upd, With int
+	Lat, Lng              float64
+	New, Upd, With, Gossip int
 }
 
 var (
-	ColorNew  = color.RGBA{0, 191, 255, 255}   // Sky Blue
-	ColorUpd  = color.RGBA{173, 255, 47, 255}  // Lime Green
-	ColorWith = color.RGBA{255, 50, 50, 255}   // Red
-	ColorNote = color.RGBA{255, 255, 255, 255} // White
-	ColorPeer = color.RGBA{255, 255, 0, 255}   // Yellow
-	ColorOpen = color.RGBA{0, 100, 255, 255}   // Blue
+	ColorGossip = color.RGBA{0, 191, 255, 255}  // Deep Sky Blue (Propagation)
+	ColorNew    = color.RGBA{255, 255, 255, 255} // White (New Announcement)
+	ColorUpd    = color.RGBA{148, 0, 211, 255}   // Deep Violet/Purple (Path Change)
+	ColorWith   = color.RGBA{255, 50, 50, 255}   // Red (Withdrawal)
+	ColorNote   = color.RGBA{255, 255, 255, 255} // White
+	ColorPeer   = color.RGBA{255, 255, 0, 255}   // Yellow
+	ColorOpen   = color.RGBA{0, 100, 255, 255}   // Blue
+)
+
+const (
+	MaxActivePulses      = 4500
+	MaxVisualQueueSize   = 15000
+	DefaultPulsesPerTick = 60
+	BurstPulsesPerTick   = 300
+	VisualQueueThreshold = 3000
+	VisualQueueCull      = 6000
 )
 
 type cacheEntry struct {
@@ -105,16 +115,16 @@ type Engine struct {
 	monoSource *text.GoTextFaceSource
 
 	// Metrics (Windowed for Rate calculation)
-	windowNew, windowUpd, windowWith   int64
-	windowNote, windowPeer, windowOpen int64
+	windowNew, windowUpd, windowWith, windowGossip int64
+	windowNote, windowPeer, windowOpen             int64
 
-	rateNew, rateUpd, rateWith   float64
+	rateNew, rateUpd, rateWith, rateGossip float64
 	rateNote, ratePeer, rateOpen float64
 
 	countryActivity map[string]int
 	topHubs         []struct {
 		CC   string
-		Rate int
+		Rate float64
 	}
 
 	// History for trendlines (last 60 snapshots, 2s each = 2 mins)
@@ -125,17 +135,50 @@ type Engine struct {
 	AudioWriter  io.Writer
 
 	CurrentSong   string
+	NextSong      string
+	CurrentArtist string
+	NextArtist    string
 	lastSong      string
 	songChangedAt time.Time
+
+	hubChangedAt      map[string]time.Time
+	lastHubs          map[string]int
+	hubPosition       map[string]int
+	lastMetricsUpdate time.Time
+
+	VisualHubs map[string]*VisualHub
+
+	recentlySeen map[uint32]struct {
+		Time time.Time
+		Type string
+	}
+
+	SeenDB *utils.DiskTrie
+}
+
+type VisualHub struct {
+	CC          string
+	Rate        float64
+	DisplayY    float64
+	TargetY     float64
+	Alpha       float32
+	TargetAlpha float32
+	Active      bool
 }
 
 type MetricSnapshot struct {
-	New, Upd, With, Note, Peer, Open int
+	New, Upd, With, Gossip, Note, Peer, Open int
 }
 
 func NewEngine(width, height int, scale float64) *Engine {
-	s, _ := text.NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
-	m, _ := text.NewGoTextFaceSource(bytes.NewReader(gomono.TTF))
+	s, err := text.NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
+	if err != nil {
+		log.Printf("Fatal: failed to load regular font: %v", err)
+	}
+	m, err := text.NewGoTextFaceSource(bytes.NewReader(gomono.TTF))
+	if err != nil {
+		log.Printf("Fatal: failed to load mono font: %v", err)
+	}
 
 	return &Engine{
 		Width:             width,
@@ -155,6 +198,15 @@ func NewEngine(width, height int, scale float64) *Engine {
 		monoSource:         m,
 		countryActivity:    make(map[string]int),
 		history:            make([]MetricSnapshot, 60),
+		hubChangedAt:       make(map[string]time.Time),
+		lastHubs:           make(map[string]int),
+		hubPosition:        make(map[string]int),
+		lastMetricsUpdate:  time.Now(),
+		VisualHubs:         make(map[string]*VisualHub),
+		recentlySeen: make(map[uint32]struct {
+			Time time.Time
+			Type string
+		}),
 	}
 }
 
@@ -177,11 +229,11 @@ func (e *Engine) Update() error {
 	now := time.Now()
 	e.queueMu.Lock()
 	added := 0
-	maxAdded := 20
-	if len(e.visualQueue) > 1000 {
-		maxAdded = 100
+	maxAdded := DefaultPulsesPerTick
+	if len(e.visualQueue) > VisualQueueThreshold {
+		maxAdded = BurstPulsesPerTick
 	}
-	for len(e.visualQueue) > 0 && (e.visualQueue[0].ScheduledTime.Before(now) || len(e.visualQueue) > 2000) && added < maxAdded {
+	for len(e.visualQueue) > 0 && (e.visualQueue[0].ScheduledTime.Before(now) || len(e.visualQueue) > VisualQueueCull) && added < maxAdded {
 		p := e.visualQueue[0]
 		e.visualQueue = e.visualQueue[1:]
 		added++
@@ -194,11 +246,28 @@ func (e *Engine) Update() error {
 				c = ColorUpd
 			case "with":
 				c = ColorWith
+			case "gossip":
+				c = ColorGossip
 			}
 			e.AddPulse(p.Lat, p.Lng, c, p.Count)
 		}
 	}
 	e.queueMu.Unlock()
+
+	e.metricsMu.Lock()
+	for cc, vh := range e.VisualHubs {
+		// Smoothly interpolate Y position
+		vh.DisplayY += (vh.TargetY - vh.DisplayY) * 0.2
+		
+		// Interpolate Alpha
+		vh.Alpha += (vh.TargetAlpha - vh.Alpha) * 0.2
+
+		// Cleanup inactive or invisible hubs instantly
+		if !vh.Active || vh.Alpha < 0.01 {
+			delete(e.VisualHubs, cc)
+		}
+	}
+	e.metricsMu.Unlock()
 
 	e.pulsesMu.Lock()
 	active := e.pulses[:0]
@@ -210,6 +279,69 @@ func (e *Engine) Update() error {
 	e.pulses = active
 	e.pulsesMu.Unlock()
 	return nil
+}
+
+func (e *Engine) drawGlitchTextAggressive(screen *ebiten.Image, label string, face *text.GoTextFace, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
+	fontSize := face.Size
+	if isGlitching && rand.Float64() < intensity {
+		offset := 4.0 * intensity
+		jx := (rand.Float64() - 0.5) * fontSize * intensity
+		jy := (rand.Float64() - 0.5) * (fontSize / 2) * intensity
+
+		ro := &text.DrawOptions{}
+		ro.GeoM.Translate(tx+jx+offset, ty+jy)
+		ro.ColorScale.Scale(1, 0, 0, baseAlpha*0.7)
+		text.Draw(screen, label, face, ro)
+
+		co := &text.DrawOptions{}
+		co.GeoM.Translate(tx+jx-offset, ty+jy)
+		co.ColorScale.Scale(0, 1, 1, baseAlpha*0.7)
+		text.Draw(screen, label, face, co)
+	}
+
+	op := &text.DrawOptions{}
+	jx, jy := 0.0, 0.0
+	alpha := baseAlpha
+	if isGlitching && rand.Float64() < intensity {
+		jx = (rand.Float64() - 0.5) * (fontSize / 2) * intensity
+		jy = (rand.Float64() - 0.5) * (fontSize / 4) * intensity
+		alpha = float32((0.2 + rand.Float64()*0.8) * float64(baseAlpha))
+	}
+	op.GeoM.Translate(tx+jx, ty+jy)
+	op.ColorScale.Scale(1, 1, 1, float32(alpha))
+	text.Draw(screen, label, face, op)
+}
+
+func (e *Engine) drawGlitchTextSubtle(screen *ebiten.Image, label string, face *text.GoTextFace, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
+	fontSize := face.Size
+	if isGlitching && rand.Float64() < intensity {
+		// Even subtler chromatic aberration for hubs
+		offset := 1.0 * intensity
+		jx := (rand.Float64() - 0.5) * (fontSize / 4) * intensity
+		jy := (rand.Float64() - 0.5) * (fontSize / 8) * intensity
+
+		ro := &text.DrawOptions{}
+		ro.GeoM.Translate(tx+jx+offset, ty+jy)
+		ro.ColorScale.Scale(1, 0, 0, baseAlpha*0.5)
+		text.Draw(screen, label, face, ro)
+
+		co := &text.DrawOptions{}
+		co.GeoM.Translate(tx+jx-offset, ty+jy)
+		co.ColorScale.Scale(0, 1, 1, baseAlpha*0.5)
+		text.Draw(screen, label, face, co)
+	}
+
+	op := &text.DrawOptions{}
+	jx, jy := 0.0, 0.0
+	alpha := baseAlpha
+	if isGlitching && rand.Float64() < intensity {
+		jx = (rand.Float64() - 0.5) * (fontSize / 4) * intensity
+		jy = (rand.Float64() - 0.5) * (fontSize / 8) * intensity
+		alpha = float32((0.4 + rand.Float64()*0.6) * float64(baseAlpha))
+	}
+	op.GeoM.Translate(tx+jx, ty+jy)
+	op.ColorScale.Scale(1, 1, 1, float32(alpha))
+	text.Draw(screen, label, face, op)
 }
 
 func (e *Engine) Draw(screen *ebiten.Image) {
@@ -231,6 +363,9 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		if p.Color == ColorNew {
 			baseAlpha = 0.3
 		}
+		if p.Color == ColorGossip {
+			baseAlpha = 0.2
+		}
 
 		scale := (3 + progress*p.MaxRadius) / float64(imgW) * 2.0
 		alpha := (1.0 - progress) * baseAlpha
@@ -245,8 +380,6 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	}
 	e.pulsesMu.Unlock()
 
-	e.drawLegend(screen)
-	e.drawStatus(screen)
 	e.drawMetrics(screen)
 	e.drawSong(screen)
 }
@@ -256,9 +389,9 @@ func (e *Engine) drawSong(screen *ebiten.Image) {
 		return
 	}
 
-	fontSize, margin := 18.0, 100.0
+	fontSize, margin := 20.0, 100.0
 	if e.Width > 2000 {
-		fontSize, margin = 36.0, 200.0
+		fontSize, margin = 40.0, 200.0
 	}
 
 	now := time.Now()
@@ -266,103 +399,19 @@ func (e *Engine) drawSong(screen *ebiten.Image) {
 	isGlitching := now.Sub(e.songChangedAt) < glitchDuration
 	intensity := 0.0
 	if isGlitching {
-		// Intensity fades over the glitch duration
 		intensity = 1.0 - (now.Sub(e.songChangedAt).Seconds() / glitchDuration.Seconds())
 	}
 
-	face := &text.GoTextFace{Source: e.fontSource, Size: fontSize}
-	label := ">> " + e.CurrentSong
+	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize}
+	artistFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.7}
+	titleLabel := ">> " + e.CurrentSong
+	artistLabel := e.CurrentArtist
 
-	x, y := margin, margin/2.5
+	x, y := margin/2, float64(e.Height)-margin
 
-	if isGlitching && rand.Float64() < intensity {
-		// Chromatic aberration glitch
-		offset := 4.0 * intensity
-		jx := (rand.Float64() - 0.5) * fontSize * intensity
-		jy := (rand.Float64() - 0.5) * (fontSize / 2) * intensity
-
-		ro := &text.DrawOptions{}
-		ro.GeoM.Translate(x+jx+offset, y+jy)
-		ro.ColorScale.Scale(1, 0, 0, 0.4)
-		text.Draw(screen, label, face, ro)
-
-		co := &text.DrawOptions{}
-		co.GeoM.Translate(x+jx-offset, y+jy)
-		co.ColorScale.Scale(0, 1, 1, 0.4)
-		text.Draw(screen, label, face, co)
-	}
-
-	op := &text.DrawOptions{}
-	jx, jy := 0.0, 0.0
-	alpha := 0.6
-	if isGlitching && rand.Float64() < intensity {
-		jx = (rand.Float64() - 0.5) * (fontSize / 2) * intensity
-		jy = (rand.Float64() - 0.5) * (fontSize / 4) * intensity
-		alpha = 0.2 + rand.Float64()*0.8
-	}
-	op.GeoM.Translate(x+jx, y+jy)
-	op.ColorScale.Scale(1, 1, 1, float32(alpha))
-	text.Draw(screen, label, face, op)
-}
-
-func (e *Engine) drawLegend(screen *ebiten.Image) {
-	margin, fontSize, clockFontSize := 100.0, 18.0, 36.0
-	spacing, swatchSize := 36.0, 18.0
-	if e.Width > 2000 {
-		margin, fontSize, clockFontSize = 200.0, 36.0, 72.0
-		spacing, swatchSize = 72.0, 36.0
-	}
-
-	lx := margin
-	ly := float64(e.Height) - margin - clockFontSize - (float64(3) * spacing) - 40.0
-
-	items := []struct {
-		Label string
-		Color color.RGBA
-	}{
-		{"Announcement", ColorNew},
-		{"Path Change", ColorUpd},
-		{"Withdrawal", ColorWith},
-	}
-
-	imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
-	halfW := float64(imgW) / 2
-
-	for i, it := range items {
-		ty := ly + float64(i)*spacing
-		baseAlpha := 0.6
-		if it.Color == ColorNew {
-			baseAlpha = 0.3
-		}
-		r, g, b := float64(it.Color.R)/255.0, float64(it.Color.G)/255.0, float64(it.Color.B)/255.0
-
-		// Outer Ring
-		sop := &ebiten.DrawImageOptions{}
-		sop.Blend = ebiten.BlendLighter
-		pulseScaleOuter := swatchSize / float64(imgW) * 1.8
-		sop.GeoM.Translate(-halfW, -halfW)
-		sop.GeoM.Scale(pulseScaleOuter, pulseScaleOuter)
-		sop.GeoM.Translate(lx+(swatchSize/2), ty+(swatchSize/2))
-		sop.ColorScale.Scale(float32(r*baseAlpha), float32(g*baseAlpha), float32(b*baseAlpha), float32(baseAlpha))
-		screen.DrawImage(e.pulseImage, sop)
-
-		// Inner Ring
-		sip := &ebiten.DrawImageOptions{}
-		sip.Blend = ebiten.BlendLighter
-		pulseScaleInner := swatchSize / float64(imgW) * 0.9
-		sip.GeoM.Translate(-halfW, -halfW)
-		sip.GeoM.Scale(pulseScaleInner, pulseScaleInner)
-		sip.GeoM.Translate(lx+(swatchSize/2), ty+(swatchSize/2))
-		sip.ColorScale.Scale(float32(r*baseAlpha), float32(g*baseAlpha), float32(b*baseAlpha), float32(baseAlpha))
-		screen.DrawImage(e.pulseImage, sip)
-
-		if e.fontSource != nil {
-			face := &text.GoTextFace{Source: e.fontSource, Size: fontSize}
-			top := &text.DrawOptions{}
-			top.GeoM.Translate(lx+swatchSize+15, ty+(swatchSize/2)-(fontSize/2))
-			top.ColorScale.Scale(1, 1, 1, 0.8)
-			text.Draw(screen, it.Label, face, top)
-		}
+	e.drawGlitchTextAggressive(screen, titleLabel, titleFace, x, y, 0.8, intensity, isGlitching)
+	if artistLabel != "" {
+		e.drawGlitchTextAggressive(screen, artistLabel, artistFace, x+fontSize*1.6, y+fontSize*1.2, 0.5, intensity, isGlitching)
 	}
 }
 
@@ -399,6 +448,13 @@ func (e *Engine) InitPulseTexture() {
 }
 
 func (e *Engine) LoadData() error {
+	os.MkdirAll("data", 0755)
+	var err error
+	e.SeenDB, err = utils.OpenDiskTrie("data/seen-prefixes.db")
+	if err != nil {
+		log.Printf("Warning: Failed to open seen prefixes database: %v. Persistent state will be disabled.", err)
+	}
+
 	if err := e.loadPrefixData(); err != nil {
 		return err
 	}
@@ -493,11 +549,16 @@ func (e *Engine) loadPrefixData() error {
 	}
 	cityCoords := make(map[string][2]float32)
 	csvReader := csv.NewReader(bytes.NewReader(worldCitiesCSV))
-	csvReader.Read()
+	if _, err := csvReader.Read(); err != nil {
+		log.Printf("Warning: failed to read CSV header: %v", err)
+	}
 	for {
 		rec, err := csvReader.Read()
 		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			continue
 		}
 		lat, _ := strconv.ParseFloat(rec[2], 64)
 		lng, _ := strconv.ParseFloat(rec[3], 64)
@@ -663,9 +724,13 @@ func (e *Engine) loadPrefixData() error {
 		flatRanges = append(flatRanges, seg.start, uint32(idx))
 	}
 	e.prefixData = PrefixData{L: locations, R: flatRanges}
-	os.MkdirAll("data", 0755)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		log.Printf("Warning: Failed to create data directory: %v", err)
+	}
 	if f, err := os.Create(cachePath); err == nil {
-		json.NewEncoder(f).Encode(e.prefixData)
+		if err := json.NewEncoder(f).Encode(e.prefixData); err != nil {
+			log.Printf("Warning: Failed to encode prefix cache: %v", err)
+		}
 		f.Close()
 	}
 	debug.FreeOSMemory()
@@ -676,15 +741,35 @@ func (e *Engine) ListenToBGP() {
 	url := "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream"
 	pendingWithdrawals := make(map[uint32]time.Time)
 	var mu sync.Mutex
+
+	// De-duplication window: ignore redundant updates for the same prefix within 15 seconds
+	const dedupeWindow = 15 * time.Second
+	// Withdrawal resolution window: wait this long to see if an announcement follows a withdrawal
+	const withdrawResolutionWindow = 10 * time.Second
+
 	go func() {
 		for {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(1 * time.Second)
 			now := time.Now()
 			mu.Lock()
+
+			// Periodically clean up very old recentlySeen entries to prevent memory leak
+			if len(e.recentlySeen) > 500000 {
+				for ip, entry := range e.recentlySeen {
+					if now.Sub(entry.Time) > 5*time.Minute {
+						delete(e.recentlySeen, ip)
+					}
+				}
+			}
+
 			for ip, t := range pendingWithdrawals {
 				if now.After(t) {
 					if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
 						e.recordEvent(lat, lng, cc, "with")
+						e.recentlySeen[ip] = struct {
+							Time time.Time
+							Type string
+						}{Time: now, Type: "with"}
 					}
 					delete(pendingWithdrawals, ip)
 				}
@@ -734,34 +819,112 @@ func (e *Engine) ListenToBGP() {
 			if json.Unmarshal(message, &msg) != nil {
 				continue
 			}
+
+			now := time.Now()
 			switch msg.Type {
 			case "ris_error":
 				log.Printf("[RIS ERROR] %s", string(message))
 			case "ris_message":
+				mu.Lock()
+
+				// 1. Process Withdrawals
 				for _, prefix := range msg.Data.Withdrawals {
 					ip := e.prefixToIP(prefix)
-					mu.Lock()
-					pendingWithdrawals[ip] = time.Now().Add(5 * time.Second)
-					mu.Unlock()
+					if ip == 0 {
+						continue
+					}
+
+					// If we've seen a WITHDRAWAL for this prefix very recently, it's gossip
+					if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == "with" {
+						if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+							e.recordEvent(lat, lng, cc, "gossip")
+						}
+						continue
+					}
+
+					pendingWithdrawals[ip] = now.Add(withdrawResolutionWindow)
 				}
+
+				// 2. Process Announcements
 				for _, ann := range msg.Data.Announcements {
 					for _, prefix := range ann.Prefixes {
 						ip := e.prefixToIP(prefix)
-						mu.Lock()
-						if _, ok := pendingWithdrawals[ip]; ok {
-							delete(pendingWithdrawals, ip)
-							mu.Unlock()
+						if ip == 0 {
+							continue
+						}
+
+						// Retroactive Path Change Detection:
+						// If we see an announcement and the last thing we recorded was a withdrawal
+						// within the dedupe window, this is actually a Path Change that arrived late.
+						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == "with" {
 							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
 								e.recordEvent(lat, lng, cc, "upd")
+								e.recentlySeen[ip] = struct {
+									Time time.Time
+									Type string
+								}{Time: now, Type: "upd"}
+							}
+							continue
+						}
+
+						// Normal Gossip Detection
+						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && (last.Type == "new" || last.Type == "upd" || last.Type == "gossip") {
+							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+								e.recordEvent(lat, lng, cc, "gossip")
+							}
+							continue
+						}
+
+						if _, ok := pendingWithdrawals[ip]; ok {
+							// Found a matching announcement for a pending withdrawal: this is a Path Change
+							delete(pendingWithdrawals, ip)
+							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+								e.recordEvent(lat, lng, cc, "upd")
+								e.recentlySeen[ip] = struct {
+									Time time.Time
+									Type string
+								}{Time: now, Type: "upd"}
 							}
 						} else {
-							mu.Unlock()
-							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-								e.recordEvent(lat, lng, cc, "new")
+							// Check if we've EVER seen this prefix before (across sessions)
+							isNew := true
+							if e.SeenDB != nil {
+								// We use the full CIDR string as the key for exact match
+								if val, _ := e.SeenDB.Get(prefix); val != nil {
+									isNew = false
+								}
+							}
+
+							if isNew {
+								// Truly new announcement (Discovery)
+								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+									e.recordEvent(lat, lng, cc, "new")
+									e.recentlySeen[ip] = struct {
+										Time time.Time
+										Type string
+									}{Time: now, Type: "new"}
+									
+									// Record that we've seen it now
+									if e.SeenDB != nil {
+										if err := e.SeenDB.BatchInsertRaw(map[string][]byte{prefix: []byte{1}}); err != nil {
+											log.Printf("Warning: Failed to update seen database: %v", err)
+										}
+									}
+								}
+							} else {
+								// We've seen this before, so this is just a path change (Re-discovery)
+								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+									e.recordEvent(lat, lng, cc, "upd")
+									e.recentlySeen[ip] = struct {
+										Time time.Time
+										Type string
+									}{Time: now, Type: "upd"}
+								}
 							}
 						}
 					}
 				}
+				mu.Unlock()
 			}
 		}
 		c.Close()
@@ -788,6 +951,9 @@ func (e *Engine) StartBufferLoop() {
 			if d.New > 0 {
 				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "new", Count: d.New})
 			}
+			if d.Gossip > 0 {
+				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: "gossip", Count: d.Gossip})
+			}
 			// Reset and return to pool
 			*d = BufferedCity{}
 			e.cityBufferPool.Put(d)
@@ -811,7 +977,7 @@ func (e *Engine) StartBufferLoop() {
 
 		e.queueMu.Lock()
 		// Cap the visual backlog to prevent memory exhaustion during massive BGP spikes
-		maxQueueSize := 5000
+		maxQueueSize := MaxVisualQueueSize
 		currentSize := len(e.visualQueue)
 
 		if currentSize < maxQueueSize {
@@ -870,6 +1036,9 @@ func (e *Engine) recordEvent(lat, lng float64, cc, eventType string) {
 	case "with":
 		b.With++
 		e.windowWith++
+	case "gossip":
+		b.Gossip++
+		e.windowGossip++
 	}
 	e.metricsMu.Unlock()
 }
@@ -1063,7 +1232,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int) {
 	x, y := e.project(lat, lng)
 	e.pulsesMu.Lock()
 	defer e.pulsesMu.Unlock()
-	if len(e.pulses) < 1500 {
+	if len(e.pulses) < MaxActivePulses {
 		baseRad, growth := 10.0, 16.0
 		if e.Width > 2000 {
 			baseRad, growth = 20.0, 32.0
@@ -1077,7 +1246,14 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int) {
 }
 
 func (e *Engine) prefixToIP(p string) uint32 {
-	var a, b, c, d uint32
-	fmt.Sscanf(p, "%d.%d.%d.%d", &a, &b, &c, &d)
-	return (a << 24) | (b << 16) | (c << 8) | d
+	if strings.Contains(p, ":") {
+		return 0 // Ignore IPv6 for now
+	}
+	parts := strings.Split(p, "/")
+	ipStr := parts[0]
+	parsedIP := net.ParseIP(ipStr).To4()
+	if parsedIP == nil {
+		return 0
+	}
+	return binary.BigEndian.Uint32(parsedIP)
 }

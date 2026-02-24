@@ -59,4 +59,8 @@ func main() {
 	if err := ebiten.RunGame(engine); err != nil {
 		log.Fatal(err)
 	}
+
+	if engine.SeenDB != nil {
+		engine.SeenDB.Close()
+	}
 }
