@@ -131,6 +131,63 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		text.Draw(screen, countStr, face, countOp)
 	}
 
+	// 4. West Side: Now Playing
+	songYBase := impactYBase + 200.0
+	if e.Width > 2000 {
+		songYBase = impactYBase + 400.0
+	}
+
+	if e.CurrentSong != "" {
+		// Calculate height based on font size and whether there is an artist
+		boxH_song := fontSize * 3.0
+		if e.CurrentArtist != "" {
+			boxH_song = fontSize * 4.5
+		}
+
+		// Draw styled background box
+		vector.DrawFilledRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(boxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(boxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
+
+		songTitle := "NOW PLAYING"
+		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+
+		// Draw subtle hacker-green accent
+		vector.DrawFilledRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+
+		songTitleOp := &text.DrawOptions{}
+		songTitleOp.GeoM.Translate(hubX+5, songYBase-fontSize-5)
+		songTitleOp.ColorScale.Scale(1, 1, 1, 0.5)
+		text.Draw(screen, songTitle, titleFace, songTitleOp)
+
+		now := time.Now()
+		glitchDuration := 2 * time.Second
+		isGlitching := now.Sub(e.songChangedAt) < glitchDuration
+		intensity := 0.0
+		if isGlitching {
+			intensity = 1.0 - (now.Sub(e.songChangedAt).Seconds() / glitchDuration.Seconds())
+		}
+
+		// Truncate long song names
+		songName := e.CurrentSong
+		const maxSongLen = 22
+		if len(songName) > maxSongLen {
+			songName = songName[:maxSongLen-3] + "..."
+		}
+
+		// Draw Song Name
+		e.drawGlitchTextAggressive(screen, songName, face, hubX, songYBase+fontSize*0.2, 0.8, intensity, isGlitching)
+
+		// Draw Artist Name
+		if e.CurrentArtist != "" {
+			artistName := e.CurrentArtist
+			if len(artistName) > maxSongLen+4 {
+				artistName = artistName[:maxSongLen+4-3] + "..."
+			}
+			artistFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.7}
+			e.drawGlitchTextSubtle(screen, artistName, artistFace, hubX, songYBase+fontSize*1.3, 0.5, intensity, isGlitching)
+		}
+	}
+
 	// 3. Bottom Right (to the left of graphs): Global Event Rate
 	graphW, graphH := 300.0, 100.0
 	if e.Width > 2000 {

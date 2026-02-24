@@ -436,38 +436,6 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	e.pulsesMu.Unlock()
 
 	e.drawMetrics(screen)
-	e.drawSong(screen)
-}
-
-func (e *Engine) drawSong(screen *ebiten.Image) {
-	if e.fontSource == nil || e.CurrentSong == "" {
-		return
-	}
-
-	fontSize, margin := 20.0, 100.0
-	if e.Width > 2000 {
-		fontSize, margin = 40.0, 200.0
-	}
-
-	now := time.Now()
-	glitchDuration := 2 * time.Second
-	isGlitching := now.Sub(e.songChangedAt) < glitchDuration
-	intensity := 0.0
-	if isGlitching {
-		intensity = 1.0 - (now.Sub(e.songChangedAt).Seconds() / glitchDuration.Seconds())
-	}
-
-	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize}
-	artistFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.7}
-	titleLabel := ">> " + e.CurrentSong
-	artistLabel := e.CurrentArtist
-
-	x, y := margin/2, float64(e.Height)-margin*1.5
-
-	e.drawGlitchTextAggressive(screen, titleLabel, titleFace, x, y, 0.8, intensity, isGlitching)
-	if artistLabel != "" {
-		e.drawGlitchTextAggressive(screen, artistLabel, artistFace, x+fontSize*1.6, y+fontSize*1.2, 0.5, intensity, isGlitching)
-	}
 }
 
 func (e *Engine) Layout(w, h int) (int, int) { return e.Width, e.Height }
