@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -214,7 +215,7 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 		} else {
 			log.Println("ffmpeg process exited normally")
 		}
-		
+
 		// Close pipes to signal other goroutines
 		if ffmpegStdin != nil {
 			ffmpegStdin.Close()
@@ -226,9 +227,9 @@ func initFFmpeg(engine *bgpengine.Engine, width, height int, bitrate, maxBitrate
 			}
 			engine.AudioWriter = nil
 		}
-		
+
 		log.Println("Stream connection lost. Exiting in 10s...")
-		time.Sleep(10*time.Second)
+		time.Sleep(10 * time.Second)
 		os.Exit(1)
 	}()
 
