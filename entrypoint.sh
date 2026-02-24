@@ -28,10 +28,10 @@ WIDTH=${RENDER_WIDTH:-$WIDTH}
 HEIGHT=${RENDER_HEIGHT:-$HEIGHT}
 SCALE=${RENDER_SCALE:-$SCALE}
 
-# Filter out "4k" or "1080p" from the arguments as they are not valid flags in bgp-viewer
+# Filter out "4k", "1080p", and "-headless" from the arguments
 ARGS=()
 for arg in "$@"; do
-    if [[ "$arg" != "4k" && "$arg" != "1080p" ]]; then
+    if [[ "$arg" != "4k" && "$arg" != "1080p" && "$arg" != "-headless" ]]; then
         ARGS+=("$arg")
     fi
 done
@@ -68,7 +68,7 @@ if [ -c "/dev/dri/renderD128" ]; then
 fi
 
 # Run the viewer in the background.
-# We open the pipe for both read and write (3<>) to avoid blocking
+# Open the pipe for both read and write (3<>) to avoid blocking
 # and ensure the pipe stays open.
 exec 3<> /tmp/audio.pipe
 stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" -audio-fd 3 "${ARGS[@]}" 2>&1 &

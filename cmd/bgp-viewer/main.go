@@ -10,12 +10,11 @@ import (
 )
 
 var (
-	headlessFlag = flag.Bool("headless", false, "Run without a local window (Xvfb rendering active)")
 	renderWidth  = flag.Int("width", 1920, "Internal rendering width")
 	renderHeight = flag.Int("height", 1080, "Internal rendering height")
 	renderScale  = flag.Float64("scale", 300.0, "Internal rendering scale")
-	windowWidth  = flag.Int("window-width", 1280, "Initial window width (non-headless only)")
-	windowHeight = flag.Int("window-height", 720, "Initial window height (non-headless only)")
+	windowWidth  = flag.Int("window-width", 0, "Initial window width (defaults to render width)")
+	windowHeight = flag.Int("window-height", 0, "Initial window height (defaults to render height)")
 	tpsFlag      = flag.Int("tps", 30, "Ticks per second (engine updates)")
 	audioFd      = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
 )
@@ -45,16 +44,18 @@ func main() {
 	go engine.StartMemoryWatcher()
 
 	ebiten.SetTPS(*tpsFlag)
-	if *headlessFlag {
-		log.Println("Running in HEADLESS mode (Rendering active).")
-		if err := ebiten.RunGame(engine); err != nil {
-			log.Fatal(err)
-		}
-	} else {
-		ebiten.SetWindowSize(*windowWidth, *windowHeight)
-		ebiten.SetWindowTitle("BGP Real-Time Map Viewer")
-		if err := ebiten.RunGame(engine); err != nil {
-			log.Fatal(err)
-		}
+	ebiten.SetWindowTitle("BGP Real-Time Map Viewer")
+
+	w, h := *windowWidth, *windowHeight
+	if w == 0 {
+		w = *renderWidth
+	}
+	if h == 0 {
+		h = *renderHeight
+	}
+
+	ebiten.SetWindowSize(w, h)
+	if err := ebiten.RunGame(engine); err != nil {
+		log.Fatal(err)
 	}
 }
