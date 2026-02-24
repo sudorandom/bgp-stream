@@ -107,6 +107,12 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		if countryName == "Unknown" {
 			countryName = hub.CC
 		}
+
+		// Strip any parenthetical suffixes (e.g., "Iran (Islamic Republic of)")
+		if idx := strings.Index(countryName, " ("); idx != -1 {
+			countryName = countryName[:idx]
+		}
+
 		if strings.Contains(countryName, "Hong Kong") {
 			countryName = "Hong Kong"
 		}

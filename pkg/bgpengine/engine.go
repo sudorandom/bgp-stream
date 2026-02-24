@@ -123,6 +123,10 @@ type Engine struct {
 
 	audioContext *audio.Context
 	AudioWriter  io.Writer
+
+	CurrentSong   string
+	lastSong      string
+	songChangedAt time.Time
 }
 
 type MetricSnapshot struct {
@@ -244,6 +248,61 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	e.drawLegend(screen)
 	e.drawStatus(screen)
 	e.drawMetrics(screen)
+	e.drawSong(screen)
+}
+
+func (e *Engine) drawSong(screen *ebiten.Image) {
+	if e.fontSource == nil || e.CurrentSong == "" {
+		return
+	}
+
+	fontSize, margin := 18.0, 100.0
+	if e.Width > 2000 {
+		fontSize, margin = 36.0, 200.0
+	}
+
+	now := time.Now()
+	glitchDuration := 2 * time.Second
+	isGlitching := now.Sub(e.songChangedAt) < glitchDuration
+	intensity := 0.0
+	if isGlitching {
+		// Intensity fades over the glitch duration
+		intensity = 1.0 - (now.Sub(e.songChangedAt).Seconds() / glitchDuration.Seconds())
+	}
+
+	face := &text.GoTextFace{Source: e.fontSource, Size: fontSize}
+	label := ">> " + e.CurrentSong
+
+	x, y := margin, margin/2.5
+
+	if isGlitching && rand.Float64() < intensity {
+		// Chromatic aberration glitch
+		offset := 4.0 * intensity
+		jx := (rand.Float64() - 0.5) * fontSize * intensity
+		jy := (rand.Float64() - 0.5) * (fontSize / 2) * intensity
+
+		ro := &text.DrawOptions{}
+		ro.GeoM.Translate(x+jx+offset, y+jy)
+		ro.ColorScale.Scale(1, 0, 0, 0.4)
+		text.Draw(screen, label, face, ro)
+
+		co := &text.DrawOptions{}
+		co.GeoM.Translate(x+jx-offset, y+jy)
+		co.ColorScale.Scale(0, 1, 1, 0.4)
+		text.Draw(screen, label, face, co)
+	}
+
+	op := &text.DrawOptions{}
+	jx, jy := 0.0, 0.0
+	alpha := 0.6
+	if isGlitching && rand.Float64() < intensity {
+		jx = (rand.Float64() - 0.5) * (fontSize / 2) * intensity
+		jy = (rand.Float64() - 0.5) * (fontSize / 4) * intensity
+		alpha = 0.2 + rand.Float64()*0.8
+	}
+	op.GeoM.Translate(x+jx, y+jy)
+	op.ColorScale.Scale(1, 1, 1, float32(alpha))
+	text.Draw(screen, label, face, op)
 }
 
 func (e *Engine) drawLegend(screen *ebiten.Image) {

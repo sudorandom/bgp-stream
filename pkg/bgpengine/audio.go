@@ -47,6 +47,8 @@ func (e *Engine) StartAudioPlayer() {
 }
 
 func (e *Engine) playTrack(path string) error {
+	e.CurrentSong = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	e.songChangedAt = time.Now()
 	f, err := os.Open(path)
 	if err != nil {
 		return err
