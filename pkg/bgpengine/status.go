@@ -12,6 +12,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
 func (e *Engine) drawMetrics(screen *ebiten.Image) {
@@ -29,12 +30,24 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	// 1. West Side: Stable Hub List
 	hubYBase := float64(e.Height) / 2.0
 	hubX := margin
+	boxW, boxH := 280.0, 180.0
+	if e.Width > 2000 {
+		boxW, boxH = 560.0, 360.0
+	}
+
 	if len(e.VisualHubs) > 0 {
-		titleLabel := "TOP ACTIVITY HUBS"
-		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize}
+		// Draw styled background box
+		vector.DrawFilledRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+
+		titleLabel := "TOP ACTIVITY HUBS (ops/s)"
+		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+
+		// Draw subtle hacker-green accent next to title
+		vector.DrawFilledRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 		titleOp := &text.DrawOptions{}
-		titleOp.GeoM.Translate(hubX, hubYBase)
+		titleOp.GeoM.Translate(hubX+5, hubYBase-fontSize-5)
 		titleOp.ColorScale.Scale(1, 1, 1, 0.5)
 		text.Draw(screen, titleLabel, titleFace, titleOp)
 	}
@@ -57,15 +70,68 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 			countryName = "Taiwan"
 		}
 
-		str := fmt.Sprintf("%s: %.1f ops/s", countryName, vh.Rate)
-		op := &text.DrawOptions{}
-		op.GeoM.Translate(hubX, vh.DisplayY)
-		op.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
-		text.Draw(screen, str, face, op)
+		// Truncate long names to fit in the box
+		const maxLen = 18
+		if len(countryName) > maxLen {
+			countryName = countryName[:maxLen-3] + "..."
+		}
 
+		// Draw Country Name (Left Aligned)
+		nameOp := &text.DrawOptions{}
+		nameOp.GeoM.Translate(hubX, vh.DisplayY)
+		nameOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
+		text.Draw(screen, countryName, face, nameOp)
+
+		// Draw Rate (Right Aligned)
+		rateStr := fmt.Sprintf("%.1f", vh.Rate)
+		tw, _ := text.Measure(rateStr, face, 0)
+		rateOp := &text.DrawOptions{}
+		// Position at box right edge minus some padding
+		rateOp.GeoM.Translate(hubX+boxW-tw-25, vh.DisplayY)
+		rateOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.6))
+		text.Draw(screen, rateStr, face, rateOp)
 	}
 
-	// 2. Bottom Right (to the left of graphs): Global Event Rate
+	// 2. West Side: Most Active Prefixes
+	impactYBase := hubYBase + 200.0
+	if e.Width > 2000 {
+		impactYBase = hubYBase + 400.0
+	}
+
+	if len(e.VisualImpact) > 0 {
+		// Draw styled background box
+		vector.DrawFilledRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+
+		impactTitle := "MOST ACTIVE PREFIXES (ops/s)"
+		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+
+		// Draw subtle hacker-green accent
+		vector.DrawFilledRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+
+		impactOp := &text.DrawOptions{}
+		impactOp.GeoM.Translate(hubX+5, impactYBase-fontSize-5)
+		impactOp.ColorScale.Scale(1, 1, 1, 0.5)
+		text.Draw(screen, impactTitle, titleFace, impactOp)
+	}
+
+	for _, vi := range e.VisualImpact {
+		// Draw Prefix (Left Aligned)
+		prefixOp := &text.DrawOptions{}
+		prefixOp.GeoM.Translate(hubX, vi.DisplayY)
+		prefixOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.8))
+		text.Draw(screen, vi.Prefix, face, prefixOp)
+
+		// Draw Count (Right Aligned)
+		countStr := fmt.Sprintf("%.1f", vi.Count)
+		tw, _ := text.Measure(countStr, face, 0)
+		countOp := &text.DrawOptions{}
+		countOp.GeoM.Translate(hubX+boxW-tw-25, vi.DisplayY)
+		countOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.6))
+		text.Draw(screen, countStr, face, countOp)
+	}
+
+	// 3. Bottom Right (to the left of graphs): Global Event Rate
 	graphW, graphH := 300.0, 100.0
 	if e.Width > 2000 {
 		graphW, graphH = 600.0, 200.0
@@ -105,9 +171,10 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		text.Draw(screen, fmt.Sprintf("%s: %.1f ops/s", label, val), face, top)
 	}
 
-	drawRow("PROPAGATION", e.rateGossip+e.rateNew, ColorGossip, ColorGossipUI, firehoseY)
-	drawRow("PATH CHANGE", e.rateUpd, ColorUpd, ColorUpdUI, firehoseY+fontSize+10)
-	drawRow("WITHDRAWAL", e.rateWith, ColorWith, ColorWithUI, firehoseY+(fontSize+10)*2)
+	drawRow("PROPAGATION", e.rateGossip, ColorGossip, ColorGossipUI, firehoseY)
+	drawRow("DISCOVERY", e.rateNew, ColorNew, ColorNewUI, firehoseY+fontSize+10)
+	drawRow("PATH CHANGE", e.rateUpd, ColorUpd, ColorUpdUI, firehoseY+(fontSize+10)*2)
+	drawRow("WITHDRAWAL", e.rateWith, ColorWith, ColorWithUI, firehoseY+(fontSize+10)*3)
 
 	e.drawTrendlines(screen, margin)
 }
@@ -159,7 +226,8 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, margin float64) {
 			vector.StrokeLine(screen, float32(x1), float32(y1), float32(x2), float32(y2), 2, col, false)
 		}
 	}
-	drawLayer(func(s MetricSnapshot) int { return s.Gossip + s.New }, ColorGossipUI)
+	drawLayer(func(s MetricSnapshot) int { return s.Gossip }, ColorGossipUI)
+	drawLayer(func(s MetricSnapshot) int { return s.New }, ColorNewUI)
 	drawLayer(func(s MetricSnapshot) int { return s.Upd }, ColorUpdUI)
 	drawLayer(func(s MetricSnapshot) int { return s.With }, ColorWithUI)
 }
@@ -217,7 +285,7 @@ func (e *Engine) StartMetricsLoop() {
 			fontSize = 36.0
 		}
 		spacing := fontSize * 1.2
-		hubYBase := float64(e.Height)/2.0 + fontSize + 10
+		hubYBase := float64(e.Height)/2.0 + 10.0
 
 		// Mark all current hubs as inactive so they fade out if not refreshed
 		for _, vh := range e.VisualHubs {
@@ -257,6 +325,73 @@ func (e *Engine) StartMetricsLoop() {
 				delete(e.VisualHubs, cc)
 			}
 		}
+
+		// 2. Process Most Active Prefixes (Current refresh interval rate)
+		type impact struct {
+			prefix string
+			rate   float64
+		}
+		
+		// Use only the latest bucket for the current 5-second interval
+		latestBucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
+		var allImpact []impact
+		for p, count := range latestBucket {
+			if utils.IsBeaconPrefix(p) {
+				continue
+			}
+			allImpact = append(allImpact, impact{p, float64(count) / interval})
+		}
+		sort.Slice(allImpact, func(i, j int) bool { return allImpact[i].rate > allImpact[j].rate })
+
+		maxImpact := 5
+		if len(allImpact) < maxImpact {
+			maxImpact = len(allImpact)
+		}
+
+		impactYBase := hubYBase + 200.0 // Positioned under the hubs box
+		if e.Width > 2000 {
+			impactYBase = hubYBase + 400.0
+		}
+
+		// Mark all current impact items as inactive
+		for _, vi := range e.VisualImpact {
+			vi.Active = false
+			vi.TargetAlpha = 0.0
+		}
+
+		for i := 0; i < maxImpact; i++ {
+			if allImpact[i].rate < 0.1 && !firstRun {
+				continue
+			}
+
+			targetY := impactYBase + float64(i)*spacing
+			if vi, ok := e.VisualImpact[allImpact[i].prefix]; ok {
+				vi.Active = true
+				vi.TargetY = targetY
+				vi.TargetAlpha = 1.0
+				vi.Count = allImpact[i].rate
+			} else {
+				e.VisualImpact[allImpact[i].prefix] = &VisualImpact{
+					Prefix:      allImpact[i].prefix,
+					Count:       allImpact[i].rate,
+					DisplayY:    impactYBase + float64(maxImpact+1)*spacing,
+					TargetY:     targetY,
+					Alpha:       0,
+					TargetAlpha: 1.0,
+					Active:      true,
+				}
+			}
+		}
+
+		// Remove any impact items that were not refreshed in this cycle instantly
+		for p, vi := range e.VisualImpact {
+			if !vi.Active {
+				delete(e.VisualImpact, p)
+			}
+		}
+
+		// Rotate buckets: discard oldest, add fresh one for next window
+		e.prefixImpactHistory = append(e.prefixImpactHistory[1:], make(map[string]int))
 
 		e.countryActivity = make(map[string]int)
 		firstRun = false

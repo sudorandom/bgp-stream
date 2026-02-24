@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
@@ -52,6 +51,7 @@ type Pulse struct {
 	StartTime time.Time
 	Color     color.RGBA
 	MaxRadius float64
+	Type      string
 }
 
 type QueuedPulse struct {
@@ -68,13 +68,13 @@ type BufferedCity struct {
 
 var (
 	ColorGossip = color.RGBA{0, 191, 255, 255}  // Deep Sky Blue (Propagation)
-	ColorNew    = color.RGBA{255, 255, 255, 255} // White (New Announcement)
+	ColorNew    = color.RGBA{57, 255, 20, 255}   // Hacker Green (New Announcement)
 	ColorUpd    = color.RGBA{148, 0, 211, 255}   // Deep Violet/Purple (Path Change)
 	ColorWith   = color.RGBA{255, 50, 50, 255}   // Red (Withdrawal)
 
 	// Lighter versions for UI text and trendlines
 	ColorGossipUI = color.RGBA{135, 206, 250, 255} // Light Sky Blue
-	ColorNewUI    = color.RGBA{255, 255, 255, 255} // White
+	ColorNewUI    = color.RGBA{152, 255, 152, 255} // Light Green
 	ColorUpdUI    = color.RGBA{218, 112, 214, 255} // Orchid (Lighter Purple)
 	ColorWithUI   = color.RGBA{255, 127, 127, 255} // Light Red
 
@@ -155,6 +155,9 @@ type Engine struct {
 
 	VisualHubs map[string]*VisualHub
 
+	prefixImpactHistory []map[string]int
+	VisualImpact        map[string]*VisualImpact
+
 	recentlySeen map[uint32]struct {
 		Time time.Time
 		Type string
@@ -169,6 +172,16 @@ type Engine struct {
 type VisualHub struct {
 	CC          string
 	Rate        float64
+	DisplayY    float64
+	TargetY     float64
+	Alpha       float32
+	TargetAlpha float32
+	Active      bool
+}
+
+type VisualImpact struct {
+	Prefix      string
+	Count       float64
 	DisplayY    float64
 	TargetY     float64
 	Alpha       float32
@@ -213,6 +226,8 @@ func NewEngine(width, height int, scale float64) *Engine {
 		hubPosition:        make(map[string]int),
 		lastMetricsUpdate:  time.Now(),
 		VisualHubs:         make(map[string]*VisualHub),
+		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 5s = 5 mins
+		VisualImpact:       make(map[string]*VisualImpact),
 		recentlySeen: make(map[uint32]struct {
 			Time time.Time
 			Type string
@@ -260,7 +275,7 @@ func (e *Engine) Update() error {
 			case "gossip":
 				c = ColorGossip
 			}
-			e.AddPulse(p.Lat, p.Lng, c, p.Count)
+			e.AddPulse(p.Lat, p.Lng, c, p.Count, p.Type)
 		}
 	}
 	e.queueMu.Unlock()
@@ -278,12 +293,28 @@ func (e *Engine) Update() error {
 			delete(e.VisualHubs, cc)
 		}
 	}
+
+	for p, vi := range e.VisualImpact {
+		// Smoothly interpolate Y position
+		vi.DisplayY += (vi.TargetY - vi.DisplayY) * 0.2
+		// Interpolate Alpha
+		vi.Alpha += (vi.TargetAlpha - vi.Alpha) * 0.2
+
+		// Cleanup inactive or invisible items instantly
+		if !vi.Active || vi.Alpha < 0.01 {
+			delete(e.VisualImpact, p)
+		}
+	}
 	e.metricsMu.Unlock()
 
 	e.pulsesMu.Lock()
 	active := e.pulses[:0]
 	for _, p := range e.pulses {
-		if now.Sub(p.StartTime) < 1500*time.Millisecond {
+		duration := 1500 * time.Millisecond
+		if p.Type == "new" {
+			duration = 3000 * time.Millisecond // Discoveries last twice as long
+		}
+		if now.Sub(p.StartTime) < duration {
 			active = append(active, p)
 		}
 	}
@@ -365,20 +396,33 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	halfW := float64(imgW) / 2
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
-		progress := elapsed / 1.5
+		totalDuration := 1.5
+		if p.Type == "new" {
+			totalDuration = 3.0
+		}
+		progress := elapsed / totalDuration
 		if progress > 1.0 {
 			continue
 		}
 
 		baseAlpha := 0.6
-		if p.Color == ColorNew {
-			baseAlpha = 0.3
+		if p.Type == "new" {
+			baseAlpha = 0.8 // Brighter for discovery
 		}
-		if p.Color == ColorGossip {
+		if p.Type == "gossip" {
 			baseAlpha = 0.2
 		}
 
 		scale := (3 + progress*p.MaxRadius) / float64(imgW) * 2.0
+		if p.Type == "with" {
+			// Imploding effect: starts large and shrinks to point
+			scale = (3 + (1.0-progress)*p.MaxRadius) / float64(imgW) * 2.0
+		}
+		if p.Type == "new" {
+			// Ease-out expansion: starts fast, slows down
+			easeOut := 1.0 - math.Pow(1.0-progress, 3)
+			scale = (3 + easeOut*p.MaxRadius) / float64(imgW) * 2.5
+		}
 		alpha := (1.0 - progress) * baseAlpha
 		op.GeoM.Reset()
 		op.GeoM.Translate(-halfW, -halfW)
@@ -860,208 +904,6 @@ func (e *Engine) loadPrefixData() error {
 	return nil
 }
 
-func (e *Engine) ListenToBGP() {
-	url := "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream"
-	pendingWithdrawals := make(map[uint32]time.Time)
-	var mu sync.Mutex
-
-	// De-duplication window: ignore redundant updates for the same prefix within 15 seconds
-	const dedupeWindow = 15 * time.Second
-	// Withdrawal resolution window: wait this long to see if an announcement follows a withdrawal
-	const withdrawResolutionWindow = 10 * time.Second
-
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		ticks := 0
-		for range ticker.C {
-			now := time.Now()
-			mu.Lock()
-			
-			// 1. Process pending withdrawals
-			for ip, t := range pendingWithdrawals {
-				if now.After(t) {
-					if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-						e.recordEvent(lat, lng, cc, "with")
-						e.recentlySeen[ip] = struct {
-							Time time.Time
-							Type string
-						}{Time: now, Type: "with"}
-					}
-					delete(pendingWithdrawals, ip)
-				}
-			}
-
-			// 2. Periodically clean up de-duplication cache (every 30s)
-			ticks++
-			if ticks >= 30 {
-				ticks = 0
-				if len(e.recentlySeen) > 500000 {
-					for ip, entry := range e.recentlySeen {
-						if now.Sub(entry.Time) > 5*time.Minute {
-							delete(e.recentlySeen, ip)
-						}
-					}
-				}
-			}
-			mu.Unlock()
-		}
-	}()
-
-	backoff := 1 * time.Second
-	for {
-		log.Printf("Connecting to RIS Live: %s", url)
-		c, _, err := websocket.DefaultDialer.Dial(url, nil)
-		if err != nil {
-			log.Printf("Dial error: %v. Retrying in %v...", err, backoff)
-			time.Sleep(backoff)
-			backoff *= 2
-			if backoff > 60*time.Second {
-				backoff = 60 * time.Second
-			}
-			continue
-		}
-		backoff = 1 * time.Second
-
-		subscribeMsg := `{"type": "ris_subscribe", "data": {"type": "UPDATE"}}`
-		if err := c.WriteMessage(websocket.TextMessage, []byte(subscribeMsg)); err != nil {
-			log.Printf("Subscribe error: %v", err)
-			c.Close()
-			continue
-		}
-
-		for {
-			_, message, err := c.ReadMessage()
-			if err != nil {
-				log.Printf("Read error: %v. Reconnecting...", err)
-				break
-			}
-			var msg struct {
-				Type string `json:"type"`
-				Data struct {
-					Announcements []struct {
-						Prefixes []string `json:"prefixes"`
-					} `json:"announcements"`
-					Withdrawals []string `json:"withdrawals"`
-					Peer        string   `json:"peer"`
-				} `json:"data"`
-			}
-			if json.Unmarshal(message, &msg) != nil {
-				continue
-			}
-
-			now := time.Now()
-			switch msg.Type {
-			case "ris_error":
-				log.Printf("[RIS ERROR] %s", string(message))
-			case "ris_message":
-				mu.Lock()
-
-				// 1. Process Withdrawals
-				for _, prefix := range msg.Data.Withdrawals {
-					ip := e.prefixToIP(prefix)
-					if ip == 0 {
-						continue
-					}
-
-					// If we've seen a WITHDRAWAL for this prefix very recently, it's gossip
-					if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == "with" {
-						if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-							e.recordEvent(lat, lng, cc, "gossip")
-						}
-						continue
-					}
-
-					pendingWithdrawals[ip] = now.Add(withdrawResolutionWindow)
-				}
-
-				// 2. Process Announcements
-				for _, ann := range msg.Data.Announcements {
-					for _, prefix := range ann.Prefixes {
-						ip := e.prefixToIP(prefix)
-						if ip == 0 {
-							continue
-						}
-
-						// Retroactive Path Change Detection:
-						// If we see an announcement and the last thing we recorded was a withdrawal
-						// within the dedupe window, this is actually a Path Change that arrived late.
-						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == "with" {
-							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-								e.recordEvent(lat, lng, cc, "upd")
-								e.recentlySeen[ip] = struct {
-									Time time.Time
-									Type string
-								}{Time: now, Type: "upd"}
-							}
-							continue
-						}
-
-						// Normal Gossip Detection
-						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && (last.Type == "new" || last.Type == "upd" || last.Type == "gossip") {
-							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-								e.recordEvent(lat, lng, cc, "gossip")
-							}
-							continue
-						}
-
-						if _, ok := pendingWithdrawals[ip]; ok {
-							// Found a matching announcement for a pending withdrawal: this is a Path Change
-							delete(pendingWithdrawals, ip)
-							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-								e.recordEvent(lat, lng, cc, "upd")
-								e.recentlySeen[ip] = struct {
-									Time time.Time
-									Type string
-								}{Time: now, Type: "upd"}
-							}
-						} else {
-							// Check if we've EVER seen this prefix before (across sessions)
-							isNew := true
-							if e.SeenDB != nil {
-								// We use the full CIDR string as the key for exact match
-								if val, _ := e.SeenDB.Get(prefix); val != nil {
-									isNew = false
-								}
-							}
-
-							if isNew {
-								// Truly new announcement (Discovery)
-								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-									e.recordEvent(lat, lng, cc, "new")
-									e.recentlySeen[ip] = struct {
-										Time time.Time
-										Type string
-									}{Time: now, Type: "new"}
-									
-									// Record that we've seen it now
-									if e.SeenDB != nil {
-										if err := e.SeenDB.BatchInsertRaw(map[string][]byte{prefix: []byte{1}}); err != nil {
-											log.Printf("Warning: Failed to update seen database: %v", err)
-										}
-									}
-								}
-							} else {
-								// We've seen this before, so this is just a path change (Re-discovery)
-								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
-									e.recordEvent(lat, lng, cc, "upd")
-									e.recentlySeen[ip] = struct {
-										Time time.Time
-										Type string
-									}{Time: now, Type: "upd"}
-								}
-							}
-						}
-					}
-				}
-				mu.Unlock()
-			}
-		}
-		c.Close()
-		time.Sleep(time.Second)
-	}
-}
-
 // StartBufferLoop runs a background loop that periodically processes buffered BGP events.
 // It aggregates high-frequency events into batches, shuffles them to prevent visual
 // clustering, and paces their release into the visual queue to ensure smooth animations.
@@ -1138,7 +980,21 @@ func (e *Engine) StartBufferLoop() {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc, eventType string) {
+func (e *Engine) recordEvent(lat, lng float64, cc, eventType, prefix string) {
+	// 1. Track prefix impact (latest bucket)
+	if prefix != "" {
+		e.metricsMu.Lock()
+		if len(e.prefixImpactHistory) > 0 {
+			bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
+			if bucket == nil {
+				bucket = make(map[string]int)
+				e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
+			}
+			bucket[prefix]++
+		}
+		e.metricsMu.Unlock()
+	}
+
 	// Use bit manipulation to create a unique uint64 key for cityBuffer
 	// This avoids expensive fmt.Sprintf allocations on every BGP event
 	key := math.Float64bits(lat) ^ (math.Float64bits(lng) << 1)
@@ -1407,7 +1263,7 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 	}
 }
 
-func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int) {
+func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType string) {
 	lat += (rand.Float64() - 0.5) * 0.8
 	lng += (rand.Float64() - 0.5) * 0.8
 	x, y := e.project(lat, lng)
@@ -1422,7 +1278,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int) {
 		if radius > 240 {
 			radius = 240
 		}
-		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius})
+		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius, Type: eventType})
 	}
 }
 
