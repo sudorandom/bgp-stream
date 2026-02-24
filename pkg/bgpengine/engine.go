@@ -169,9 +169,11 @@ type Engine struct {
 	CurrentSong   string
 	CurrentArtist string
 	lastSong      string
-	songChangedAt time.Time
-
-	hubChangedAt      map[string]time.Time
+		songChangedAt time.Time
+		songBuffer    *ebiten.Image
+		artistBuffer  *ebiten.Image
+	
+		hubChangedAt map[string]time.Time
 	lastHubs          map[string]int
 	hubPosition       map[string]int
 	lastMetricsUpdate time.Time

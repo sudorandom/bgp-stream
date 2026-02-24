@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dhowden/tag"
 	"github.com/hajimehoshi/go-mp3"
 )
 
@@ -47,22 +48,37 @@ func (e *Engine) StartAudioPlayer() {
 }
 
 func (e *Engine) playTrack(path string) error {
-	fullTitle := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	artist, song := "", fullTitle
-	if parts := strings.SplitN(fullTitle, " - ", 2); len(parts) == 2 {
-		artist = parts[0]
-		song = parts[1]
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Attempt to extract metadata (ID3, etc.)
+	var artist, song string
+	if m, err := tag.ReadFrom(f); err == nil {
+		artist = m.Artist()
+		song = m.Title()
+	}
+
+	// Fallback to filename parsing if metadata is missing
+	if song == "" {
+		fullTitle := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		artist, song = "", fullTitle
+		if parts := strings.SplitN(fullTitle, " - ", 2); len(parts) == 2 {
+			song = parts[0]
+			artist = parts[1]
+		}
 	}
 
 	e.CurrentSong = song
 	e.CurrentArtist = artist
 	e.songChangedAt = time.Now()
 
-	f, err := os.Open(path)
-	if err != nil {
+	// Seek back to start for the decoder
+	if _, err := f.Seek(0, 0); err != nil {
 		return err
 	}
-	defer f.Close()
 
 	d, err := mp3.NewDecoder(f)
 	if err != nil {

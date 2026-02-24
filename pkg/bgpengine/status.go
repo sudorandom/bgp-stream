@@ -138,6 +138,7 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	}
 
 	if e.CurrentSong != "" {
+		songBoxW := boxW * 1.6
 		// Calculate height based on font size and whether there is an artist
 		boxH_song := fontSize * 3.0
 		if e.CurrentArtist != "" {
@@ -145,8 +146,8 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		}
 
 		// Draw styled background box
-		vector.DrawFilledRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(boxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
-		vector.StrokeRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(boxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
+		vector.DrawFilledRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		songTitle := "NOW PLAYING"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
@@ -167,24 +168,58 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 			intensity = 1.0 - (now.Sub(e.songChangedAt).Seconds() / glitchDuration.Seconds())
 		}
 
-		// Truncate long song names
-		songName := e.CurrentSong
-		const maxSongLen = 22
-		if len(songName) > maxSongLen {
-			songName = songName[:maxSongLen-3] + "..."
+		// Helper for marquee drawing
+		drawMarquee := func(label string, f *text.GoTextFace, yOffset float64, alpha float32, sub bool, buffer **ebiten.Image) {
+			tw, _ := text.Measure(label, f, 0)
+			availW := songBoxW - 20
+			
+			if tw > availW {
+				// Marquee effect
+				speed := 30.0
+				padding := 60.0
+				totalW := tw + padding
+				offset := math.Mod(time.Since(e.songChangedAt).Seconds()*speed, totalW)
+				
+				bh := int(f.Size * 1.5)
+				bw := int(availW)
+				if *buffer == nil || (*buffer).Bounds().Dx() != bw || (*buffer).Bounds().Dy() != bh {
+					*buffer = ebiten.NewImage(bw, bh)
+				} else {
+					(*buffer).Clear()
+				}
+				
+				// Draw text with offset
+				op := &text.DrawOptions{}
+				op.GeoM.Translate(-offset, 0)
+				op.ColorScale.Scale(1, 1, 1, alpha)
+				text.Draw(*buffer, label, f, op)
+				
+				// Draw second copy for seamless loop
+				op.GeoM.Reset()
+				op.GeoM.Translate(totalW-offset, 0)
+				op.ColorScale.Scale(1, 1, 1, alpha)
+				text.Draw(*buffer, label, f, op)
+
+				// Draw clipped result to screen
+				drawOp := &ebiten.DrawImageOptions{}
+				drawOp.GeoM.Translate(hubX, songYBase+yOffset)
+				screen.DrawImage(*buffer, drawOp)
+			} else {
+				if sub {
+					e.drawGlitchTextSubtle(screen, label, f, hubX, songYBase+yOffset, alpha, intensity, isGlitching)
+				} else {
+					e.drawGlitchTextAggressive(screen, label, f, hubX, songYBase+yOffset, alpha, intensity, isGlitching)
+				}
+			}
 		}
 
 		// Draw Song Name
-		e.drawGlitchTextAggressive(screen, songName, face, hubX, songYBase+fontSize*0.2, 0.8, intensity, isGlitching)
+		drawMarquee(e.CurrentSong, face, fontSize*0.2, 0.8, false, &e.songBuffer)
 
 		// Draw Artist Name
 		if e.CurrentArtist != "" {
-			artistName := e.CurrentArtist
-			if len(artistName) > maxSongLen+4 {
-				artistName = artistName[:maxSongLen+4-3] + "..."
-			}
 			artistFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.7}
-			e.drawGlitchTextSubtle(screen, artistName, artistFace, hubX, songYBase+fontSize*1.3, 0.5, intensity, isGlitching)
+			drawMarquee(e.CurrentArtist, artistFace, fontSize*1.3, 0.5, true, &e.artistBuffer)
 		}
 	}
 
