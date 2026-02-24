@@ -21,7 +21,7 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN go build -o bgp-streamer ./cmd/bgp-streamer/main.go
+RUN go build -o bgp-viewer ./cmd/bgp-viewer/main.go
 
 # --- Final Stage ---
 FROM debian:bookworm-slim
@@ -30,7 +30,7 @@ FROM debian:bookworm-slim
 RUN sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && \
     export ARCH=$(dpkg --print-architecture) && \
-    packages="ffmpeg xvfb x11-xserver-utils libgl1-mesa-dri mesa-va-drivers vainfo libva-drm2 libx11-6 libxcursor1 libxrandr2 libxinerama1 libxi6 libasound2 ca-certificates" && \
+    packages="ffmpeg xvfb x11-xserver-utils libgl1-mesa-dri mesa-va-drivers vainfo libva-drm2 libx11-6 libxcursor1 libxrandr2 libxinerama1 libxi6 libasound2 alsa-utils ca-certificates" && \
     if [ "$ARCH" = "amd64" ]; then packages="$packages intel-media-va-driver-non-free"; fi && \
     apt-get install -y $packages && \
     rm -rf /var/lib/apt/lists/*
@@ -38,7 +38,7 @@ RUN sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.l
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/bgp-streamer .
+COPY --from=builder /app/bgp-viewer .
 
 # Copy assets and entrypoint
 COPY audio/ ./audio/

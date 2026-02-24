@@ -1,8 +1,6 @@
 package bgpengine
 
 import (
-	"encoding/binary"
-	"io"
 	"log"
 	"math/rand"
 	"os"
@@ -14,6 +12,7 @@ import (
 )
 
 func (e *Engine) StartAudioPlayer() {
+	e.InitAudio()
 	go func() {
 		for {
 			files, err := os.ReadDir("audio")
@@ -34,12 +33,6 @@ func (e *Engine) StartAudioPlayer() {
 				log.Println("No MP3 files found in audio directory.")
 				time.Sleep(5 * time.Second)
 				continue
-			}
-
-			// If we were streaming and the writer is gone, stop the player
-			if e.audioContext == nil && e.AudioWriter == nil {
-				log.Println("AudioWriter is nil, stopping audio player goroutine.")
-				return
 			}
 
 			// Pick a random track
@@ -64,72 +57,31 @@ func (e *Engine) playTrack(path string) error {
 		return err
 	}
 
-	// Local player for non-streaming view
-	if e.audioContext != nil && e.AudioWriter == nil {
-		player, err := e.audioContext.NewPlayer(d)
-		if err != nil {
-			return err
-		}
-		player.Play()
-		log.Printf("Playing (local): %s", path)
-		
-		totalBytes := d.Length()
-		duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
-		fadeDuration := 5 * time.Second
-		startTime := time.Now()
-		for player.IsPlaying() {
-			remaining := duration - time.Since(startTime)
-			if remaining <= fadeDuration {
-				vol := float64(remaining) / float64(fadeDuration)
-				if vol < 0 { vol = 0 }
-				player.SetVolume(vol)
-			}
-			if remaining <= 0 { break }
-			time.Sleep(100 * time.Millisecond)
-		}
-		player.Close() // Ensure it is closed
-		return nil
+	player, err := e.audioContext.NewPlayer(d)
+	if err != nil {
+		return err
 	}
+	player.Play()
+	log.Printf("Playing: %s", path)
 
-	// If streaming, write to AudioWriter
-	if e.AudioWriter != nil {
-		log.Printf("Streaming: %s", path)
-		totalBytes := d.Length()
-		duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
-		fadeDuration := 5 * time.Second
-		
-		buf := make([]byte, 8192)
-		startTime := time.Now()
-		for {
-			n, err := d.Read(buf)
-			if n > 0 {
-				elapsed := time.Since(startTime)
-				remaining := duration - elapsed
-				
-				if remaining <= fadeDuration {
-					vol := float64(remaining) / float64(fadeDuration)
-					if vol < 0 { vol = 0 }
-					// Apply volume to s16le samples
-					for i := 0; i < n; i += 2 {
-						sample := int16(binary.LittleEndian.Uint16(buf[i:]))
-						sample = int16(float64(sample) * vol)
-						binary.LittleEndian.PutUint16(buf[i:], uint16(sample))
-					}
-				}
-				
-				if _, err := e.AudioWriter.Write(buf[:n]); err != nil {
-					log.Printf("Stream write error: %v", err)
-					return err
-				}
+	totalBytes := d.Length()
+	duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
+	fadeDuration := 5 * time.Second
+	startTime := time.Now()
+	for player.IsPlaying() {
+		remaining := duration - time.Since(startTime)
+		if remaining <= fadeDuration {
+			vol := float64(remaining) / float64(fadeDuration)
+			if vol < 0 {
+				vol = 0
 			}
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				return err
-			}
+			player.SetVolume(vol)
 		}
+		if remaining <= 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-
+	player.Close() // Ensure it is closed
 	return nil
 }

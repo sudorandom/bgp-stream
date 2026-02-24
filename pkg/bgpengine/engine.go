@@ -121,10 +121,7 @@ type Engine struct {
 	history   []MetricSnapshot
 	metricsMu sync.Mutex
 
-	OnFrame func(screen *ebiten.Image)
-
 	audioContext *audio.Context
-	AudioWriter  io.Writer
 }
 
 type MetricSnapshot struct {
@@ -246,10 +243,6 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	e.drawLegend(screen)
 	e.drawStatus(screen)
 	e.drawMetrics(screen)
-
-	if e.OnFrame != nil {
-		e.OnFrame(screen)
-	}
 }
 
 func (e *Engine) drawLegend(screen *ebiten.Image) {
@@ -848,6 +841,11 @@ func (e *Engine) getPrefixCoords(ip uint32) (float64, float64, string) {
 			}
 		}
 	}
+
+	if lat == 0 && lng == 0 {
+		return 0, 0, ""
+	}
+
 	if lat != 0 || lng != 0 {
 		e.cacheMu.Lock()
 		if len(e.prefixToCityCache) > 100000 {

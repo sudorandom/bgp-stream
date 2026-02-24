@@ -4,8 +4,37 @@ set -x
 # Clean up stale Xvfb lock files if they exist
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 
-# Start Xvfb in the background
-Xvfb :99 -ac -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+# Default settings (1080p)
+WIDTH=1920
+HEIGHT=1080
+SCALE=300.0
+BITRATE="9000k"
+MAXRATE="15000k"
+
+# Check if 4k is requested via environment or arguments
+if [[ "$*" == *"4k"* ]] || [ "$QUALITY" == "4k" ]; then
+    WIDTH=3840
+    HEIGHT=2160
+    SCALE=600.0
+    BITRATE="18000k"
+    MAXRATE="25000k"
+fi
+
+# Override with specific environment variables if provided
+WIDTH=${RENDER_WIDTH:-$WIDTH}
+HEIGHT=${RENDER_HEIGHT:-$HEIGHT}
+SCALE=${RENDER_SCALE:-$SCALE}
+
+# Filter out "4k" or "1080p" from the arguments as they are not valid flags in bgp-viewer
+ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" != "4k" && "$arg" != "1080p" ]]; then
+        ARGS+=("$arg")
+    fi
+done
+
+# Start Xvfb in the background with the determined resolution
+Xvfb :99 -ac -screen 0 "${WIDTH}x${HEIGHT}x24" > /tmp/xvfb.log 2>&1 &
 XVFB_PID=$!
 
 # Ensure Xvfb is cleaned up on exit
@@ -21,14 +50,37 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Xvfb is ready. Starting bgp-streamer..."
+echo "Xvfb is ready. Starting bgp-viewer and FFmpeg..."
 export DISPLAY=:99
 
-# Check if DISPLAY is available
-if ! xset -q > /dev/null 2>&1; then
-    echo "ERROR: DISPLAY :99 not found"
-    exit 1
+# Determine video codec (VA-API if available)
+VCODEC="libx264"
+FFMPEG_GLOBAL_ARGS=""
+FFMPEG_OUTPUT_ARGS=""
+
+if [ -c "/dev/dri/renderD128" ]; then
+    VCODEC="h264_vaapi"
+    FFMPEG_GLOBAL_ARGS="-vaapi_device /dev/dri/renderD128"
+    FFMPEG_OUTPUT_ARGS="-vf format=nv12,hwupload"
 fi
 
-# Run the streamer and make sure stdout/stderr are unbuffered
-stdbuf -oL -eL ./bgp-streamer "$@" 2>&1
+# Run the viewer in the background. 
+# We pass through all filtered arguments. If the user provides -width, -height, or -scale, 
+# those will override the ones we append here because they come after in the command line.
+stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" "${ARGS[@]}" 2>&1 &
+STREAMER_PID=$!
+
+# Start FFmpeg for capture
+if [ -n "$YOUTUBE_STREAM_KEY" ]; then
+    echo "Starting FFmpeg capture for YouTube stream (${WIDTH}x${HEIGHT})..."
+    ffmpeg $FFMPEG_GLOBAL_ARGS \
+        -f x11grab -draw_mouse 0 -video_size "${WIDTH}x${HEIGHT}" -framerate 30 -i :99.0 \
+        -f alsa -i default \
+        -c:v $VCODEC -b:v $BITRATE -maxrate $MAXRATE -bufsize 30000k -g 60 \
+        -pix_fmt yuv420p $FFMPEG_OUTPUT_ARGS \
+        -c:a aac -b:a 128k \
+        -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
+else
+    echo "YOUTUBE_STREAM_KEY not set. Running in local mode only."
+    wait $STREAMER_PID
+fi
