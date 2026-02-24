@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -202,5 +203,26 @@ func TestDiskTrieIPv6Error(t *testing.T) {
 	err = trie.Insert(ipNet, []byte("fail"))
 	if err == nil {
 		t.Error("Expected error for IPv6 insert, got nil")
+	}
+}
+
+func BenchmarkDiskTrieLookup(b *testing.B) {
+	tmpDir, _ := os.MkdirTemp("", "disktrie-bench-*")
+	defer os.RemoveAll(tmpDir)
+	trie, _ := OpenDiskTrie(filepath.Join(tmpDir, "test.db"))
+	defer trie.Close()
+
+	// Populate with 1000 prefixes
+	for i := 0; i < 1000; i++ {
+		cidr := fmt.Sprintf("10.%d.%d.0/24", (i>>8)&0xFF, i&0xFF)
+		_, ipNet, _ := net.ParseCIDR(cidr)
+		trie.Insert(ipNet, []byte("val"))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Use a cycle of IPs to test both cache hits and misses
+		ip := net.IPv4(10, byte((i>>8)&0xFF), byte(i&0xFF), 1)
+		trie.Lookup(ip)
 	}
 }

@@ -57,12 +57,12 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 			countryName = "Taiwan"
 		}
 
-					str := fmt.Sprintf("%s: %.1f ops/s", countryName, vh.Rate)
-					op := &text.DrawOptions{}
-					op.GeoM.Translate(hubX, vh.DisplayY)
-					op.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
-					text.Draw(screen, str, face, op)
-		
+		str := fmt.Sprintf("%s: %.1f ops/s", countryName, vh.Rate)
+		op := &text.DrawOptions{}
+		op.GeoM.Translate(hubX, vh.DisplayY)
+		op.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
+		text.Draw(screen, str, face, op)
+
 	}
 
 	// 2. Bottom Right (to the left of graphs): Global Event Rate
@@ -90,7 +90,7 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 		op := &ebiten.DrawImageOptions{}
 		op.Blend = ebiten.BlendLighter
-		scale := swatchSize / float64(imgW) * 1.8
+		scale := swatchSize / float64(imgW) * 1.6
 		op.GeoM.Translate(-halfW, -halfW)
 		op.GeoM.Scale(scale, scale)
 		op.GeoM.Translate(firehoseX+(swatchSize/2), y+(fontSize/2))

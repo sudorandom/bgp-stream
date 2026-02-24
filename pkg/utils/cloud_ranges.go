@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 )
 
@@ -15,6 +16,7 @@ type CloudPrefix struct {
 	Prefix  *net.IPNet
 	Region  string
 	Service string
+	City    string // Optional: if already resolved (e.g. from Geofeed)
 }
 
 // AWS IP Ranges Format
@@ -152,7 +154,7 @@ type OracleRanges struct {
 	Regions []struct {
 		Region string `json:"region"`
 		CIDRs  []struct {
-			CIDR string `json:"cidr"`
+			CIDR string   `json:"cidr"`
 			Tags []string `json:"tags"`
 		} `json:"cidrs"`
 	} `json:"regions"`
@@ -203,8 +205,8 @@ func ParseDigitalOceanRanges(r io.Reader) ([]CloudPrefix, error) {
 		}
 		// We'll use the city|country format as the "region" for DO since it's already granular
 		results = append(results, CloudPrefix{
-			Prefix: ipNet,
-			Region: fmt.Sprintf("%s|%s", record[3], record[1]),
+			Prefix:  ipNet,
+			Region:  fmt.Sprintf("%s|%s", record[3], record[1]),
 			Service: "DigitalOcean",
 		})
 	}
@@ -212,8 +214,7 @@ func ParseDigitalOceanRanges(r io.Reader) ([]CloudPrefix, error) {
 }
 
 // Map of Cloud Regions to City|Country
-// This is a partial list of major hubs.
-var CloudRegionToCity = map[string]string{
+var cloudRegionToCity = map[string]string{
 	// AWS
 	"us-east-1":      "Ashburn|US",
 	"us-east-2":      "Columbus|US",
@@ -313,42 +314,61 @@ var CloudRegionToCity = map[string]string{
 	"qatarcentral":       "Doha|QA",
 	"israelcentral":      "Tel Aviv|IL",
 
-	// Legacy Azure XML region names
-	"useast":            "Ashburn|US",
-	"useast2":           "Virginia|US",
-	"uswest":            "San Francisco|US",
-	"uswest2":           "Quincy|US",
-	"uscentral":         "Des Moines|US",
-	"ussouthcentral":    "San Antonio|US",
-	"usnorthcentral":    "Chicago|US",
-	"uswestcentral":     "Cheyenne|US",
-	"europewest":        "Amsterdam|NL",
-	"europenorth":       "Dublin|IE",
-	"asiaeast":          "Hong Kong|HK",
-	"asiasoutheast":     "Singapore|SG",
-	"australiacentral2": "Canberra|AU",
-	"indiawest":         "Mumbai|IN",
-	"indiacentral":      "Pune|IN",
-	"indiasouth":        "Chennai|IN",
-
 	// Oracle Cloud (OCI)
-	"us-ashburn-1":      "Ashburn|US",
-	"us-phoenix-1":      "Phoenix|US",
-	"us-chicago-1":      "Chicago|US",
-	"eu-frankfurt-1":    "Frankfurt|DE",
-	"eu-amsterdam-1":    "Amsterdam|NL",
-	"eu-madrid-1":       "Madrid|ES",
-	"eu-paris-1":        "Paris|FR",
-	"uk-london-1":       "London|GB",
-	"ap-tokyo-1":        "Tokyo|JP",
-	"ap-osaka-1":        "Osaka|JP",
-	"ap-seoul-1":        "Seoul|KR",
-	"ap-singapore-1":    "Singapore|SG",
-	"ap-mumbai-1":       "Mumbai|IN",
-	"ap-hyderabad-1":    "Hyderabad|IN",
-	"ap-sydney-1":       "Sydney|AU",
-	"ap-melbourne-1":    "Melbourne|AU",
-	"sa-saopaulo-1":     "São Paulo|BR",
+	"us-ashburn-1":   "Ashburn|US",
+	"us-phoenix-1":   "Phoenix|US",
+	"us-chicago-1":   "Chicago|US",
+	"eu-frankfurt-1": "Frankfurt|DE",
+	"eu-amsterdam-1": "Amsterdam|NL",
+	"eu-madrid-1":    "Madrid|ES",
+	"eu-paris-1":     "Paris|FR",
+	"uk-london-1":    "London|GB",
+	"ap-tokyo-1":     "Tokyo|JP",
+	"ap-osaka-1":     "Osaka|JP",
+	"ap-seoul-1":     "Seoul|KR",
+	"ap-singapore-1": "Singapore|SG",
+	"ap-mumbai-1":    "Mumbai|IN",
+	"ap-hyderabad-1": "Hyderabad|IN",
+	"ap-sydney-1":    "Sydney|AU",
+	"ap-melbourne-1": "Melbourne|AU",
+	"sa-saopaulo-1":  "São Paulo|BR",
+
+	// Akamai / Linode (approximate)
+	"us-east":      "Newark|US",
+	"us-west":      "Fremont|US",
+	"us-central":   "Dallas|US",
+	"us-southeast": "Atlanta|US",
+	"eu-central":   "Frankfurt|DE",
+	"eu-west":      "London|GB",
+	"ap-south":     "Singapore|SG",
+	"ap-northeast": "Tokyo|JP",
+	"ap-west":      "Mumbai|IN",
+}
+
+// FetchGoogleGeofeed downloads and parses the official Google Cloud geofeed.
+// Source: https://www.gstatic.com/ipranges/cloud_geofeed
+func FetchGoogleGeofeed() ([]CloudPrefix, error) {
+	const url = "https://www.gstatic.com/ipranges/cloud_geofeed"
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	entries, err := ParseGeofeed(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []CloudPrefix
+	for _, e := range entries {
+		results = append(results, CloudPrefix{
+			Prefix:  e.Prefix,
+			Service: "GCP",
+			City:    fmt.Sprintf("%s|%s", e.City, e.Country),
+		})
+	}
+	return results, nil
 }
 
 type CloudTrie struct {
@@ -371,13 +391,19 @@ func NewCloudTrie(prefixes []CloudPrefix) *CloudTrie {
 		}
 		ones, _ := p.Prefix.Mask.Size()
 
+		// If city is already provided (e.g. from Geofeed), use it
+		if p.City != "" {
+			ct.masks[ones][binary.BigEndian.Uint32(ip)] = p.City
+			continue
+		}
+
 		// For DigitalOcean, the region is already city|country
 		if p.Service == "DigitalOcean" {
 			ct.masks[ones][binary.BigEndian.Uint32(ip)] = p.Region
 			continue
 		}
 
-		if city, ok := CloudRegionToCity[p.Region]; ok {
+		if city, ok := cloudRegionToCity[p.Region]; ok {
 			ct.masks[ones][binary.BigEndian.Uint32(ip)] = city
 		}
 	}

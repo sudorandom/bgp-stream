@@ -160,7 +160,10 @@ type Engine struct {
 		Type string
 	}
 
-	SeenDB *utils.DiskTrie
+	SeenDB    *utils.DiskTrie
+	CloudTrie *utils.CloudTrie
+
+	cityCoords map[string][2]float32
 }
 
 type VisualHub struct {
@@ -214,6 +217,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 			Time time.Time
 			Type string
 		}),
+		cityCoords: make(map[string][2]float32),
 	}
 }
 
@@ -455,7 +459,28 @@ func (e *Engine) InitPulseTexture() {
 }
 
 func (e *Engine) LoadData() error {
-	os.MkdirAll("data", 0755)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		log.Printf("Warning: Failed to create data directory: %v", err)
+	}
+
+	// 1. Download worldcities.csv if missing
+	citiesPath := "data/worldcities.csv"
+	if _, err := os.Stat(citiesPath); os.IsNotExist(err) {
+		url := os.Getenv("WORLD_CITIES_URL")
+		if url == "" {
+			url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/csv/cities.csv"
+		}
+		log.Printf("Downloading world cities database from %s...", url)
+		if err := utils.DownloadFile(url, citiesPath); err != nil {
+			log.Printf("Error downloading cities: %v", err)
+		}
+	}
+
+	// 2. Load cloud data from sources of truth
+	if err := e.loadCloudData(); err != nil {
+		log.Printf("Warning: Failed to load cloud data: %v", err)
+	}
+
 	var err error
 	e.SeenDB, err = utils.OpenDiskTrie("data/seen-prefixes.db")
 	if err != nil {
@@ -508,6 +533,39 @@ func (e *Engine) loadRemoteCityData() error {
 		}
 		e.countryHubs[c.Country] = append(hubs, CityHub{Lat: c.Coordinates[1], Lng: c.Coordinates[0], CumulativeWeight: last + weight})
 	}
+	return nil
+}
+
+func (e *Engine) loadCloudData() error {
+	var allPrefixes []utils.CloudPrefix
+
+	// 1. Google Cloud (Geofeed - Source of Truth)
+	log.Println("Fetching Google Cloud Geofeed...")
+	goog, err := utils.FetchGoogleGeofeed()
+	if err == nil {
+		allPrefixes = append(allPrefixes, goog...)
+	} else {
+		log.Printf("Warning: Failed to fetch GCP geofeed: %v", err)
+	}
+
+	// 2. AWS IP Ranges
+	log.Println("Fetching AWS IP Ranges...")
+	resp, err := http.Get("https://ip-ranges.amazonaws.com/ip-ranges.json")
+	if err == nil {
+		defer resp.Body.Close()
+		aws, err := utils.ParseAWSRanges(resp.Body)
+		if err == nil {
+			allPrefixes = append(allPrefixes, aws...)
+		}
+	} else {
+		log.Printf("Warning: Failed to fetch AWS ranges: %v", err)
+	}
+
+	if len(allPrefixes) > 0 {
+		e.CloudTrie = utils.NewCloudTrie(allPrefixes)
+		log.Printf("Loaded %d cloud prefixes into CloudTrie", len(allPrefixes))
+	}
+
 	return nil
 }
 
@@ -574,26 +632,64 @@ func (e *Engine) loadPrefixData() error {
 			return nil
 		}
 	}
-	cityCoords := make(map[string][2]float32)
-	csvReader := csv.NewReader(bytes.NewReader(worldCitiesCSV))
-	if _, err := csvReader.Read(); err != nil {
-		log.Printf("Warning: failed to read CSV header: %v", err)
+
+	// Try to load world cities from disk, fallback to embed
+	var citiesReader io.Reader
+	if f, err := os.Open("data/worldcities.csv"); err == nil {
+		defer f.Close()
+		citiesReader = f
+		log.Println("Using worldcities.csv from disk")
+	} else if len(worldCitiesCSV) > 0 {
+		citiesReader = bytes.NewReader(worldCitiesCSV)
+		log.Println("Using embedded worldcities.csv")
 	}
-	for {
-		rec, err := csvReader.Read()
-		if err == io.EOF {
-			break
+
+	if citiesReader != nil {
+		csvReader := csv.NewReader(citiesReader)
+		if _, err := csvReader.Read(); err != nil {
+			log.Printf("Warning: failed to read CSV header: %v", err)
 		}
-		if err != nil {
-			continue
+		for {
+			rec, err := csvReader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				continue
+			}
+			// Supported Format 1 (SimpleMaps): city, city_ascii, lat, lng, country, iso2, iso3, admin_name, capital, population, id
+			if len(rec) >= 6 && (strings.Contains(rec[2], ".") || strings.Contains(rec[2], ",")) {
+				lat, _ := strconv.ParseFloat(rec[2], 64)
+				lng, _ := strconv.ParseFloat(rec[3], 64)
+				e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[5]))] = [2]float32{float32(lat), float32(lng)}
+			} else if len(rec) >= 10 {
+				// Supported Format 2 (dr5hn): id, name, state_id, state_code, state_name, country_id, country_code, country_name, latitude, longitude, wikiDataId
+				lat, _ := strconv.ParseFloat(rec[8], 64)
+				lng, _ := strconv.ParseFloat(rec[9], 64)
+				e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[6]))] = [2]float32{float32(lat), float32(lng)}
+			}
 		}
-		lat, _ := strconv.ParseFloat(rec[2], 64)
-		lng, _ := strconv.ParseFloat(rec[3], 64)
-		cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[5]))] = [2]float32{float32(lat), float32(lng)}
+	} else {
+		log.Println("Warning: No world cities data available.")
 	}
-	geoReader, err := maxminddb.FromBytes(geoIPDB)
-	if err != nil {
-		return err
+
+	// Try to load geoip DB from disk, fallback to embed
+	var geoReader *maxminddb.Reader
+	if f, err := os.ReadFile("data/ipinfo_lite.mmdb"); err == nil {
+		geoReader, _ = maxminddb.FromBytes(f)
+		if geoReader != nil {
+			log.Println("Using ipinfo_lite.mmdb from disk")
+		}
+	}
+	if geoReader == nil && len(geoIPDB) > 0 {
+		geoReader, _ = maxminddb.FromBytes(geoIPDB)
+		if geoReader != nil {
+			log.Println("Using embedded ipinfo_lite.mmdb")
+		}
+	}
+
+	if geoReader == nil {
+		return fmt.Errorf("no GeoIP database available (ipinfo_lite.mmdb)")
 	}
 	defer geoReader.Close()
 	var mu sync.Mutex
@@ -602,7 +698,7 @@ func (e *Engine) loadPrefixData() error {
 	handler := func(start, end uint32, city, cc string, lat, lng float32, priority int) {
 		if lat == 0 && lng == 0 {
 			if city != "" {
-				if c, ok := cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
+				if c, ok := e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
 					lat, lng = c[0], c[1]
 				}
 			}
@@ -616,7 +712,7 @@ func (e *Engine) loadPrefixData() error {
 				binary.BigEndian.PutUint32(ip, start)
 				if err := geoReader.Lookup(ip, &record); err == nil {
 					cityName := record.City.Names["en"]
-					if c, ok := cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(cityName), strings.ToUpper(cc))]; ok {
+					if c, ok := e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(cityName), strings.ToUpper(cc))]; ok {
 						lat, lng = c[0], c[1]
 						city = cityName
 					}
@@ -775,20 +871,14 @@ func (e *Engine) ListenToBGP() {
 	const withdrawResolutionWindow = 10 * time.Second
 
 	go func() {
-		for {
-			time.Sleep(1 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		ticks := 0
+		for range ticker.C {
 			now := time.Now()
 			mu.Lock()
-
-			// Periodically clean up very old recentlySeen entries to prevent memory leak
-			if len(e.recentlySeen) > 500000 {
-				for ip, entry := range e.recentlySeen {
-					if now.Sub(entry.Time) > 5*time.Minute {
-						delete(e.recentlySeen, ip)
-					}
-				}
-			}
-
+			
+			// 1. Process pending withdrawals
 			for ip, t := range pendingWithdrawals {
 				if now.After(t) {
 					if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
@@ -799,6 +889,19 @@ func (e *Engine) ListenToBGP() {
 						}{Time: now, Type: "with"}
 					}
 					delete(pendingWithdrawals, ip)
+				}
+			}
+
+			// 2. Periodically clean up de-duplication cache (every 30s)
+			ticks++
+			if ticks >= 30 {
+				ticks = 0
+				if len(e.recentlySeen) > 500000 {
+					for ip, entry := range e.recentlySeen {
+						if now.Sub(entry.Time) > 5*time.Minute {
+							delete(e.recentlySeen, ip)
+						}
+					}
 				}
 			}
 			mu.Unlock()
@@ -1077,14 +1180,41 @@ func (e *Engine) getPrefixCoords(ip uint32) (float64, float64, string) {
 		return c.Lat, c.Lng, c.CC
 	}
 	e.cacheMu.Unlock()
-	loc := e.lookupIP(ip)
-	if loc == nil {
-		return 0, 0, ""
-	}
-	lat, _ := loc[0].(float64)
-	lng, _ := loc[1].(float64)
-	cc, _ := loc[2].(string)
 
+	var lat, lng float64
+	var cc, city string
+
+	// 1. Check CloudTrie first (highest precision for cloud IP blocks)
+	if e.CloudTrie != nil {
+		ipObj := make(net.IP, 4)
+		binary.BigEndian.PutUint32(ipObj, ip)
+		if loc, ok := e.CloudTrie.Lookup(ipObj); ok {
+			// loc is "City|CC"
+			parts := strings.Split(loc, "|")
+			if len(parts) == 2 {
+				city, cc = parts[0], parts[1]
+				lat, lng, cc = e.resolveCityToCoords(city, cc)
+			}
+		}
+	}
+
+	// 2. Fallback to generic GeoIP if not a cloud IP or cloud resolution failed
+	if lat == 0 && lng == 0 {
+		loc := e.lookupIP(ip)
+		if loc != nil {
+			lat, _ = loc[0].(float64)
+			lng, _ = loc[1].(float64)
+			cc, _ = loc[2].(string)
+			city, _ = loc[3].(string)
+			
+			// If lookup gave us a city but no coords, try to resolve it
+			if lat == 0 && lng == 0 && city != "" {
+				lat, lng, cc = e.resolveCityToCoords(city, cc)
+			}
+		}
+	}
+
+	// 3. Final Fallback: Country Hubs (for IP blocks known only by Country)
 	if lat == 0 && lng == 0 && cc != "" {
 		hubs := e.countryHubs[cc]
 		if len(hubs) > 0 {
@@ -1102,23 +1232,29 @@ func (e *Engine) getPrefixCoords(ip uint32) (float64, float64, string) {
 		return 0, 0, ""
 	}
 
-	if lat != 0 || lng != 0 {
-		e.cacheMu.Lock()
-		if len(e.prefixToCityCache) > 100000 {
-			// Aggressively clear 20% of the cache to avoid constant cleanup
-			count := 0
-			for k := range e.prefixToCityCache {
-				delete(e.prefixToCityCache, k)
-				count++
-				if count > 20000 {
-					break
-				}
+	// Cache the resolved coordinates
+	e.cacheMu.Lock()
+	if len(e.prefixToCityCache) > 100000 {
+		count := 0
+		for k := range e.prefixToCityCache {
+			delete(e.prefixToCityCache, k)
+			count++
+			if count > 20000 {
+				break
 			}
 		}
-		e.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc}
-		e.cacheMu.Unlock()
 	}
+	e.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc}
+	e.cacheMu.Unlock()
+
 	return lat, lng, cc
+}
+
+func (e *Engine) resolveCityToCoords(city, cc string) (float64, float64, string) {
+	if c, ok := e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
+		return float64(c[0]), float64(c[1]), cc
+	}
+	return 0, 0, cc
 }
 
 func (e *Engine) lookupIP(ip uint32) Location {
