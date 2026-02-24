@@ -188,62 +188,122 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		}
 	}
 
-	// 3. Bottom Right (to the left of graphs): Global Event Rate
+	// 3. Bottom Right: Legend & Trendlines
 	graphW, graphH := 300.0, 100.0
+	ratesW := 120.0
+	legendW, legendH := 260.0, 160.0
 	if e.Width > 2000 {
 		graphW, graphH = 600.0, 200.0
+		ratesW = 240.0
+		legendW, legendH = 520.0, 320.0
 	}
-	firehoseX := float64(e.Width) - margin - graphW - 320.0
-	if e.Width > 2000 {
-		firehoseX = float64(e.Width) - margin - graphW - 640.0
-	}
-	firehoseY := float64(e.Height) - margin - graphH
+
+	// Match heights
+	trendBoxH := legendH - fontSize - 25 // Calculate inner graph height area to match legend box height
+	graphH = trendBoxH - 10              // Leave some room inside
+
+	// Calculate positions: Legend on far left, Trendlines box (containing graph + rates) on right
+	spacing := 40.0
+	trendBoxW := graphW + ratesW
+	totalW := trendBoxW + spacing + legendW
+	baseX := float64(e.Width) - margin - totalW
+	baseY := float64(e.Height) - margin - graphH - 20
+
+	firehoseX := baseX
+	firehoseY := baseY
+	gx := baseX + legendW + spacing
+	gy := baseY
+
+	// Draw Trendlines Box (passing trendBoxW for the background box)
+	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH)
+
+	// Draw Legend Box
+	vector.DrawFilledRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), float32(legendW), float32(legendH), color.RGBA{0, 0, 0, 100}, false)
+	vector.StrokeRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), float32(legendW), float32(legendH), 1, color.RGBA{36, 42, 53, 255}, false)
+
+	legendTitle := "LEGEND"
+	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+
+	// Draw subtle hacker-green accent
+	vector.DrawFilledRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+
+	legendOp := &text.DrawOptions{}
+	legendOp.GeoM.Translate(firehoseX+5, firehoseY-fontSize-5)
+	legendOp.ColorScale.Scale(1, 1, 1, 0.5)
+	text.Draw(screen, legendTitle, titleFace, legendOp)
 
 	imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
 	halfW := float64(imgW) / 2
 	swatchSize := fontSize
 
-	drawRow := func(label string, val float64, col color.RGBA, uiCol color.RGBA, y float64) {
+	// Shift legend content slightly for padding
+	firehoseX += 10
+	firehoseY += 10
+
+	type row struct {
+		label string
+		val   float64
+		col   color.RGBA
+		uiCol color.RGBA
+	}
+	rows := []row{
+		{"PROPAGATION", e.rateGossip, ColorGossip, ColorGossipUI},
+		{"PATH CHANGE", e.rateUpd, ColorUpd, ColorUpdUI},
+		{"WITHDRAWAL", e.rateWith, ColorWith, ColorWithUI},
+		{"NEW PATHS", e.rateNew, ColorNew, ColorNewUI},
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].val > rows[j].val })
+
+	for i, r := range rows {
+		y := firehoseY + float64(i)*(fontSize+10)
 		// Draw the pulse circle (swatch) - using the map color (col)
-		r, g, b := float32(col.R)/255.0, float32(col.G)/255.0, float32(col.B)/255.0
+		cr, cg, cb := float32(r.col.R)/255.0, float32(r.col.G)/255.0, float32(r.col.B)/255.0
 		baseAlpha := float32(0.6)
-		if col == ColorGossip {
+		if r.col == ColorGossip {
 			baseAlpha = 0.2
 		}
 
 		op := &ebiten.DrawImageOptions{}
 		op.Blend = ebiten.BlendLighter
-		scale := swatchSize / float64(imgW) * 1.6
+		scale := swatchSize / float64(imgW) * 1
 		op.GeoM.Translate(-halfW, -halfW)
 		op.GeoM.Scale(scale, scale)
 		op.GeoM.Translate(firehoseX+(swatchSize/2), y+(fontSize/2))
-		op.ColorScale.Scale(r*baseAlpha, g*baseAlpha, b*baseAlpha, baseAlpha)
+		op.ColorScale.Scale(cr*baseAlpha, cg*baseAlpha, cb*baseAlpha, baseAlpha)
 		screen.DrawImage(e.pulseImage, op)
 
-		// Draw the text - using the UI color (uiCol)
-		tr, tg, tb := float32(uiCol.R)/255.0, float32(uiCol.G)/255.0, float32(uiCol.B)/255.0
+		// Draw the text label in the legend box
+		tr, tg, tb := float32(r.uiCol.R)/255.0, float32(r.uiCol.G)/255.0, float32(r.uiCol.B)/255.0
 		top := &text.DrawOptions{}
 		top.GeoM.Translate(firehoseX+swatchSize+15, y)
 		top.ColorScale.Scale(tr, tg, tb, 0.9)
-		text.Draw(screen, fmt.Sprintf("%s: %.1f ops/s", label, val), face, top)
+		text.Draw(screen, r.label, face, top)
+
+		// Draw the numerical rate on the right side of the trendlines box
+		rateStr := fmt.Sprintf("%.1f ops/s", r.val)
+		rateOp := &text.DrawOptions{}
+		// Place rate to the right of the graph area
+		rateOp.GeoM.Translate(gx+graphW+15, y)
+		rateOp.ColorScale.Scale(tr, tg, tb, 0.9)
+		text.Draw(screen, rateStr, face, rateOp)
 	}
-
-	drawRow("PROPAGATION", e.rateGossip, ColorGossip, ColorGossipUI, firehoseY)
-	drawRow("DISCOVERY", e.rateNew, ColorNew, ColorNewUI, firehoseY+fontSize+10)
-	drawRow("PATH CHANGE", e.rateUpd, ColorUpd, ColorUpdUI, firehoseY+(fontSize+10)*2)
-	drawRow("WITHDRAWAL", e.rateWith, ColorWith, ColorWithUI, firehoseY+(fontSize+10)*3)
-
-	e.drawTrendlines(screen, margin)
 }
 
-func (e *Engine) drawTrendlines(screen *ebiten.Image, margin float64) {
-	graphW, graphH := 300.0, 100.0
-	if e.Width > 2000 {
-		graphW, graphH = 600.0, 200.0
-	}
-	gx, gy := float64(e.Width)-margin-graphW, float64(e.Height)-margin-graphH
-	vector.DrawFilledRect(screen, float32(gx), float32(gy), float32(graphW), float32(graphH), color.RGBA{0, 0, 0, 100}, false)
-	vector.StrokeRect(screen, float32(gx), float32(gy), float32(graphW), float32(graphH), 1, color.RGBA{36, 42, 53, 255}, false)
+func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64) {
+	vector.DrawFilledRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+	vector.StrokeRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+
+	trendTitle := "ACTIVITY TREND (2m)"
+	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+
+	// Draw subtle hacker-green accent
+	vector.DrawFilledRect(screen, float32(gx-10), float32(gy-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+
+	trendOp := &text.DrawOptions{}
+	trendOp.GeoM.Translate(gx+5, gy-fontSize-5)
+	trendOp.ColorScale.Scale(1, 1, 1, 0.5)
+	text.Draw(screen, trendTitle, titleFace, trendOp)
+
 	if len(e.history) < 2 {
 		return
 	}
@@ -388,7 +448,7 @@ func (e *Engine) StartMetricsLoop() {
 			prefix string
 			rate   float64
 		}
-		
+
 		// Use only the latest bucket for the current 5-second interval
 		latestBucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
 		var allImpact []impact
