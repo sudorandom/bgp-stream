@@ -53,7 +53,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Xvfb is ready. Starting bgp-viewer and FFmpeg..."
+echo "Xvfb is ready. Starting bgp-viewer..."
 export DISPLAY=:99
 
 # Determine video codec (VA-API if available)
@@ -67,16 +67,27 @@ if [ -c "/dev/dri/renderD128" ]; then
     FFMPEG_OUTPUT_ARGS="-vf format=nv12,hwupload"
 fi
 
-# Run the viewer in the background.
 # We open the pipe for both read and write (3<>) to avoid blocking
-# and ensure the pipe stays open.
 exec 3<> /tmp/audio.pipe
-stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" -audio-fd 3 "${ARGS[@]}" 2>&1 &
+
+# Run the viewer. We redirect its output so we can watch for the "Ready" state
+stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" -audio-fd 3 "${ARGS[@]}" 2>&1 | tee /tmp/bgp-viewer.log &
 STREAMER_PID=$!
 
+# Wait for bgp-viewer to finish loading data and start its engine
+echo "Waiting for bgp-viewer to initialize data..."
+timeout 60s bash -c 'until grep -q "Connecting to RIS Live" /tmp/bgp-viewer.log; do sleep 1; done'
+
+if [ $? -ne 0 ]; then
+    echo "bgp-viewer failed to initialize within 60 seconds"
+    cat /tmp/bgp-viewer.log
+    exit 1
+fi
+
+# Small delay to ensure the window is mapped and first frames are rendered
+sleep 2
+
 # Start FFmpeg for capture
-# We use a silence generator (anullsrc) mixed with the pipe audio to ensure 
-# that FFmpeg always has an audio stream. This prevents "Preparing stream" hangs.
 if [ -n "$YOUTUBE_STREAM_KEY" ]; then
     echo "Starting FFmpeg capture for YouTube stream (${WIDTH}x${HEIGHT})..."
     ffmpeg $FFMPEG_GLOBAL_ARGS \
