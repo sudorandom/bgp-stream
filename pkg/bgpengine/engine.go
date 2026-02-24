@@ -902,8 +902,8 @@ func (e *Engine) project(lat, lng float64) (x, y float64) {
 			break
 		}
 	}
-	r := float64(e.Width) / (2 * math.Sqrt(8)) * 1.2
-	x = (float64(e.Width) * 0.45) + r*(2*math.Sqrt(2)/math.Pi)*lngRad*math.Cos(theta)
+	r := e.Scale
+	x = (float64(e.Width) / 2) + r*(2*math.Sqrt(2)/math.Pi)*lngRad*math.Cos(theta)
 	y = (float64(e.Height) / 2) - r*math.Sqrt(2)*math.Sin(theta)
 	return x, y
 }
