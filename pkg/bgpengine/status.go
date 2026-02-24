@@ -80,8 +80,8 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	halfW := float64(imgW) / 2
 	swatchSize := fontSize
 
-	drawRow := func(label string, val float64, col color.RGBA, y float64) {
-		// Draw the pulse circle (swatch)
+	drawRow := func(label string, val float64, col color.RGBA, uiCol color.RGBA, y float64) {
+		// Draw the pulse circle (swatch) - using the map color (col)
 		r, g, b := float32(col.R)/255.0, float32(col.G)/255.0, float32(col.B)/255.0
 		baseAlpha := float32(0.6)
 		if col == ColorGossip {
@@ -97,16 +97,17 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		op.ColorScale.Scale(r*baseAlpha, g*baseAlpha, b*baseAlpha, baseAlpha)
 		screen.DrawImage(e.pulseImage, op)
 
-		// Draw the text
+		// Draw the text - using the UI color (uiCol)
+		tr, tg, tb := float32(uiCol.R)/255.0, float32(uiCol.G)/255.0, float32(uiCol.B)/255.0
 		top := &text.DrawOptions{}
 		top.GeoM.Translate(firehoseX+swatchSize+15, y)
-		top.ColorScale.Scale(r, g, b, 0.9)
+		top.ColorScale.Scale(tr, tg, tb, 0.9)
 		text.Draw(screen, fmt.Sprintf("%s: %.1f ops/s", label, val), face, top)
 	}
 
-	drawRow("PROPAGATION", e.rateGossip+e.rateNew, ColorGossip, firehoseY)
-	drawRow("PATH CHANGE", e.rateUpd, ColorUpd, firehoseY+fontSize+10)
-	drawRow("WITHDRAWAL", e.rateWith, ColorWith, firehoseY+(fontSize+10)*2)
+	drawRow("PROPAGATION", e.rateGossip+e.rateNew, ColorGossip, ColorGossipUI, firehoseY)
+	drawRow("PATH CHANGE", e.rateUpd, ColorUpd, ColorUpdUI, firehoseY+fontSize+10)
+	drawRow("WITHDRAWAL", e.rateWith, ColorWith, ColorWithUI, firehoseY+(fontSize+10)*2)
 
 	e.drawTrendlines(screen, margin)
 }
@@ -158,9 +159,9 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, margin float64) {
 			vector.StrokeLine(screen, float32(x1), float32(y1), float32(x2), float32(y2), 2, col, false)
 		}
 	}
-	drawLayer(func(s MetricSnapshot) int { return s.Gossip + s.New }, ColorGossip)
-	drawLayer(func(s MetricSnapshot) int { return s.Upd }, ColorUpd)
-	drawLayer(func(s MetricSnapshot) int { return s.With }, ColorWith)
+	drawLayer(func(s MetricSnapshot) int { return s.Gossip + s.New }, ColorGossipUI)
+	drawLayer(func(s MetricSnapshot) int { return s.Upd }, ColorUpdUI)
+	drawLayer(func(s MetricSnapshot) int { return s.With }, ColorWithUI)
 }
 
 func (e *Engine) StartMetricsLoop() {

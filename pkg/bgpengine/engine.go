@@ -71,9 +71,16 @@ var (
 	ColorNew    = color.RGBA{255, 255, 255, 255} // White (New Announcement)
 	ColorUpd    = color.RGBA{148, 0, 211, 255}   // Deep Violet/Purple (Path Change)
 	ColorWith   = color.RGBA{255, 50, 50, 255}   // Red (Withdrawal)
-	ColorNote   = color.RGBA{255, 255, 255, 255} // White
-	ColorPeer   = color.RGBA{255, 255, 0, 255}   // Yellow
-	ColorOpen   = color.RGBA{0, 100, 255, 255}   // Blue
+
+	// Lighter versions for UI text and trendlines
+	ColorGossipUI = color.RGBA{135, 206, 250, 255} // Light Sky Blue
+	ColorNewUI    = color.RGBA{255, 255, 255, 255} // White
+	ColorUpdUI    = color.RGBA{218, 112, 214, 255} // Orchid (Lighter Purple)
+	ColorWithUI   = color.RGBA{255, 127, 127, 255} // Light Red
+
+	ColorNote = color.RGBA{255, 255, 255, 255} // White
+	ColorPeer = color.RGBA{255, 255, 0, 255}   // Yellow
+	ColorOpen = color.RGBA{0, 100, 255, 255}   // Blue
 )
 
 const (
@@ -407,7 +414,7 @@ func (e *Engine) drawSong(screen *ebiten.Image) {
 	titleLabel := ">> " + e.CurrentSong
 	artistLabel := e.CurrentArtist
 
-	x, y := margin/2, float64(e.Height)-margin
+	x, y := margin/2, float64(e.Height)-margin*1.5
 
 	e.drawGlitchTextAggressive(screen, titleLabel, titleFace, x, y, 0.8, intensity, isGlitching)
 	if artistLabel != "" {
