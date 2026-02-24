@@ -67,10 +67,10 @@ if [ -c "/dev/dri/renderD128" ]; then
     FFMPEG_OUTPUT_ARGS="-vf format=nv12,hwupload"
 fi
 
-# Run the viewer in the background. 
-# We open the named pipe for writing.
-# The '3>' ensures the FD remains open even between track changes.
-exec 3> /tmp/audio.pipe
+# Run the viewer in the background.
+# We open the pipe for both read and write (3<>) to avoid blocking
+# and ensure the pipe stays open.
+exec 3<> /tmp/audio.pipe
 stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" -audio-fd 3 "${ARGS[@]}" 2>&1 &
 STREAMER_PID=$!
 
