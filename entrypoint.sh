@@ -1,8 +1,11 @@
 #!/bin/bash
 set -x
 
-# Clean up stale Xvfb lock files if they exist
-rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+# Clean up stale files
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 /tmp/audio.pipe
+
+# Create a named pipe for audio
+mkfifo /tmp/audio.pipe
 
 # Default settings (1080p)
 WIDTH=1920
@@ -37,8 +40,8 @@ done
 Xvfb :99 -ac -screen 0 "${WIDTH}x${HEIGHT}x24" > /tmp/xvfb.log 2>&1 &
 XVFB_PID=$!
 
-# Ensure Xvfb is cleaned up on exit
-trap "kill $XVFB_PID" EXIT
+# Ensure Xvfb and audio pipe are cleaned up on exit
+trap "kill $XVFB_PID; rm -f /tmp/audio.pipe" EXIT
 
 # Wait for Xvfb to be ready
 echo "Waiting for Xvfb (PID $XVFB_PID) to start..."
@@ -65,9 +68,10 @@ if [ -c "/dev/dri/renderD128" ]; then
 fi
 
 # Run the viewer in the background. 
-# We pass through all filtered arguments. If the user provides -width, -height, or -scale, 
-# those will override the ones we append here because they come after in the command line.
-stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" "${ARGS[@]}" 2>&1 &
+# We open the named pipe for writing.
+# The '3>' ensures the FD remains open even between track changes.
+exec 3> /tmp/audio.pipe
+stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" -audio-fd 3 "${ARGS[@]}" 2>&1 &
 STREAMER_PID=$!
 
 # Start FFmpeg for capture
@@ -75,7 +79,7 @@ if [ -n "$YOUTUBE_STREAM_KEY" ]; then
     echo "Starting FFmpeg capture for YouTube stream (${WIDTH}x${HEIGHT})..."
     ffmpeg $FFMPEG_GLOBAL_ARGS \
         -f x11grab -draw_mouse 0 -video_size "${WIDTH}x${HEIGHT}" -framerate 30 -i :99.0 \
-        -f alsa -i default \
+        -f s16le -ar 44100 -ac 2 -i /tmp/audio.pipe \
         -c:v $VCODEC -b:v $BITRATE -maxrate $MAXRATE -bufsize 30000k -g 60 \
         -pix_fmt yuv420p $FFMPEG_OUTPUT_ARGS \
         -c:a aac -b:a 128k \

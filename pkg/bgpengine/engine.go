@@ -122,6 +122,7 @@ type Engine struct {
 	metricsMu sync.Mutex
 
 	audioContext *audio.Context
+	AudioWriter  io.Writer
 }
 
 type MetricSnapshot struct {

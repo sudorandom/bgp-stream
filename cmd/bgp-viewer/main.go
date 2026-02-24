@@ -17,6 +17,7 @@ var (
 	windowWidth  = flag.Int("window-width", 1280, "Initial window width (non-headless only)")
 	windowHeight = flag.Int("window-height", 720, "Initial window height (non-headless only)")
 	tpsFlag      = flag.Int("tps", 30, "Ticks per second (engine updates)")
+	audioFd      = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
 )
 
 func main() {
@@ -25,6 +26,12 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	engine := bgpengine.NewEngine(*renderWidth, *renderHeight, *renderScale)
+
+	// If audio-fd is provided, use it for streaming audio
+	if *audioFd != -1 {
+		log.Printf("Attaching audio to file descriptor: %d", *audioFd)
+		engine.AudioWriter = os.NewFile(uintptr(*audioFd), "audio-pipe")
+	}
 
 	engine.InitPulseTexture()
 	if err := engine.LoadData(); err != nil {

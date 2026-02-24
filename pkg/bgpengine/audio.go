@@ -1,6 +1,8 @@
 package bgpengine
 
 import (
+	"encoding/binary"
+	"io"
 	"log"
 	"math/rand"
 	"os"
@@ -12,7 +14,6 @@ import (
 )
 
 func (e *Engine) StartAudioPlayer() {
-	e.InitAudio()
 	go func() {
 		for {
 			files, err := os.ReadDir("audio")
@@ -57,6 +58,49 @@ func (e *Engine) playTrack(path string) error {
 		return err
 	}
 
+	// Case 1: Stream to Pipe (Headless/Streaming mode)
+	if e.AudioWriter != nil {
+		log.Printf("Streaming audio: %s", path)
+		totalBytes := d.Length()
+		duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
+		fadeDuration := 5 * time.Second
+		
+		buf := make([]byte, 8192)
+		startTime := time.Now()
+		for {
+			n, err := d.Read(buf)
+			if n > 0 {
+				elapsed := time.Since(startTime)
+				remaining := duration - elapsed
+				
+				if remaining <= fadeDuration {
+					vol := float64(remaining) / float64(fadeDuration)
+					if vol < 0 { vol = 0 }
+					// Apply volume to s16le samples
+					for i := 0; i < n; i += 2 {
+						sample := int16(binary.LittleEndian.Uint16(buf[i:]))
+						sample = int16(float64(sample) * vol)
+						binary.LittleEndian.PutUint16(buf[i:], uint16(sample))
+					}
+				}
+				
+				if _, err := e.AudioWriter.Write(buf[:n]); err != nil {
+					log.Printf("Stream write error: %v", err)
+					return err
+				}
+			}
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Case 2: Play to local audio device (Viewer mode)
+	e.InitAudio()
 	player, err := e.audioContext.NewPlayer(d)
 	if err != nil {
 		return err
