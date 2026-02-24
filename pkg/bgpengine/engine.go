@@ -514,6 +514,26 @@ func (e *Engine) loadRemoteCityData() error {
 func (e *Engine) generateBackground() error {
 	cpuImg := image.NewRGBA(image.Rect(0, 0, e.Width, e.Height))
 	draw.Draw(cpuImg, cpuImg.Bounds(), &image.Uniform{color.RGBA{8, 10, 15, 255}}, image.Point{}, draw.Src)
+
+	// Draw subtle latitude/longitude grid (Cyber-grid)
+	gridColor := color.RGBA{30, 35, 45, 255}
+	// Longitude lines
+	for lng := -180.0; lng <= 180.0; lng += 15.0 {
+		var points [][]float64
+		for lat := -90.0; lat <= 90.0; lat += 2.0 {
+			points = append(points, []float64{lng, lat})
+		}
+		e.drawRingFast(cpuImg, points, gridColor)
+	}
+	// Latitude lines
+	for lat := -90.0; lat <= 90.0; lat += 15.0 {
+		var points [][]float64
+		for lng := -180.0; lng <= 180.0; lng += 2.0 {
+			points = append(points, []float64{lng, lat})
+		}
+		e.drawRingFast(cpuImg, points, gridColor)
+	}
+
 	fc, err := geojson.UnmarshalFeatureCollection(worldGeoJSON)
 	if err != nil {
 		return err
@@ -1128,10 +1148,22 @@ func (e *Engine) lookupIP(ip uint32) Location {
 }
 
 func (e *Engine) project(lat, lng float64) (x, y float64) {
+	// Clamp latitude to avoid singularity at poles (+/- 90 degrees)
+	if lat > 89.5 {
+		lat = 89.5
+	}
+	if lat < -89.5 {
+		lat = -89.5
+	}
+
 	latRad, lngRad := lat*math.Pi/180, lng*math.Pi/180
 	theta := latRad
 	for i := 0; i < 10; i++ {
-		delta := (2*theta + math.Sin(2*theta) - math.Pi*math.Sin(latRad)) / (2 + 2*math.Cos(2*theta))
+		denom := 2 + 2*math.Cos(2*theta)
+		if math.Abs(denom) < 1e-9 {
+			break
+		}
+		delta := (2*theta + math.Sin(2*theta) - math.Pi*math.Sin(latRad)) / denom
 		theta -= delta
 		if math.Abs(delta) < 1e-7 {
 			break
@@ -1151,10 +1183,13 @@ func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA)
 	projectedRings := make([][]point, len(rings))
 	minY, maxY := float64(e.Height), 0.0
 	for i, ring := range rings {
-		projectedRings[i] = make([]point, len(ring))
-		for j, p := range ring {
+		projectedRings[i] = make([]point, 0, len(ring))
+		for _, p := range ring {
 			x, y := e.project(p[1], p[0])
-			projectedRings[i][j] = point{x, y}
+			if math.IsNaN(x) || math.IsNaN(y) {
+				continue
+			}
+			projectedRings[i] = append(projectedRings[i], point{x, y})
 			if y < minY {
 				minY = y
 			}
@@ -1199,6 +1234,9 @@ func (e *Engine) drawRingFast(img *image.RGBA, coords [][]float64, c color.RGBA)
 	for i := 0; i < len(coords)-1; i++ {
 		x1, y1 := e.project(coords[i][1], coords[i][0])
 		x2, y2 := e.project(coords[i+1][1], coords[i+1][0])
+		if math.IsNaN(x1) || math.IsNaN(y1) || math.IsNaN(x2) || math.IsNaN(y2) {
+			continue
+		}
 		e.drawLineFast(img, int(x1), int(y1), int(x2), int(y2), c)
 	}
 }
