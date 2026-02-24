@@ -59,7 +59,7 @@ export DISPLAY=:99
 # Determine video codec (VA-API if available)
 VCODEC="libx264"
 FFMPEG_GLOBAL_ARGS=""
-FFMPEG_OUTPUT_ARGS=""
+FFMPEG_OUTPUT_ARGS="-pix_fmt yuv420p"
 
 if [ -c "/dev/dri/renderD128" ]; then
     VCODEC="h264_vaapi"
@@ -75,13 +75,18 @@ stdbuf -oL -eL ./bgp-viewer -width "$WIDTH" -height "$HEIGHT" -scale "$SCALE" -a
 STREAMER_PID=$!
 
 # Start FFmpeg for capture
+# We use a silence generator (anullsrc) mixed with the pipe audio to ensure 
+# that FFmpeg always has an audio stream. This prevents "Preparing stream" hangs.
 if [ -n "$YOUTUBE_STREAM_KEY" ]; then
     echo "Starting FFmpeg capture for YouTube stream (${WIDTH}x${HEIGHT})..."
     ffmpeg $FFMPEG_GLOBAL_ARGS \
-        -f x11grab -draw_mouse 0 -video_size "${WIDTH}x${HEIGHT}" -framerate 30 -i :99.0 \
-        -f s16le -ar 44100 -ac 2 -i /tmp/audio.pipe \
+        -f x11grab -draw_mouse 0 -video_size "${WIDTH}x${HEIGHT}" -framerate 30 -thread_queue_size 1024 -i :99.0 \
+        -f s16le -ar 44100 -ac 2 -thread_queue_size 1024 -i /tmp/audio.pipe \
+        -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 \
+        -filter_complex "[1:a][2:a]amix=inputs=2:duration=longest[a]" \
+        -map 0:v -map "[a]" \
         -c:v $VCODEC -b:v $BITRATE -maxrate $MAXRATE -bufsize 30000k -g 60 \
-        -pix_fmt yuv420p $FFMPEG_OUTPUT_ARGS \
+        $FFMPEG_OUTPUT_ARGS \
         -c:a aac -b:a 128k \
         -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
 else

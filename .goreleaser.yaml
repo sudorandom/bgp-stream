@@ -8,33 +8,6 @@ before:
     - go mod tidy
 
 builds:
-  - id: bgp-streamer-amd64
-    main: ./cmd/bgp-streamer/main.go
-    binary: bgp-streamer
-    env:
-      - CGO_ENABLED=1
-    goos:
-      - linux
-    goarch:
-      - amd64
-    flags:
-      - -tags=ebitengine
-
-  - id: bgp-streamer-arm64
-    main: ./cmd/bgp-streamer/main.go
-    binary: bgp-streamer
-    env:
-      - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
-      - CXX=aarch64-linux-gnu-g++
-      - PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-    goos:
-      - linux
-    goarch:
-      - arm64
-    flags:
-      - -tags=ebitengine
-
   - id: bgp-viewer-amd64
     main: ./cmd/bgp-viewer/main.go
     binary: bgp-viewer
