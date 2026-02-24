@@ -54,15 +54,9 @@ func (e *Engine) playTrack(path string) error {
 		song = parts[1]
 	}
 
-	// If this is the first song, set it immediately
-	if e.CurrentSong == "" {
-		e.CurrentSong = song
-		e.CurrentArtist = artist
-		e.songChangedAt = time.Now()
-	} else {
-		e.NextSong = song
-		e.NextArtist = artist
-	}
+	e.CurrentSong = song
+	e.CurrentArtist = artist
+	e.songChangedAt = time.Now()
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -113,15 +107,6 @@ func (e *Engine) playTrack(path string) error {
 				return err
 			}
 		}
-
-		// Update CurrentSong at the end of the track (after the fade)
-		if e.NextSong != "" {
-			e.CurrentSong = e.NextSong
-			e.CurrentArtist = e.NextArtist
-			e.NextSong = ""
-			e.NextArtist = ""
-			e.songChangedAt = time.Now()
-		}
 		return nil
 	}
 
@@ -153,14 +138,5 @@ func (e *Engine) playTrack(path string) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	player.Close() // Ensure it is closed
-
-	// Update CurrentSong at the end of the track (after the fade)
-	if e.NextSong != "" {
-		e.CurrentSong = e.NextSong
-		e.CurrentArtist = e.NextArtist
-		e.NextSong = ""
-		e.NextArtist = ""
-		e.songChangedAt = time.Now()
-	}
 	return nil
 }

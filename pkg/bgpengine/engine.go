@@ -167,9 +167,7 @@ type Engine struct {
 	AudioWriter  io.Writer
 
 	CurrentSong   string
-	NextSong      string
 	CurrentArtist string
-	NextArtist    string
 	lastSong      string
 	songChangedAt time.Time
 
