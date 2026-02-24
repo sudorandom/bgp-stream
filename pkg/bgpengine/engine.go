@@ -506,10 +506,7 @@ func (e *Engine) LoadData() error {
 	// 1. Download worldcities.csv if missing
 	citiesPath := "data/worldcities.csv"
 	if _, err := os.Stat(citiesPath); os.IsNotExist(err) {
-		url := os.Getenv("WORLD_CITIES_URL")
-		if url == "" {
-			url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/csv/cities.csv"
-		}
+		url := "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/csv/cities.csv"
 		log.Printf("Downloading world cities database from %s...", url)
 		if err := utils.DownloadFile(url, citiesPath); err != nil {
 			log.Printf("Error downloading cities: %v", err)

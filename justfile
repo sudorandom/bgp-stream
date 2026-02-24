@@ -2,15 +2,8 @@
 test:
 	go test ./...
 
-build:
-	go build -o bgp-viewer ./cmd/bgp-viewer/main.go
-
 run:
 	go run ./cmd/bgp-viewer
-
-# Clean up built binaries
-clean:
-	rm -f bgp-viewer
 
 # Build the Docker image locally using buildx
 docker-build:
