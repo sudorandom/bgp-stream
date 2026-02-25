@@ -17,7 +17,8 @@ var (
 	windowHeight = flag.Int("window-height", 0, "Initial window height (defaults to render height)")
 	tpsFlag      = flag.Int("tps", 30, "Ticks per second (engine updates)")
 	audioFd      = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
-	decorated    = flag.Bool("decorated", false, "Whether to show window decorations (title bar, etc.)")
+	hideWindowControls = flag.Bool("hide-window-controls", false, "Whether to hide window decorations (title bar, etc.)")
+	floating     = flag.Bool("floating", false, "Whether to keep the window always on top")
 )
 
 func main() {
@@ -46,7 +47,8 @@ func main() {
 
 	ebiten.SetTPS(*tpsFlag)
 	ebiten.SetWindowTitle("BGP Real-Time Map Viewer")
-	ebiten.SetWindowDecorated(*decorated)
+	ebiten.SetWindowDecorated(!*hideWindowControls)
+	ebiten.SetWindowFloating(*floating)
 
 	w, h := *windowWidth, *windowHeight
 	if w == 0 {

@@ -33,7 +33,7 @@ func (e *Engine) ListenToBGP() {
 			// 1. Process pending withdrawals
 			for ip, entry := range pendingWithdrawals {
 				if now.After(entry.Time) {
-					if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+					if lat, lng, cc := e.getIPCoords(ip); cc != "" {
 						e.recordEvent(lat, lng, cc, EventWithdrawal, entry.Prefix)
 						e.recentlySeen[ip] = struct {
 							Time time.Time
@@ -118,7 +118,7 @@ func (e *Engine) ListenToBGP() {
 
 					// If we've seen a WITHDRAWAL for this prefix very recently, it's gossip
 					if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
-						if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+						if lat, lng, cc := e.getIPCoords(ip); cc != "" {
 							e.recordEvent(lat, lng, cc, EventGossip, prefix)
 						}
 						continue
@@ -140,7 +140,7 @@ func (e *Engine) ListenToBGP() {
 
 						// Retroactive Path Change Detection:
 						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
-							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+							if lat, lng, cc := e.getIPCoords(ip); cc != "" {
 								e.recordEvent(lat, lng, cc, EventUpdate, prefix)
 								e.recentlySeen[ip] = struct {
 									Time time.Time
@@ -152,7 +152,7 @@ func (e *Engine) ListenToBGP() {
 
 						// Normal Gossip Detection
 						if last, ok := e.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
-							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+							if lat, lng, cc := e.getIPCoords(ip); cc != "" {
 								e.recordEvent(lat, lng, cc, EventGossip, prefix)
 							}
 							continue
@@ -161,7 +161,7 @@ func (e *Engine) ListenToBGP() {
 						if _, ok := pendingWithdrawals[ip]; ok {
 							// Found a matching announcement for a pending withdrawal: this is a Path Change
 							delete(pendingWithdrawals, ip)
-							if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+							if lat, lng, cc := e.getIPCoords(ip); cc != "" {
 								e.recordEvent(lat, lng, cc, EventUpdate, prefix)
 								e.recentlySeen[ip] = struct {
 									Time time.Time
@@ -180,22 +180,16 @@ func (e *Engine) ListenToBGP() {
 
 							if isNew {
 								// Truly new announcement (Discovery)
-								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+								if lat, lng, cc := e.getIPCoords(ip); cc != "" {
 									e.recordEvent(lat, lng, cc, EventNew, prefix)
 									e.recentlySeen[ip] = struct {
 										Time time.Time
 										Type EventType
 									}{Time: now, Type: EventNew}
-
-									if e.SeenDB != nil {
-										if err := e.SeenDB.BatchInsertRaw(map[string][]byte{prefix: []byte{1}}); err != nil {
-											log.Printf("Warning: Failed to update seen database: %v", err)
-										}
-									}
 								}
 							} else {
 								// We've seen this before, so this is just a path change (Re-discovery)
-								if lat, lng, cc := e.getPrefixCoords(ip); cc != "" {
+								if lat, lng, cc := e.getIPCoords(ip); cc != "" {
 									e.recordEvent(lat, lng, cc, EventUpdate, prefix)
 									e.recentlySeen[ip] = struct {
 										Time time.Time

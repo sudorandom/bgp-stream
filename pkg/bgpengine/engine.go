@@ -136,6 +136,7 @@ type Engine struct {
 
 	cityBuffer         map[uint64]*BufferedCity
 	cityBufferPool     sync.Pool
+	seenBuffer         []string
 	bufferMu           sync.Mutex
 	visualQueue        []*QueuedPulse
 	queueMu            sync.Mutex
@@ -169,11 +170,11 @@ type Engine struct {
 	CurrentSong   string
 	CurrentArtist string
 	lastSong      string
-		songChangedAt time.Time
-		songBuffer    *ebiten.Image
-		artistBuffer  *ebiten.Image
-	
-		hubChangedAt map[string]time.Time
+	songChangedAt time.Time
+	songBuffer    *ebiten.Image
+	artistBuffer  *ebiten.Image
+
+	hubChangedAt      map[string]time.Time
 	lastHubs          map[string]int
 	hubPosition       map[string]int
 	lastMetricsUpdate time.Time
@@ -430,34 +431,33 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 			continue
 		}
 
-		baseAlpha := 0.6
+		baseAlpha := 0.5
 		if p.Type == EventNew {
-			baseAlpha = 0.8 // Brighter for discovery
+			baseAlpha = 0.7
 		}
 		if p.Type == EventWithdrawal {
-			baseAlpha = 0.3 // More subtle for withdrawals
+			baseAlpha = 0.2
 		}
 		if p.Type == EventGossip {
 			baseAlpha = 0.2
 		}
 
-		scale := (3 + progress*p.MaxRadius) / float64(imgW) * 2.0
-		if p.Type == EventWithdrawal {
-			// Imploding effect: starts large and shrinks to point
-			scale = (3 + (1.0-progress)*p.MaxRadius) / float64(imgW) * 2.0
-		}
+		// Use a smaller base offset (+1) and more conservative scaling
+		scale := (1 + progress*p.MaxRadius) / float64(imgW) * 2.0
 		if p.Type == EventNew {
-			// Ease-out expansion: starts fast, slows down
 			easeOut := 1.0 - math.Pow(1.0-progress, 3)
-			scale = (3 + easeOut*p.MaxRadius) / float64(imgW) * 2.5
+			scale = (1 + easeOut*p.MaxRadius) / float64(imgW) * 2.0
 		}
+
 		alpha := (1.0 - progress) * baseAlpha
 		op.GeoM.Reset()
 		op.GeoM.Translate(-halfW, -halfW)
 		op.GeoM.Scale(scale, scale)
 		op.GeoM.Translate(p.X, p.Y)
+
 		r, g, b := float64(p.Color.R)/255.0, float64(p.Color.G)/255.0, float64(p.Color.B)/255.0
 		op.ColorScale.Reset()
+		// Re-apply alpha multiplication for premultiplied alpha blending
 		op.ColorScale.Scale(float32(r*alpha), float32(g*alpha), float32(b*alpha), float32(alpha))
 		screen.DrawImage(e.pulseImage, op)
 	}
@@ -905,7 +905,27 @@ func (e *Engine) StartBufferLoop() {
 	for range ticker.C {
 		e.bufferMu.Lock()
 		var nextBatch []*QueuedPulse
-		// Convert buffered city activity into discrete pulse events for each type
+
+		// 1. Batch persist seen prefixes
+		if len(e.seenBuffer) > 0 && e.SeenDB != nil {
+			batch := make(map[string][]byte)
+			for _, p := range e.seenBuffer {
+				batch[p] = []byte{1}
+			}
+			e.seenBuffer = e.seenBuffer[:0]
+
+			// Execute write in a separate goroutine to avoid blocking the visual queue
+			go func(b map[string][]byte) {
+				if err := e.SeenDB.BatchInsertRaw(b); err != nil {
+					// Only log if it's not a "closing" error to reduce shutdown noise
+					if !strings.Contains(err.Error(), "blocked") && !strings.Contains(err.Error(), "closed") {
+						log.Printf("Warning: Failed to update seen database: %v", err)
+					}
+				}
+			}(batch)
+		}
+
+		// 2. Convert buffered city activity into discrete pulse events for each type
 		for key, d := range e.cityBuffer {
 			if d.With > 0 {
 				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventWithdrawal, Count: d.With})
@@ -1009,6 +1029,9 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 	case EventNew:
 		b.New++
 		e.windowNew++
+		if prefix != "" {
+			e.seenBuffer = append(e.seenBuffer, prefix)
+		}
 	case EventUpdate:
 		b.Upd++
 		e.windowUpd++
@@ -1022,7 +1045,7 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 	e.metricsMu.Unlock()
 }
 
-func (e *Engine) getPrefixCoords(ip uint32) (float64, float64, string) {
+func (e *Engine) getIPCoords(ip uint32) (float64, float64, string) {
 	e.cacheMu.Lock()
 	if c, ok := e.prefixToCityCache[ip]; ok {
 		e.cacheMu.Unlock()
@@ -1263,15 +1286,13 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType E
 	e.pulsesMu.Lock()
 	defer e.pulsesMu.Unlock()
 	if len(e.pulses) < MaxActivePulses {
-		baseRad, growth := 10.0, 16.0
+		baseRad := 6.0
 		if e.Width > 2000 {
-			baseRad, growth = 20.0, 32.0
+			baseRad = 12.0
 		}
-		radius := baseRad + math.Log10(float64(count)+1.0)*growth
-
-		if eventType == EventWithdrawal {
-			radius *= 0.4 // Significantly smaller for withdrawals
-		}
+		// Use natural log (ln) for slower growth at high counts
+		growth := baseRad * 1.2
+		radius := baseRad + math.Log(float64(count))*growth
 
 		if radius > 240 {
 			radius = 240
