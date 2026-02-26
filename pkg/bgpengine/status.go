@@ -12,6 +12,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
 func (e *Engine) drawMetrics(screen *ebiten.Image) {
@@ -715,7 +716,7 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 	var holePath vector.Path
 	holeRadius := radius * 0.7
 	holePath.Arc(float32(centerX), float32(centerY), float32(holeRadius), 0, 2*math.Pi, vector.Clockwise)
-	
+
 	holeDrawOpts := *drawOpts
 	holeDrawOpts.ColorScale.ScaleWithColor(color.RGBA{8, 10, 15, 255})
 	vector.FillPath(screen, &holePath, fillOpts, &holeDrawOpts)
@@ -733,19 +734,19 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 	subFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.5}
 	legY := centerY + radius + fontSize*0.6
 	swatchSize := fontSize * 0.4
-	
+
 	// Calculate combined width of both legend items
 	bStr, oStr := "BEACON", "ORGANIC"
 	btw, _ := text.Measure(bStr, subFace, 0)
 	otw, _ := text.Measure(oStr, subFace, 0)
-	
+
 	// Total width = swatch + gap + text + padding + swatch + gap + text
 	itemGap := 20.0
 	bItemW := swatchSize + 5 + btw
 	oItemW := swatchSize + 5 + otw
 	totalLegW := bItemW + itemGap + oItemW
-	
-	legX := x + (w/2) - (totalLegW/2) - 10 // Center relative to donut center (-10 is from centerX calculation)
+
+	legX := x + (w / 2) - (totalLegW / 2) - 10 // Center relative to donut center (-10 is from centerX calculation)
 
 	// Beacon Legend Item
 	vector.FillRect(screen, float32(legX), float32(legY), float32(swatchSize), float32(swatchSize), color.RGBA{255, 165, 0, 255}, false)
