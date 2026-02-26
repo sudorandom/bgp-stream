@@ -37,14 +37,14 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 	if len(e.VisualHubs) > 0 {
 		// Draw styled background box
-		vector.DrawFilledRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+		vector.FillRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 		vector.StrokeRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		titleLabel := "TOP ACTIVITY HUBS (ops/s)"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 		// Draw subtle hacker-green accent next to title
-		vector.DrawFilledRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+		vector.FillRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 		titleOp := &text.DrawOptions{}
 		titleOp.GeoM.Translate(hubX+5, hubYBase-fontSize-5)
@@ -100,14 +100,14 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 	if len(e.VisualImpact) > 0 {
 		// Draw styled background box
-		vector.DrawFilledRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+		vector.FillRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 		vector.StrokeRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		impactTitle := "MOST ACTIVE PREFIXES (ops/s)"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 		// Draw subtle hacker-green accent
-		vector.DrawFilledRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+		vector.FillRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 		impactOp := &text.DrawOptions{}
 		impactOp.GeoM.Translate(hubX+5, impactYBase-fontSize-5)
@@ -146,14 +146,14 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		}
 
 		// Draw styled background box
-		vector.DrawFilledRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
+		vector.FillRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
 		vector.StrokeRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		songTitle := "NOW PLAYING"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 		// Draw subtle hacker-green accent
-		vector.DrawFilledRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+		vector.FillRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 		songTitleOp := &text.DrawOptions{}
 		songTitleOp.GeoM.Translate(hubX+5, songYBase-fontSize-5)
@@ -253,14 +253,14 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH)
 
 	// Draw Legend Box
-	vector.DrawFilledRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), float32(legendW), float32(legendH), color.RGBA{0, 0, 0, 100}, false)
+	vector.FillRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), float32(legendW), float32(legendH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), float32(legendW), float32(legendH), 1, color.RGBA{36, 42, 53, 255}, false)
 
 	legendTitle := "LEGEND"
 	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 	// Draw subtle hacker-green accent
-	vector.DrawFilledRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+	vector.FillRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 	legendOp := &text.DrawOptions{}
 	legendOp.GeoM.Translate(firehoseX+5, firehoseY-fontSize-5)
@@ -357,14 +357,14 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 }
 
 func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64) {
-	vector.DrawFilledRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+	vector.FillRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
 	trendTitle := "ACTIVITY TREND (1m)"
 	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 	// Draw subtle hacker-green accent
-	vector.DrawFilledRect(screen, float32(gx-10), float32(gy-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+	vector.FillRect(screen, float32(gx-10), float32(gy-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 	trendOp := &text.DrawOptions{}
 	trendOp.GeoM.Translate(gx+5, gy-fontSize-5)

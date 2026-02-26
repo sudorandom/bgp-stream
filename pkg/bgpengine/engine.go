@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/oschwald/maxminddb-golang"
 	geojson "github.com/paulmach/go.geojson"
@@ -127,12 +126,10 @@ type Engine struct {
 	FPS           int
 	Scale         float64
 
-	pulses            []*Pulse
-	pulsesMu          sync.Mutex
-	prefixData        PrefixData
-	countryHubs       map[string][]CityHub
-	prefixToCityCache map[uint32]cacheEntry
-	cacheMu           sync.Mutex
+	pulses   []*Pulse
+	pulsesMu sync.Mutex
+
+	geo *GeoService
 
 	cityBuffer         map[uint64]*BufferedCity
 	cityBufferPool     sync.Pool
@@ -164,9 +161,6 @@ type Engine struct {
 	history   []MetricSnapshot
 	metricsMu sync.Mutex
 
-	audioContext *audio.Context
-	AudioWriter  io.Writer
-
 	CurrentSong   string
 	CurrentArtist string
 	lastSong      string
@@ -184,15 +178,11 @@ type Engine struct {
 	prefixImpactHistory []map[string]int
 	VisualImpact        map[string]*VisualImpact
 
-	recentlySeen map[uint32]struct {
-		Time time.Time
-		Type EventType
-	}
+	SeenDB *utils.DiskTrie
 
-	SeenDB    *utils.DiskTrie
-	CloudTrie *utils.CloudTrie
+	audioPlayer *AudioPlayer
 
-	cityCoords map[string][2]float32
+	processor *BGPProcessor
 }
 
 type VisualHub struct {
@@ -229,14 +219,13 @@ func NewEngine(width, height int, scale float64) *Engine {
 		log.Printf("Fatal: failed to load mono font: %v", err)
 	}
 
-	return &Engine{
-		Width:             width,
-		Height:            height,
-		FPS:               30,
-		Scale:             scale,
-		countryHubs:       make(map[string][]CityHub),
-		prefixToCityCache: make(map[uint32]cacheEntry),
-		cityBuffer:        make(map[uint64]*BufferedCity),
+	e := &Engine{
+		Width:  width,
+		Height: height,
+		FPS:    30,
+		Scale:  scale,
+		geo:    NewGeoService(width, height, scale),
+		cityBuffer: make(map[uint64]*BufferedCity),
 		cityBufferPool: sync.Pool{
 			New: func() interface{} {
 				return &BufferedCity{}
@@ -254,12 +243,23 @@ func NewEngine(width, height int, scale float64) *Engine {
 		VisualHubs:          make(map[string]*VisualHub),
 		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 5s = 5 mins
 		VisualImpact:        make(map[string]*VisualImpact),
-		recentlySeen: make(map[uint32]struct {
-			Time time.Time
-			Type EventType
-		}),
-		cityCoords: make(map[string][2]float32),
 	}
+
+	e.audioPlayer = NewAudioPlayer(nil, func(song, artist string) {
+		e.CurrentSong = song
+		e.CurrentArtist = artist
+		e.songChangedAt = time.Now()
+	})
+
+	return e
+}
+
+func (e *Engine) SetAudioWriter(w io.Writer) {
+	e.audioPlayer.AudioWriter = w
+}
+
+func (e *Engine) GetAudioPlayer() *AudioPlayer {
+	return e.audioPlayer
 }
 
 func (e *Engine) StartMemoryWatcher() {
@@ -269,12 +269,6 @@ func (e *Engine) StartMemoryWatcher() {
 			debug.FreeOSMemory()
 		}
 	}()
-}
-
-func (e *Engine) InitAudio() {
-	if e.audioContext == nil {
-		e.audioContext = audio.NewContext(44100)
-	}
 }
 
 func (e *Engine) Update() error {
@@ -530,6 +524,9 @@ func (e *Engine) LoadData() error {
 	if err := e.loadRemoteCityData(); err != nil {
 		return err
 	}
+
+	e.processor = NewBGPProcessor(e.geo.GetIPCoords, e.SeenDB, e.prefixToIP, e.recordEvent)
+
 	return e.generateBackground()
 }
 
@@ -559,7 +556,7 @@ func (e *Engine) loadRemoteCityData() error {
 		return err
 	}
 	for _, c := range cities {
-		hubs := e.countryHubs[c.Country]
+		hubs := e.geo.countryHubs[c.Country]
 		weight := c.LogicalDominanceIPs
 		if weight <= 0 {
 			weight = 1
@@ -568,7 +565,7 @@ func (e *Engine) loadRemoteCityData() error {
 		if len(hubs) > 0 {
 			last = hubs[len(hubs)-1].CumulativeWeight
 		}
-		e.countryHubs[c.Country] = append(hubs, CityHub{Lat: c.Coordinates[1], Lng: c.Coordinates[0], CumulativeWeight: last + weight})
+		e.geo.countryHubs[c.Country] = append(hubs, CityHub{Lat: c.Coordinates[1], Lng: c.Coordinates[0], CumulativeWeight: last + weight})
 	}
 	return nil
 }
@@ -599,7 +596,7 @@ func (e *Engine) loadCloudData() error {
 	}
 
 	if len(allPrefixes) > 0 {
-		e.CloudTrie = utils.NewCloudTrie(allPrefixes)
+		e.geo.cloudTrie = utils.NewCloudTrie(allPrefixes)
 		log.Printf("Loaded %d cloud prefixes into CloudTrie", len(allPrefixes))
 	}
 
@@ -664,7 +661,7 @@ func (e *Engine) loadPrefixData() error {
 	log.Println("Prefix data loading started...")
 	cachePath := "data/prefix-dump-cache.json"
 	if data, err := os.ReadFile(cachePath); err == nil {
-		if err := json.Unmarshal(data, &e.prefixData); err == nil {
+		if err := json.Unmarshal(data, &e.geo.prefixData); err == nil {
 			debug.FreeOSMemory()
 			return nil
 		}
@@ -698,12 +695,12 @@ func (e *Engine) loadPrefixData() error {
 			if len(rec) >= 6 && (strings.Contains(rec[2], ".") || strings.Contains(rec[2], ",")) {
 				lat, _ := strconv.ParseFloat(rec[2], 64)
 				lng, _ := strconv.ParseFloat(rec[3], 64)
-				e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[5]))] = [2]float32{float32(lat), float32(lng)}
+				e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[5]))] = [2]float32{float32(lat), float32(lng)}
 			} else if len(rec) >= 10 {
 				// Supported Format 2 (dr5hn): id, name, state_id, state_code, state_name, country_id, country_code, country_name, latitude, longitude, wikiDataId
 				lat, _ := strconv.ParseFloat(rec[8], 64)
 				lng, _ := strconv.ParseFloat(rec[9], 64)
-				e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[6]))] = [2]float32{float32(lat), float32(lng)}
+				e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[6]))] = [2]float32{float32(lat), float32(lng)}
 			}
 		}
 	} else {
@@ -735,7 +732,7 @@ func (e *Engine) loadPrefixData() error {
 	handler := func(start, end uint32, city, cc string, lat, lng float32, priority int) {
 		if lat == 0 && lng == 0 {
 			if city != "" {
-				if c, ok := e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
+				if c, ok := e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
 					lat, lng = c[0], c[1]
 				}
 			}
@@ -749,7 +746,7 @@ func (e *Engine) loadPrefixData() error {
 				binary.BigEndian.PutUint32(ip, start)
 				if err := geoReader.Lookup(ip, &record); err == nil {
 					cityName := record.City.Names["en"]
-					if c, ok := e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(cityName), strings.ToUpper(cc))]; ok {
+					if c, ok := e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(cityName), strings.ToUpper(cc))]; ok {
 						lat, lng = c[0], c[1]
 						city = cityName
 					}
@@ -883,12 +880,12 @@ func (e *Engine) loadPrefixData() error {
 		} // Merge adjacent same-loc segments
 		flatRanges = append(flatRanges, seg.start, uint32(idx))
 	}
-	e.prefixData = PrefixData{L: locations, R: flatRanges}
+	e.geo.prefixData = PrefixData{L: locations, R: flatRanges}
 	if err := os.MkdirAll("data", 0755); err != nil {
 		log.Printf("Warning: Failed to create data directory: %v", err)
 	}
 	if f, err := os.Create(cachePath); err == nil {
-		if err := json.NewEncoder(f).Encode(e.prefixData); err != nil {
+		if err := json.NewEncoder(f).Encode(e.geo.prefixData); err != nil {
 			log.Printf("Warning: Failed to encode prefix cache: %v", err)
 		}
 		f.Close()
@@ -1045,144 +1042,6 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 	e.metricsMu.Unlock()
 }
 
-func (e *Engine) getIPCoords(ip uint32) (float64, float64, string) {
-	e.cacheMu.Lock()
-	if c, ok := e.prefixToCityCache[ip]; ok {
-		e.cacheMu.Unlock()
-		return c.Lat, c.Lng, c.CC
-	}
-	e.cacheMu.Unlock()
-
-	var lat, lng float64
-	var cc, city string
-
-	// 1. Check CloudTrie first (highest precision for cloud IP blocks)
-	if e.CloudTrie != nil {
-		ipObj := make(net.IP, 4)
-		binary.BigEndian.PutUint32(ipObj, ip)
-		if loc, ok := e.CloudTrie.Lookup(ipObj); ok {
-			// loc is "City|CC"
-			parts := strings.Split(loc, "|")
-			if len(parts) == 2 {
-				city, cc = parts[0], parts[1]
-				lat, lng, cc = e.resolveCityToCoords(city, cc)
-			}
-		}
-	}
-
-	// 2. Fallback to generic GeoIP if not a cloud IP or cloud resolution failed
-	if lat == 0 && lng == 0 {
-		loc := e.lookupIP(ip)
-		if loc != nil {
-			lat, _ = loc[0].(float64)
-			lng, _ = loc[1].(float64)
-			cc, _ = loc[2].(string)
-			city, _ = loc[3].(string)
-
-			// If lookup gave us a city but no coords, try to resolve it
-			if lat == 0 && lng == 0 && city != "" {
-				lat, lng, cc = e.resolveCityToCoords(city, cc)
-			}
-		}
-	}
-
-	// 3. Final Fallback: Country Hubs (for IP blocks known only by Country)
-	if lat == 0 && lng == 0 && cc != "" {
-		hubs := e.countryHubs[cc]
-		if len(hubs) > 0 {
-			r := rand.Float64() * hubs[len(hubs)-1].CumulativeWeight
-			for _, h := range hubs {
-				if h.CumulativeWeight >= r {
-					lat, lng = h.Lat, h.Lng
-					break
-				}
-			}
-		}
-	}
-
-	if lat == 0 && lng == 0 {
-		return 0, 0, ""
-	}
-
-	// Cache the resolved coordinates
-	e.cacheMu.Lock()
-	if len(e.prefixToCityCache) > 100000 {
-		count := 0
-		for k := range e.prefixToCityCache {
-			delete(e.prefixToCityCache, k)
-			count++
-			if count > 20000 {
-				break
-			}
-		}
-	}
-	e.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc}
-	e.cacheMu.Unlock()
-
-	return lat, lng, cc
-}
-
-func (e *Engine) resolveCityToCoords(city, cc string) (float64, float64, string) {
-	if c, ok := e.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
-		return float64(c[0]), float64(c[1]), cc
-	}
-	return 0, 0, cc
-}
-
-func (e *Engine) lookupIP(ip uint32) Location {
-	r := e.prefixData.R
-	low, high := 0, (len(r)/2)-1
-	for low <= high {
-		mid := (low + high) / 2
-		startIP := r[mid*2]
-		nextStartIP := uint32(0xFFFFFFFF)
-		if mid+1 < len(r)/2 {
-			nextStartIP = r[(mid+1)*2]
-		}
-		if ip >= startIP && ip < nextStartIP {
-			locIdx := r[mid*2+1]
-			if locIdx == 4294967295 {
-				return nil
-			}
-			return e.prefixData.L[locIdx]
-		}
-		if startIP < ip {
-			low = mid + 1
-		} else {
-			high = mid - 1
-		}
-	}
-	return nil
-}
-
-func (e *Engine) project(lat, lng float64) (x, y float64) {
-	// Clamp latitude to avoid singularity at poles (+/- 90 degrees)
-	if lat > 89.5 {
-		lat = 89.5
-	}
-	if lat < -89.5 {
-		lat = -89.5
-	}
-
-	latRad, lngRad := lat*math.Pi/180, lng*math.Pi/180
-	theta := latRad
-	for i := 0; i < 10; i++ {
-		denom := 2 + 2*math.Cos(2*theta)
-		if math.Abs(denom) < 1e-9 {
-			break
-		}
-		delta := (2*theta + math.Sin(2*theta) - math.Pi*math.Sin(latRad)) / denom
-		theta -= delta
-		if math.Abs(delta) < 1e-7 {
-			break
-		}
-	}
-	r := e.Scale
-	x = (float64(e.Width) / 2) + r*(2*math.Sqrt(2)/math.Pi)*lngRad*math.Cos(theta)
-	y = (float64(e.Height) / 2) - r*math.Sqrt(2)*math.Sin(theta)
-	return x, y
-}
-
 func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA) {
 	if len(rings) == 0 {
 		return
@@ -1193,7 +1052,7 @@ func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA)
 	for i, ring := range rings {
 		projectedRings[i] = make([]point, 0, len(ring))
 		for _, p := range ring {
-			x, y := e.project(p[1], p[0])
+			x, y := e.geo.Project(p[1], p[0])
 			if math.IsNaN(x) || math.IsNaN(y) {
 				continue
 			}
@@ -1240,8 +1099,8 @@ func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA)
 
 func (e *Engine) drawRingFast(img *image.RGBA, coords [][]float64, c color.RGBA) {
 	for i := 0; i < len(coords)-1; i++ {
-		x1, y1 := e.project(coords[i][1], coords[i][0])
-		x2, y2 := e.project(coords[i+1][1], coords[i+1][0])
+		x1, y1 := e.geo.Project(coords[i][1], coords[i][0])
+		x2, y2 := e.geo.Project(coords[i+1][1], coords[i+1][0])
 		if math.IsNaN(x1) || math.IsNaN(y1) || math.IsNaN(x2) || math.IsNaN(y2) {
 			continue
 		}
@@ -1282,7 +1141,7 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType EventType) {
 	lat += (rand.Float64() - 0.5) * 0.8
 	lng += (rand.Float64() - 0.5) * 0.8
-	x, y := e.project(lat, lng)
+	x, y := e.geo.Project(lat, lng)
 	e.pulsesMu.Lock()
 	defer e.pulsesMu.Unlock()
 	if len(e.pulses) < MaxActivePulses {
@@ -1299,6 +1158,10 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType E
 		}
 		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius, Type: eventType})
 	}
+}
+
+func (e *Engine) GetProcessor() *BGPProcessor {
+	return e.processor
 }
 
 func (e *Engine) prefixToIP(p string) uint32 {

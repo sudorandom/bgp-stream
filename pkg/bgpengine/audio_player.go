@@ -11,10 +11,26 @@ import (
 	"time"
 
 	"github.com/dhowden/tag"
+	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/go-mp3"
 )
 
-func (e *Engine) StartAudioPlayer() {
+type AudioMetadataCallback func(song, artist string)
+
+type AudioPlayer struct {
+	audioContext *audio.Context
+	AudioWriter  io.Writer
+	OnMetadata   AudioMetadataCallback
+}
+
+func NewAudioPlayer(writer io.Writer, onMetadata AudioMetadataCallback) *AudioPlayer {
+	return &AudioPlayer{
+		AudioWriter: writer,
+		OnMetadata:  onMetadata,
+	}
+}
+
+func (p *AudioPlayer) Start() {
 	go func() {
 		for {
 			files, err := os.ReadDir("audio")
@@ -37,31 +53,28 @@ func (e *Engine) StartAudioPlayer() {
 				continue
 			}
 
-			// Pick a random track
 			path := playlists[rand.Intn(len(playlists))]
-			if err := e.playTrack(path); err != nil {
+			if err := p.playTrack(path); err != nil {
 				log.Printf("Failed to play track %s: %v", path, err)
-				time.Sleep(5 * time.Second) // Wait before retrying to avoid hammering the system on failures
+				time.Sleep(5 * time.Second)
 			}
 		}
 	}()
 }
 
-func (e *Engine) playTrack(path string) error {
+func (p *AudioPlayer) playTrack(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	// Attempt to extract metadata (ID3, etc.)
 	var artist, song string
 	if m, err := tag.ReadFrom(f); err == nil {
 		artist = m.Artist()
 		song = m.Title()
 	}
 
-	// Fallback to filename parsing if metadata is missing
 	if song == "" {
 		fullTitle := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		artist, song = "", fullTitle
@@ -71,11 +84,10 @@ func (e *Engine) playTrack(path string) error {
 		}
 	}
 
-	e.CurrentSong = song
-	e.CurrentArtist = artist
-	e.songChangedAt = time.Now()
+	if p.OnMetadata != nil {
+		p.OnMetadata(song, artist)
+	}
 
-	// Seek back to start for the decoder
 	if _, err := f.Seek(0, 0); err != nil {
 		return err
 	}
@@ -85,8 +97,7 @@ func (e *Engine) playTrack(path string) error {
 		return err
 	}
 
-	// Case 1: Stream to Pipe (Headless/Streaming mode)
-	if e.AudioWriter != nil {
+	if p.AudioWriter != nil {
 		log.Printf("Streaming audio: %s", path)
 		totalBytes := d.Length()
 		duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
@@ -103,7 +114,6 @@ func (e *Engine) playTrack(path string) error {
 				if remaining <= fadeDuration {
 					vol := float64(remaining) / float64(fadeDuration)
 					if vol < 0 { vol = 0 }
-					// Apply volume to s16le samples
 					for i := 0; i < n; i += 2 {
 						sample := int16(binary.LittleEndian.Uint16(buf[i:]))
 						sample = int16(float64(sample) * vol)
@@ -111,7 +121,7 @@ func (e *Engine) playTrack(path string) error {
 					}
 				}
 				
-				if _, err := e.AudioWriter.Write(buf[:n]); err != nil {
+				if _, err := p.AudioWriter.Write(buf[:n]); err != nil {
 					log.Printf("Stream write error: %v", err)
 					return err
 				}
@@ -126,9 +136,10 @@ func (e *Engine) playTrack(path string) error {
 		return nil
 	}
 
-	// Case 2: Play to local audio device (Viewer mode)
-	e.InitAudio()
-	player, err := e.audioContext.NewPlayer(d)
+	if p.audioContext == nil {
+		p.audioContext = audio.NewContext(44100)
+	}
+	player, err := p.audioContext.NewPlayer(d)
 	if err != nil {
 		return err
 	}
@@ -153,6 +164,6 @@ func (e *Engine) playTrack(path string) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	player.Close() // Ensure it is closed
+	player.Close()
 	return nil
 }

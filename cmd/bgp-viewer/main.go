@@ -31,7 +31,7 @@ func main() {
 	// If audio-fd is provided, use it for streaming audio
 	if *audioFd != -1 {
 		log.Printf("Attaching audio to file descriptor: %d", *audioFd)
-		engine.AudioWriter = os.NewFile(uintptr(*audioFd), "audio-pipe")
+		engine.SetAudioWriter(os.NewFile(uintptr(*audioFd), "audio-pipe"))
 	}
 
 	engine.InitPulseTexture()
@@ -39,8 +39,12 @@ func main() {
 		log.Fatalf("Failed to initialize engine data: %v", err)
 	}
 
-	go engine.ListenToBGP()
-	go engine.StartAudioPlayer()
+	if engine.GetProcessor() != nil {
+		go engine.GetProcessor().Listen()
+	}
+	if engine.GetAudioPlayer() != nil {
+		go engine.GetAudioPlayer().Start()
+	}
 	go engine.StartBufferLoop()
 	go engine.StartMetricsLoop()
 	go engine.StartMemoryWatcher()
