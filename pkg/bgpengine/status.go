@@ -593,6 +593,9 @@ func (e *Engine) StartMetricsLoop() {
 			latestBucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
 			var allImpact []impact
 			for p, count := range latestBucket {
+				if utils.IsBeaconPrefix(p) {
+					continue
+				}
 				allImpact = append(allImpact, impact{p, float64(count) / uiInterval})
 			}
 			sort.Slice(allImpact, func(i, j int) bool { return allImpact[i].rate > allImpact[j].rate })
