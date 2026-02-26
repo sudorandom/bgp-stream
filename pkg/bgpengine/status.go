@@ -12,7 +12,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
-	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
 func (e *Engine) drawMetrics(screen *ebiten.Image) {
@@ -239,8 +238,13 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 	// Calculate positions: Legend on far left, Trendlines box (containing graph + rates) on right
 	spacing := 40.0
+	beaconW := 220.0
+	if e.Width > 2000 {
+		beaconW = 440.0
+	}
 	trendBoxW := graphW + ratesW
-	totalW := trendBoxW + spacing + legendW
+	// Each box has a width: legendW, trendBoxW+20, beaconW
+	totalW := legendW + spacing + (trendBoxW + 20) + spacing + beaconW
 	baseX := float64(e.Width) - margin - totalW
 	baseY := float64(e.Height) - margin - graphH - 20
 
@@ -249,8 +253,12 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	gx := baseX + legendW + spacing
 	gy := baseY
 
-	// Draw Trendlines Box (passing trendBoxW for the background box)
+	// Draw Trendlines Box
 	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH)
+
+	// Draw Beacon Analysis Box
+	beaconX := gx + trendBoxW + 20 + spacing // Gap between (gx-10+trendBoxW+20) and (beaconX-10) should be exactly spacing
+	e.drawBeaconMetrics(screen, beaconX, gy, beaconW, graphH, fontSize, legendH)
 
 	// Draw Legend Box
 	vector.FillRect(screen, float32(firehoseX-10), float32(firehoseY-fontSize-15), float32(legendW), float32(legendH), color.RGBA{0, 0, 0, 100}, false)
@@ -480,9 +488,11 @@ func (e *Engine) StartMetricsLoop() {
 			Note:   int(e.windowNote),
 			Peer:   int(e.windowPeer),
 			Open:   int(e.windowOpen),
+			Beacon: int(e.windowBeacon),
 		}
 		e.rateNew, e.rateUpd, e.rateWith, e.rateGossip = float64(snap.New)/interval, float64(snap.Upd)/interval, float64(snap.With)/interval, float64(snap.Gossip)/interval
 		e.rateNote, e.ratePeer, e.rateOpen = float64(snap.Note)/interval, float64(snap.Peer)/interval, float64(snap.Open)/interval
+		e.rateBeacon = float64(snap.Beacon) / interval
 		e.history = append(e.history, snap)
 		if len(e.history) > 60 {
 			e.history = e.history[1:]
@@ -492,6 +502,7 @@ func (e *Engine) StartMetricsLoop() {
 		}
 		e.windowNew, e.windowUpd, e.windowWith, e.windowGossip = 0, 0, 0, 0
 		e.windowNote, e.windowPeer, e.windowOpen = 0, 0, 0
+		e.windowBeacon = 0
 
 		uiTicks++
 		if uiTicks >= 5 || firstRun {
@@ -571,9 +582,6 @@ func (e *Engine) StartMetricsLoop() {
 			latestBucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
 			var allImpact []impact
 			for p, count := range latestBucket {
-				if utils.IsBeaconPrefix(p) {
-					continue
-				}
 				allImpact = append(allImpact, impact{p, float64(count) / uiInterval})
 			}
 			sort.Slice(allImpact, func(i, j int) bool { return allImpact[i].rate > allImpact[j].rate })
@@ -642,4 +650,101 @@ func (e *Engine) StartMetricsLoop() {
 	for range ticker.C {
 		run()
 	}
+}
+
+func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, boxH float64) {
+	vector.FillRect(screen, float32(x-10), float32(y-fontSize-15), float32(w), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+	vector.StrokeRect(screen, float32(x-10), float32(y-fontSize-15), float32(w), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+
+	title := "BEACON ANALYSIS"
+	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+
+	vector.FillRect(screen, float32(x-10), float32(y-fontSize-15), 4, float32(fontSize+10), color.RGBA{255, 165, 0, 255}, false) // Orange accent
+
+	op := &text.DrawOptions{}
+	op.GeoM.Translate(x+5, y-fontSize-5)
+	op.ColorScale.Scale(1, 1, 1, 0.5)
+	text.Draw(screen, title, titleFace, op)
+
+	// Donut Pie Chart dimensions
+	radius := h * 0.45
+	centerX := x + (w / 2) - 10
+	centerY := y + (h / 2) - 10
+
+	// Common options
+	drawOpts := &vector.DrawPathOptions{AntiAlias: true}
+	fillOpts := &vector.FillOptions{}
+
+	// 1. Background circle
+	var bgPath vector.Path
+	bgPath.Arc(float32(centerX), float32(centerY), float32(radius), 0, 2*math.Pi, vector.Clockwise)
+	bgDrawOpts := *drawOpts
+	bgDrawOpts.ColorScale.ScaleWithColor(color.RGBA{30, 30, 30, 255})
+	vector.FillPath(screen, &bgPath, fillOpts, &bgDrawOpts)
+
+	// 2. Beacon slice
+	if e.displayBeaconPercent > 0.01 {
+		var beaconPath vector.Path
+		startAngle := -math.Pi / 2 // Top
+		endAngle := startAngle + (2 * math.Pi * e.displayBeaconPercent / 100.0)
+
+		beaconPath.MoveTo(float32(centerX), float32(centerY))
+		beaconPath.Arc(float32(centerX), float32(centerY), float32(radius), float32(startAngle), float32(endAngle), vector.Clockwise)
+		beaconPath.Close()
+
+		beaconDrawOpts := *drawOpts
+		beaconDrawOpts.ColorScale.ScaleWithColor(color.RGBA{255, 165, 0, 255})
+		vector.FillPath(screen, &beaconPath, fillOpts, &beaconDrawOpts)
+	}
+
+	// 3. Donut hole (mask)
+	var holePath vector.Path
+	holeRadius := radius * 0.7
+	holePath.Arc(float32(centerX), float32(centerY), float32(holeRadius), 0, 2*math.Pi, vector.Clockwise)
+	
+	holeDrawOpts := *drawOpts
+	holeDrawOpts.ColorScale.ScaleWithColor(color.RGBA{8, 10, 15, 255})
+	vector.FillPath(screen, &holePath, fillOpts, &holeDrawOpts)
+
+	// 4. Percentage Text (in middle of donut)
+	face := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.9}
+	percentStr := fmt.Sprintf("%.1f%%", e.displayBeaconPercent)
+	tw, _ := text.Measure(percentStr, face, 0)
+	pop := &text.DrawOptions{}
+	pop.GeoM.Translate(centerX-(tw/2), centerY-(fontSize/2))
+	pop.ColorScale.Scale(1, 1, 1, 0.9)
+	text.Draw(screen, percentStr, face, pop)
+
+	// 5. Small Legend Underneath
+	subFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.5}
+	legY := centerY + radius + fontSize*0.6
+	swatchSize := fontSize * 0.4
+	
+	// Calculate combined width of both legend items
+	bStr, oStr := "BEACON", "ORGANIC"
+	btw, _ := text.Measure(bStr, subFace, 0)
+	otw, _ := text.Measure(oStr, subFace, 0)
+	
+	// Total width = swatch + gap + text + padding + swatch + gap + text
+	itemGap := 20.0
+	bItemW := swatchSize + 5 + btw
+	oItemW := swatchSize + 5 + otw
+	totalLegW := bItemW + itemGap + oItemW
+	
+	legX := x + (w/2) - (totalLegW/2) - 10 // Center relative to donut center (-10 is from centerX calculation)
+
+	// Beacon Legend Item
+	vector.FillRect(screen, float32(legX), float32(legY), float32(swatchSize), float32(swatchSize), color.RGBA{255, 165, 0, 255}, false)
+	bop := &text.DrawOptions{}
+	bop.GeoM.Translate(legX+swatchSize+5, legY-fontSize*0.1)
+	bop.ColorScale.Scale(1, 1, 1, 0.6)
+	text.Draw(screen, bStr, subFace, bop)
+
+	// Organic Legend Item
+	legX += bItemW + itemGap
+	vector.FillRect(screen, float32(legX), float32(legY), float32(swatchSize), float32(swatchSize), color.RGBA{30, 30, 30, 255}, false)
+	oop := &text.DrawOptions{}
+	oop.GeoM.Translate(legX+swatchSize+5, legY-fontSize*0.1)
+	oop.ColorScale.Scale(1, 1, 1, 0.6)
+	text.Draw(screen, oStr, subFace, oop)
 }

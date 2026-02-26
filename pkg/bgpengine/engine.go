@@ -147,9 +147,12 @@ type Engine struct {
 	// Metrics (Windowed for Rate calculation)
 	windowNew, windowUpd, windowWith, windowGossip int64
 	windowNote, windowPeer, windowOpen             int64
+	windowBeacon                                   int64
 
 	rateNew, rateUpd, rateWith, rateGossip float64
 	rateNote, ratePeer, rateOpen           float64
+	rateBeacon                             float64
+	displayBeaconPercent                   float64
 
 	countryActivity map[string]int
 	topHubs         []struct {
@@ -207,6 +210,7 @@ type VisualImpact struct {
 
 type MetricSnapshot struct {
 	New, Upd, With, Gossip, Note, Peer, Open int
+	Beacon                                   int
 }
 
 func NewEngine(width, height int, scale float64) *Engine {
@@ -325,6 +329,17 @@ func (e *Engine) Update() error {
 			delete(e.VisualImpact, p)
 		}
 	}
+
+	totalRate := e.rateNew + e.rateUpd + e.rateWith + e.rateGossip
+	targetPercent := 0.0
+	if totalRate > 0 {
+		targetPercent = (e.rateBeacon / totalRate) * 100
+	}
+	if targetPercent > 100 {
+		targetPercent = 100
+	}
+	e.displayBeaconPercent += (targetPercent - e.displayBeaconPercent) * 0.05
+
 	e.metricsMu.Unlock()
 
 	e.pulsesMu.Lock()
@@ -1001,6 +1016,9 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 				e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
 			}
 			bucket[prefix]++
+		}
+		if utils.IsBeaconPrefix(prefix) {
+			e.windowBeacon++
 		}
 		e.metricsMu.Unlock()
 	}
