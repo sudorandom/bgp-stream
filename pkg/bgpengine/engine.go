@@ -252,7 +252,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 		hubPosition:         make(map[string]int),
 		lastMetricsUpdate:   time.Now(),
 		VisualHubs:          make(map[string]*VisualHub),
-		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 5s = 5 mins
+		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 20s = 20 mins
 		VisualImpact:        make(map[string]*VisualImpact),
 		lastFrameCapturedAt: time.Now(),
 	}
@@ -348,15 +348,30 @@ func (e *Engine) Update() error {
 		}
 	}
 
-	totalRate := e.rateNew + e.rateUpd + e.rateWith + e.rateGossip
+	// Calculate 10-second rolling average for beacon percentage
+	// Using a wider window prevents the donut chart from jittering too much
+	// during small BGP bursts while still reacting to sustained changes.
+	sumTotal := 0
+	sumBeacon := 0
+	hLen := len(e.history)
+	window := 10
+	if hLen < window {
+		window = hLen
+	}
+	for i := hLen - window; i < hLen; i++ {
+		s := e.history[i]
+		sumTotal += s.New + s.Upd + s.With + s.Gossip
+		sumBeacon += s.Beacon
+	}
+
 	targetPercent := 0.0
-	if totalRate > 0 {
-		targetPercent = (e.rateBeacon / totalRate) * 100
+	if sumTotal > 0 {
+		targetPercent = (float64(sumBeacon) / float64(sumTotal)) * 100
 	}
 	if targetPercent > 100 {
 		targetPercent = 100
 	}
-	e.displayBeaconPercent += (targetPercent - e.displayBeaconPercent) * 0.05
+	e.displayBeaconPercent += (targetPercent - e.displayBeaconPercent) * 0.1
 
 	e.metricsMu.Unlock()
 

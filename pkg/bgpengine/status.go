@@ -479,7 +479,7 @@ func (e *Engine) StartMetricsLoop() {
 	firstRun := true
 	ticker := time.NewTicker(1 * time.Second)
 	uiTicks := 0
-	var lastUIUpdate time.Time
+	lastUIUpdate := time.Now()
 
 	run := func() {
 		e.metricsMu.Lock()
@@ -517,12 +517,15 @@ func (e *Engine) StartMetricsLoop() {
 		e.windowBeacon = 0
 
 		uiTicks++
-		if uiTicks >= 5 || firstRun {
+		targetTicks := 20
+		if firstRun {
+			targetTicks = 5
+		}
+		if uiTicks >= targetTicks {
 			uiInterval := now.Sub(lastUIUpdate).Seconds()
-			if firstRun || uiInterval <= 0 {
-				uiInterval = 5.0
-			}
 			lastUIUpdate = now
+			firstRun = false
+			uiTicks = 0
 
 			type hub struct {
 				cc   string
@@ -652,9 +655,7 @@ func (e *Engine) StartMetricsLoop() {
 			e.prefixImpactHistory = append(e.prefixImpactHistory[1:], make(map[string]int))
 
 			e.countryActivity = make(map[string]int)
-			uiTicks = 0
 		}
-		firstRun = false
 	}
 
 	go func() {
@@ -723,7 +724,7 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 
 	// 4. Percentage Text (in middle of donut)
 	face := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.9}
-	percentStr := fmt.Sprintf("%.1f%%", e.displayBeaconPercent)
+	percentStr := fmt.Sprintf("%.0f%%", e.displayBeaconPercent)
 	tw, _ := text.Measure(percentStr, face, 0)
 	pop := &text.DrawOptions{}
 	pop.GeoM.Translate(centerX-(tw/2), centerY-(fontSize/2))
