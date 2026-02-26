@@ -166,10 +166,12 @@ type Engine struct {
 
 	CurrentSong   string
 	CurrentArtist string
+	CurrentExtra  string
 	lastSong      string
 	songChangedAt time.Time
 	songBuffer    *ebiten.Image
 	artistBuffer  *ebiten.Image
+	extraBuffer   *ebiten.Image
 
 	hubChangedAt      map[string]time.Time
 	lastHubs          map[string]int
@@ -186,6 +188,11 @@ type Engine struct {
 	audioPlayer *AudioPlayer
 
 	processor *BGPProcessor
+
+	FrameCaptureInterval time.Duration
+	FrameCaptureDir      string
+	lastFrameCapturedAt  time.Time
+	mapImage             *ebiten.Image
 }
 
 type VisualHub struct {
@@ -247,11 +254,13 @@ func NewEngine(width, height int, scale float64) *Engine {
 		VisualHubs:          make(map[string]*VisualHub),
 		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 5s = 5 mins
 		VisualImpact:        make(map[string]*VisualImpact),
+		lastFrameCapturedAt: time.Now(),
 	}
 
-	e.audioPlayer = NewAudioPlayer(nil, func(song, artist string) {
+	e.audioPlayer = NewAudioPlayer(nil, func(song, artist, extra string) {
 		e.CurrentSong = song
 		e.CurrentArtist = artist
+		e.CurrentExtra = extra
 		e.songChangedAt = time.Now()
 	})
 
@@ -259,7 +268,16 @@ func NewEngine(width, height int, scale float64) *Engine {
 }
 
 func (e *Engine) SetAudioWriter(w io.Writer) {
-	e.audioPlayer.AudioWriter = w
+	if e.audioPlayer != nil {
+		e.audioPlayer.AudioWriter = w
+	} else {
+		e.audioPlayer = NewAudioPlayer(w, func(song, artist, extra string) {
+			e.CurrentSong = song
+			e.CurrentArtist = artist
+			e.CurrentExtra = extra
+			e.songChangedAt = time.Now()
+		})
+	}
 }
 
 func (e *Engine) GetAudioPlayer() *AudioPlayer {
@@ -422,7 +440,11 @@ func (e *Engine) drawGlitchTextSubtle(screen *ebiten.Image, label string, face *
 }
 
 func (e *Engine) Draw(screen *ebiten.Image) {
-	screen.DrawImage(e.bgImage, nil)
+	if e.mapImage == nil || e.mapImage.Bounds().Dx() != e.Width || e.mapImage.Bounds().Dy() != e.Height {
+		e.mapImage = ebiten.NewImage(e.Width, e.Height)
+	}
+
+	e.mapImage.DrawImage(e.bgImage, nil)
 	e.pulsesMu.Lock()
 	now := time.Now()
 	op := &ebiten.DrawImageOptions{}
@@ -468,11 +490,22 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		op.ColorScale.Reset()
 		// Re-apply alpha multiplication for premultiplied alpha blending
 		op.ColorScale.Scale(float32(r*alpha), float32(g*alpha), float32(b*alpha), float32(alpha))
-		screen.DrawImage(e.pulseImage, op)
+		e.mapImage.DrawImage(e.pulseImage, op)
 	}
 	e.pulsesMu.Unlock()
 
+	shouldCapture := e.FrameCaptureInterval > 0 && now.Sub(e.lastFrameCapturedAt) >= e.FrameCaptureInterval
+	if shouldCapture {
+		e.lastFrameCapturedAt = now
+		e.captureFrame(e.mapImage, "map", now)
+	}
+
+	screen.DrawImage(e.mapImage, nil)
 	e.drawMetrics(screen)
+
+	if shouldCapture {
+		e.captureFrame(screen, "full", now)
+	}
 }
 
 func (e *Engine) Layout(w, h int) (int, int) { return e.Width, e.Height }

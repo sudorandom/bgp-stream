@@ -15,36 +15,41 @@ import (
 	"github.com/hajimehoshi/go-mp3"
 )
 
-type AudioMetadataCallback func(song, artist string)
+type AudioMetadataCallback func(song, artist, extra string)
 
 type AudioPlayer struct {
 	audioContext *audio.Context
 	AudioWriter  io.Writer
 	OnMetadata   AudioMetadataCallback
+	AudioDir     string
 }
 
 func NewAudioPlayer(writer io.Writer, onMetadata AudioMetadataCallback) *AudioPlayer {
 	return &AudioPlayer{
 		AudioWriter: writer,
 		OnMetadata:  onMetadata,
+		AudioDir:    "audio",
 	}
 }
 
 func (p *AudioPlayer) Start() {
 	go func() {
 		for {
-			files, err := os.ReadDir("audio")
+			var playlists []string
+			err := filepath.Walk(p.AudioDir, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
+					playlists = append(playlists, path)
+				}
+				return nil
+			})
+
 			if err != nil {
 				log.Printf("Failed to read audio directory: %v", err)
 				time.Sleep(5 * time.Second)
 				continue
-			}
-
-			var playlists []string
-			for _, f := range files {
-				if !f.IsDir() && strings.HasSuffix(strings.ToLower(f.Name()), ".mp3") {
-					playlists = append(playlists, filepath.Join("audio", f.Name()))
-				}
 			}
 
 			if len(playlists) == 0 {
@@ -53,8 +58,17 @@ func (p *AudioPlayer) Start() {
 				continue
 			}
 
+			// Pick a random track
 			path := playlists[rand.Intn(len(playlists))]
-			if err := p.playTrack(path); err != nil {
+
+			// Extract extra credit from parent directory
+			extra := ""
+			parent := filepath.Dir(path)
+			if parent != p.AudioDir && parent != "." {
+				extra = filepath.Base(parent)
+			}
+
+			if err := p.playTrack(path, extra); err != nil {
 				log.Printf("Failed to play track %s: %v", path, err)
 				time.Sleep(5 * time.Second)
 			}
@@ -62,7 +76,7 @@ func (p *AudioPlayer) Start() {
 	}()
 }
 
-func (p *AudioPlayer) playTrack(path string) error {
+func (p *AudioPlayer) playTrack(path string, extra string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -85,7 +99,7 @@ func (p *AudioPlayer) playTrack(path string) error {
 	}
 
 	if p.OnMetadata != nil {
-		p.OnMetadata(song, artist)
+		p.OnMetadata(song, artist, extra)
 	}
 
 	if _, err := f.Seek(0, 0); err != nil {

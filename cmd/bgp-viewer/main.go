@@ -19,6 +19,8 @@ var (
 	audioFd      = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
 	hideWindowControls = flag.Bool("hide-window-controls", false, "Whether to hide window decorations (title bar, etc.)")
 	floating     = flag.Bool("floating", false, "Whether to keep the window always on top")
+	captureInterval = flag.Duration("capture-interval", 0, "Interval to periodically capture high-quality frames (e.g., 1m, 1h). 0 to disable.")
+	captureDir      = flag.String("capture-dir", "captures", "Directory to store captured frames")
 )
 
 func main() {
@@ -27,6 +29,8 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	engine := bgpengine.NewEngine(*renderWidth, *renderHeight, *renderScale)
+	engine.FrameCaptureInterval = *captureInterval
+	engine.FrameCaptureDir = *captureDir
 
 	// If audio-fd is provided, use it for streaming audio
 	if *audioFd != -1 {

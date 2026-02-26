@@ -3,7 +3,7 @@ test:
 	go test ./...
 
 run:
-	go run ./cmd/bgp-viewer
+	go run ./cmd/bgp-viewer -capture-interval 1h -capture-dir ./archive
 
 # Build the Docker image locally using buildx
 docker-build:

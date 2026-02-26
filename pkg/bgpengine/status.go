@@ -138,10 +138,13 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 	if e.CurrentSong != "" {
 		songBoxW := boxW * 1.6
-		// Calculate height based on font size and whether there is an artist
+		// Calculate height based on font size and whether there is an artist/extra
 		boxH_song := fontSize * 3.0
 		if e.CurrentArtist != "" {
-			boxH_song = fontSize * 4.5
+			boxH_song += fontSize * 1.5
+		}
+		if e.CurrentExtra != "" {
+			boxH_song += fontSize * 1.5
 		}
 
 		// Draw styled background box
@@ -216,9 +219,17 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		drawMarquee(e.CurrentSong, face, fontSize*0.2, 0.8, false, &e.songBuffer)
 
 		// Draw Artist Name
+		yOffset := fontSize * 1.3
 		if e.CurrentArtist != "" {
 			artistFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.7}
-			drawMarquee(e.CurrentArtist, artistFace, fontSize*1.3, 0.5, true, &e.artistBuffer)
+			drawMarquee(e.CurrentArtist, artistFace, yOffset, 0.5, true, &e.artistBuffer)
+			yOffset += fontSize * 1.3
+		}
+
+		// Draw Extra (Source/License)
+		if e.CurrentExtra != "" {
+			extraFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.6}
+			drawMarquee(e.CurrentExtra, extraFace, yOffset, 0.4, true, &e.extraBuffer)
 		}
 	}
 
