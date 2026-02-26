@@ -22,6 +22,9 @@ type AudioPlayer struct {
 	AudioWriter  io.Writer
 	OnMetadata   AudioMetadataCallback
 	AudioDir     string
+	stopChan     chan struct{}
+	stoppedChan  chan struct{}
+	isStopping   bool
 }
 
 func NewAudioPlayer(writer io.Writer, onMetadata AudioMetadataCallback) *AudioPlayer {
@@ -29,12 +32,29 @@ func NewAudioPlayer(writer io.Writer, onMetadata AudioMetadataCallback) *AudioPl
 		AudioWriter: writer,
 		OnMetadata:  onMetadata,
 		AudioDir:    "audio",
+		stopChan:    make(chan struct{}),
+		stoppedChan: make(chan struct{}),
 	}
+}
+
+func (p *AudioPlayer) Shutdown() {
+	log.Println("Audio player shutting down with fade-out...")
+	p.isStopping = true
+	close(p.stopChan)
+	<-p.stoppedChan
+	log.Println("Audio player stopped.")
 }
 
 func (p *AudioPlayer) Start() {
 	go func() {
+		defer close(p.stoppedChan)
 		for {
+			select {
+			case <-p.stopChan:
+				return
+			default:
+			}
+
 			var playlists []string
 			err := filepath.Walk(p.AudioDir, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
@@ -48,13 +68,21 @@ func (p *AudioPlayer) Start() {
 
 			if err != nil {
 				log.Printf("Failed to read audio directory: %v", err)
-				time.Sleep(5 * time.Second)
+				select {
+				case <-time.After(5 * time.Second):
+				case <-p.stopChan:
+					return
+				}
 				continue
 			}
 
 			if len(playlists) == 0 {
 				log.Println("No MP3 files found in audio directory.")
-				time.Sleep(5 * time.Second)
+				select {
+				case <-time.After(5 * time.Second):
+				case <-p.stopChan:
+					return
+				}
 				continue
 			}
 
@@ -70,7 +98,15 @@ func (p *AudioPlayer) Start() {
 
 			if err := p.playTrack(path, extra); err != nil {
 				log.Printf("Failed to play track %s: %v", path, err)
-				time.Sleep(5 * time.Second)
+				select {
+				case <-time.After(5 * time.Second):
+				case <-p.stopChan:
+					return
+				}
+			}
+
+			if p.isStopping {
+				return
 			}
 		}
 	}()
@@ -111,23 +147,44 @@ func (p *AudioPlayer) playTrack(path string, extra string) error {
 		return err
 	}
 
+	fadeDuration := 5 * time.Second
 	if p.AudioWriter != nil {
 		log.Printf("Streaming audio: %s", path)
 		totalBytes := d.Length()
 		duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
-		fadeDuration := 5 * time.Second
 		
 		buf := make([]byte, 8192)
 		startTime := time.Now()
+		var stoppingAt time.Time
+
 		for {
+			if p.isStopping && stoppingAt.IsZero() {
+				stoppingAt = time.Now()
+			}
+
 			n, err := d.Read(buf)
 			if n > 0 {
 				elapsed := time.Since(startTime)
 				remaining := duration - elapsed
 				
+				vol := 1.0
 				if remaining <= fadeDuration {
-					vol := float64(remaining) / float64(fadeDuration)
-					if vol < 0 { vol = 0 }
+					vol = float64(remaining) / float64(fadeDuration)
+				}
+
+				if !stoppingAt.IsZero() {
+					stopElapsed := time.Since(stoppingAt)
+					stopVol := 1.0 - (float64(stopElapsed) / float64(fadeDuration))
+					if stopVol < vol {
+						vol = stopVol
+					}
+					if stopVol <= 0 {
+						return nil
+					}
+				}
+
+				if vol < 0 { vol = 0 }
+				if vol < 1.0 {
 					for i := 0; i < n; i += 2 {
 						sample := int16(binary.LittleEndian.Uint16(buf[i:]))
 						sample = int16(float64(sample) * vol)
@@ -162,17 +219,34 @@ func (p *AudioPlayer) playTrack(path string, extra string) error {
 
 	totalBytes := d.Length()
 	duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
-	fadeDuration := 5 * time.Second
 	startTime := time.Now()
+	var stoppingAt time.Time
 	for player.IsPlaying() {
-		remaining := duration - time.Since(startTime)
-		if remaining <= fadeDuration {
-			vol := float64(remaining) / float64(fadeDuration)
-			if vol < 0 {
-				vol = 0
-			}
-			player.SetVolume(vol)
+		if p.isStopping && stoppingAt.IsZero() {
+			stoppingAt = time.Now()
 		}
+
+		elapsed := time.Since(startTime)
+		remaining := duration - elapsed
+		vol := 1.0
+		if remaining <= fadeDuration {
+			vol = float64(remaining) / float64(fadeDuration)
+		}
+
+		if !stoppingAt.IsZero() {
+			stopElapsed := time.Since(stoppingAt)
+			stopVol := 1.0 - (float64(stopElapsed) / float64(fadeDuration))
+			if stopVol < vol {
+				vol = stopVol
+			}
+			if stopVol <= 0 {
+				break
+			}
+		}
+
+		if vol < 0 { vol = 0 }
+		player.SetVolume(vol)
+
 		if remaining <= 0 {
 			break
 		}

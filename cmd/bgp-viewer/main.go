@@ -4,6 +4,8 @@ import (
 	"flag"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/sudorandom/bgp-stream/pkg/bgpengine"
@@ -52,6 +54,21 @@ func main() {
 	go engine.StartBufferLoop()
 	go engine.StartMetricsLoop()
 	go engine.StartMemoryWatcher()
+
+	// Handle graceful shutdown for audio fade-out
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		log.Println("Received termination signal...")
+		if ap := engine.GetAudioPlayer(); ap != nil {
+			ap.Shutdown()
+		}
+		if engine.SeenDB != nil {
+			engine.SeenDB.Close()
+		}
+		os.Exit(0)
+	}()
 
 	ebiten.SetTPS(*tpsFlag)
 	ebiten.SetWindowTitle("BGP Real-Time Map Viewer")
