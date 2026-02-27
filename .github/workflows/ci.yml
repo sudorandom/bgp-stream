@@ -53,10 +53,11 @@ jobs:
             libxi-dev \
             libxxf86vm-dev \
             libasound2-dev \
-            pkg-config
+            pkg-config \
+            xvfb
       - name: Install Dependencies
         run: go mod download
       - name: Run Tests
-        run: go test -v ./...
+        run: xvfb-run go test -v ./...
       - name: Run Benchmarks
-        run: go test -bench=. -benchmem ./pkg/bgpengine/...
+        run: xvfb-run go test -bench=. -benchmem ./pkg/bgpengine/...
