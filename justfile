@@ -3,7 +3,7 @@ test:
 	go test ./...
 
 run:
-	go run ./cmd/bgp-viewer -capture-interval 1h -capture-dir ./archive
+	go run ./cmd/bgp-viewer -capture-interval 1h -capture-dir ./archive -height 2160 -width=3840 -scale=760.0
 
 # Build the Docker image locally using buildx
 docker-build:

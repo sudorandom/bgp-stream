@@ -26,13 +26,16 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	e.metricsMu.Lock()
 	defer e.metricsMu.Unlock()
 	face := &text.GoTextFace{Source: e.fontSource, Size: fontSize}
+	monoFace := &text.GoTextFace{Source: e.monoSource, Size: fontSize}
 
 	// 1. West Side: Stable Hub List
 	hubYBase := float64(e.Height) / 2.0
 	hubX := margin
 	boxW, boxH := 280.0, 180.0
+	impactBoxH := 320.0
 	if e.Width > 2000 {
 		boxW, boxH = 560.0, 360.0
+		impactBoxH = 640.0
 	}
 
 	if len(e.VisualHubs) > 0 {
@@ -80,28 +83,28 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		nameOp := &text.DrawOptions{}
 		nameOp.GeoM.Translate(hubX, vh.DisplayY)
 		nameOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
-		text.Draw(screen, countryName, face, nameOp)
+		text.Draw(screen, countryName, monoFace, nameOp)
 
 		// Draw Rate (Right Aligned)
-		rateStr := fmt.Sprintf("%.1f", vh.Rate)
-		tw, _ := text.Measure(rateStr, face, 0)
+		rateStr := fmt.Sprintf("%.0f", vh.Rate)
+		tw, _ := text.Measure(rateStr, monoFace, 0)
 		rateOp := &text.DrawOptions{}
 		// Position at box right edge minus some padding
 		rateOp.GeoM.Translate(hubX+boxW-tw-25, vh.DisplayY)
 		rateOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.6))
-		text.Draw(screen, rateStr, face, rateOp)
+		text.Draw(screen, rateStr, monoFace, rateOp)
 	}
 
 	// 2. West Side: Most Active Prefixes
-	impactYBase := hubYBase + 200.0
+	impactYBase := hubYBase + boxH + 40.0
 	if e.Width > 2000 {
-		impactYBase = hubYBase + 400.0
+		impactYBase = hubYBase + boxH + 80.0
 	}
 
 	if len(e.VisualImpact) > 0 {
 		// Draw styled background box
-		vector.FillRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
-		vector.StrokeRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+		vector.FillRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		impactTitle := "MOST ACTIVE PREFIXES (ops/s)"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
@@ -120,22 +123,44 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		prefixOp := &text.DrawOptions{}
 		prefixOp.GeoM.Translate(hubX, vi.DisplayY)
 		prefixOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.8))
-		text.Draw(screen, vi.Prefix, face, prefixOp)
+		text.Draw(screen, vi.Prefix, monoFace, prefixOp)
 
 		// Draw Count (Right Aligned)
-		countStr := fmt.Sprintf("%.1f", vi.Count)
-		tw, _ := text.Measure(countStr, face, 0)
+		countStr := fmt.Sprintf("%.0f", vi.Count)
+		tw, _ := text.Measure(countStr, monoFace, 0)
 		countOp := &text.DrawOptions{}
 		countOp.GeoM.Translate(hubX+boxW-tw-25, vi.DisplayY)
 		countOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.6))
-		text.Draw(screen, countStr, face, countOp)
+		text.Draw(screen, countStr, monoFace, countOp)
+
+		// Draw ASN and Network Name (Subtle line underneath, wrapped)
+		if vi.ASN != 0 || vi.NetworkName != "" {
+			subFontSize := fontSize * 0.6
+			subMonoFace := &text.GoTextFace{Source: e.monoSource, Size: subFontSize}
+			asnStr := fmt.Sprintf("AS%d", vi.ASN)
+			if vi.NetworkName != "" {
+				asnStr = fmt.Sprintf("AS%d - %s", vi.ASN, vi.NetworkName)
+			}
+
+			charW, _ := text.Measure("A", subMonoFace, 0)
+			maxChars := int((boxW - 25) / charW)
+			if maxChars < 10 {
+				maxChars = 10
+			}
+
+			lines := wrapString(asnStr, maxChars, 2) // Limit to 2 lines
+			for j, line := range lines {
+				asnOp := &text.DrawOptions{}
+				asnOp.GeoM.Translate(hubX, vi.DisplayY+fontSize*1.2+float64(j)*subFontSize*1.1)
+				asnOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.4))
+				text.Draw(screen, line, subMonoFace, asnOp)
+			}
+		}
 	}
 
-	// 4. West Side: Now Playing
-	songYBase := impactYBase + 200.0
-	if e.Width > 2000 {
-		songYBase = impactYBase + 400.0
-	}
+	// 4. Top Right: Now Playing
+	songX := float64(e.Width) - margin - (boxW * 1.6)
+	songYBase := margin + fontSize + 15
 
 	if e.CurrentSong != "" {
 		songBoxW := boxW * 1.6
@@ -148,18 +173,18 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 			boxH_song += fontSize * 1.5
 		}
 
-		// Draw styled background box
-		vector.FillRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
-		vector.StrokeRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
+		// Draw background and frame
+		vector.FillRect(screen, float32(songX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(screen, float32(songX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		songTitle := "NOW PLAYING"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 		// Draw subtle hacker-green accent
-		vector.FillRect(screen, float32(hubX-10), float32(songYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+		vector.FillRect(screen, float32(songX-10), float32(songYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 		songTitleOp := &text.DrawOptions{}
-		songTitleOp.GeoM.Translate(hubX+5, songYBase-fontSize-5)
+		songTitleOp.GeoM.Translate(songX+5, songYBase-fontSize-5)
 		songTitleOp.ColorScale.Scale(1, 1, 1, 0.5)
 		text.Draw(screen, songTitle, titleFace, songTitleOp)
 
@@ -205,13 +230,13 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 				// Draw clipped result to screen
 				drawOp := &ebiten.DrawImageOptions{}
-				drawOp.GeoM.Translate(hubX, songYBase+yOffset)
+				drawOp.GeoM.Translate(songX, songYBase+yOffset)
 				screen.DrawImage(*buffer, drawOp)
 			} else {
 				if sub {
-					e.drawGlitchTextSubtle(screen, label, f, hubX, songYBase+yOffset, alpha, intensity, isGlitching)
+					e.drawGlitchTextSubtle(screen, label, f, songX, songYBase+yOffset, alpha, intensity, isGlitching)
 				} else {
-					e.drawGlitchTextAggressive(screen, label, f, hubX, songYBase+yOffset, alpha, intensity, isGlitching)
+					e.drawGlitchTextAggressive(screen, label, f, songX, songYBase+yOffset, alpha, intensity, isGlitching)
 				}
 			}
 		}
@@ -237,11 +262,11 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	// 3. Bottom Right: Legend & Trendlines
 	graphW, graphH := 300.0, 100.0
 	ratesW := 120.0
-	legendW, legendH := 260.0, 160.0
+	legendW, legendH := 260.0, 180.0
 	if e.Width > 2000 {
 		graphW, graphH = 600.0, 200.0
 		ratesW = 240.0
-		legendW, legendH = 520.0, 320.0
+		legendW, legendH = 520.0, 360.0
 	}
 
 	// Match heights
@@ -258,7 +283,7 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	// Each box has a width: legendW, trendBoxW+20, beaconW
 	totalW := legendW + spacing + (trendBoxW + 20) + spacing + beaconW
 	baseX := float64(e.Width) - margin - totalW
-	baseY := float64(e.Height) - margin - graphH - 20
+	baseY := float64(e.Height) - margin - graphH - 10
 
 	firehoseX := baseX
 	firehoseY := baseY
@@ -609,9 +634,13 @@ func (e *Engine) StartMetricsLoop() {
 				maxImpact = len(allImpact)
 			}
 
-			impactYBase := hubYBase + 200.0 // Positioned under the hubs box
+			boxH := 180.0
 			if e.Width > 2000 {
-				impactYBase = hubYBase + 400.0
+				boxH = 360.0
+			}
+			impactYBase := hubYBase + boxH + 40.0 // Positioned under the hubs box
+			if e.Width > 2000 {
+				impactYBase = hubYBase + boxH + 80.0
 			}
 
 			// Mark all current impact items as inactive
@@ -620,22 +649,33 @@ func (e *Engine) StartMetricsLoop() {
 				vi.TargetAlpha = 0.0
 			}
 
+			impactSpacing := spacing * 2.4
 			for i := 0; i < maxImpact; i++ {
 				if allImpact[i].rate < 0.1 && !firstRun {
 					continue
 				}
 
-				targetY := impactYBase + float64(i)*spacing
+				targetY := impactYBase + float64(i)*impactSpacing
+				asn := e.prefixToASN[allImpact[i].prefix]
+				var networkName string
+				if asn != 0 && e.asnMapping != nil {
+					networkName = e.asnMapping.GetName(asn)
+				}
+
 				if vi, ok := e.VisualImpact[allImpact[i].prefix]; ok {
 					vi.Active = true
 					vi.TargetY = targetY
 					vi.TargetAlpha = 1.0
 					vi.Count = allImpact[i].rate
+					vi.ASN = asn
+					vi.NetworkName = networkName
 				} else {
 					e.VisualImpact[allImpact[i].prefix] = &VisualImpact{
 						Prefix:      allImpact[i].prefix,
+						ASN:         asn,
+						NetworkName: networkName,
 						Count:       allImpact[i].rate,
-						DisplayY:    impactYBase + float64(maxImpact+1)*spacing,
+						DisplayY:    impactYBase + float64(maxImpact+1)*impactSpacing,
 						TargetY:     targetY,
 						Alpha:       0,
 						TargetAlpha: 1.0,
@@ -763,4 +803,47 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 	oop.GeoM.Translate(legX+swatchSize+5, legY-fontSize*0.1)
 	oop.ColorScale.Scale(1, 1, 1, 0.6)
 	text.Draw(screen, oStr, subFace, oop)
+}
+
+func wrapString(s string, maxChars int, maxLines int) []string {
+	if len(s) <= maxChars {
+		return []string{s}
+	}
+
+	var lines []string
+	words := strings.Fields(s)
+	currentLine := ""
+
+	for i, word := range words {
+		if len(lines) >= maxLines-1 && maxLines > 0 {
+			// Last allowed line, append remaining and truncate
+			if currentLine != "" {
+				remaining := strings.Join(words[i:], " ")
+				currentLine += " " + remaining
+			} else {
+				currentLine = strings.Join(words[i:], " ")
+			}
+
+			if len(currentLine) > maxChars {
+				currentLine = currentLine[:maxChars-3] + "..."
+			}
+			lines = append(lines, currentLine)
+			return lines
+		}
+
+		if currentLine == "" {
+			currentLine = word
+		} else if len(currentLine)+1+len(word) <= maxChars {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			currentLine = word
+		}
+	}
+
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+
+	return lines
 }

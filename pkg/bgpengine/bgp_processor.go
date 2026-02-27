@@ -10,7 +10,7 @@ import (
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
-type BGPEventCallback func(lat, lng float64, cc string, eventType EventType, prefix string)
+type BGPEventCallback func(lat, lng float64, cc string, eventType EventType, prefix string, asn uint32)
 type IPCoordsProvider func(ip uint32) (float64, float64, string)
 type PrefixToIPConverter func(p string) uint32
 
@@ -61,7 +61,7 @@ func (p *BGPProcessor) Listen() {
 			for ip, entry := range pendingWithdrawals {
 				if now.After(entry.Time) {
 					if lat, lng, cc := p.geo(ip); cc != "" {
-						p.onEvent(lat, lng, cc, EventWithdrawal, entry.Prefix)
+						p.onEvent(lat, lng, cc, EventWithdrawal, entry.Prefix, 0)
 						p.recentlySeen[ip] = struct {
 							Time time.Time
 							Type EventType
@@ -121,6 +121,7 @@ func (p *BGPProcessor) Listen() {
 						Prefixes []string `json:"prefixes"`
 					} `json:"announcements"`
 					Withdrawals []string `json:"withdrawals"`
+					Path        []json.RawMessage `json:"path"`
 					Peer        string   `json:"peer"`
 				} `json:"data"`
 			}
@@ -135,6 +136,16 @@ func (p *BGPProcessor) Listen() {
 			case "ris_message":
 				p.mu.Lock()
 
+				var originASN uint32
+				if len(msg.Data.Path) > 0 {
+					// Path can contain integers or AS_SET arrays. We only care about simple integer ASNs for now.
+					last := msg.Data.Path[len(msg.Data.Path)-1]
+					var asn uint32
+					if err := json.Unmarshal(last, &asn); err == nil {
+						originASN = asn
+					}
+				}
+
 				for _, prefix := range msg.Data.Withdrawals {
 					ip := p.prefixToIP(prefix)
 					if ip == 0 {
@@ -143,7 +154,7 @@ func (p *BGPProcessor) Listen() {
 
 					if last, ok := p.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
 						if lat, lng, cc := p.geo(ip); cc != "" {
-							p.onEvent(lat, lng, cc, EventGossip, prefix)
+							p.onEvent(lat, lng, cc, EventGossip, prefix, originASN)
 						}
 						continue
 					}
@@ -163,7 +174,7 @@ func (p *BGPProcessor) Listen() {
 
 						if last, ok := p.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
 							if lat, lng, cc := p.geo(ip); cc != "" {
-								p.onEvent(lat, lng, cc, EventUpdate, prefix)
+								p.onEvent(lat, lng, cc, EventUpdate, prefix, originASN)
 								p.recentlySeen[ip] = struct {
 									Time time.Time
 									Type EventType
@@ -174,7 +185,7 @@ func (p *BGPProcessor) Listen() {
 
 						if last, ok := p.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
 							if lat, lng, cc := p.geo(ip); cc != "" {
-								p.onEvent(lat, lng, cc, EventGossip, prefix)
+								p.onEvent(lat, lng, cc, EventGossip, prefix, originASN)
 							}
 							continue
 						}
@@ -182,7 +193,7 @@ func (p *BGPProcessor) Listen() {
 						if _, ok := pendingWithdrawals[ip]; ok {
 							delete(pendingWithdrawals, ip)
 							if lat, lng, cc := p.geo(ip); cc != "" {
-								p.onEvent(lat, lng, cc, EventUpdate, prefix)
+								p.onEvent(lat, lng, cc, EventUpdate, prefix, originASN)
 								p.recentlySeen[ip] = struct {
 									Time time.Time
 									Type EventType
@@ -198,7 +209,7 @@ func (p *BGPProcessor) Listen() {
 
 							if isNew {
 								if lat, lng, cc := p.geo(ip); cc != "" {
-									p.onEvent(lat, lng, cc, EventNew, prefix)
+									p.onEvent(lat, lng, cc, EventNew, prefix, originASN)
 									p.recentlySeen[ip] = struct {
 										Time time.Time
 										Type EventType
@@ -206,7 +217,7 @@ func (p *BGPProcessor) Listen() {
 								}
 							} else {
 								if lat, lng, cc := p.geo(ip); cc != "" {
-									p.onEvent(lat, lng, cc, EventUpdate, prefix)
+									p.onEvent(lat, lng, cc, EventUpdate, prefix, originASN)
 									p.recentlySeen[ip] = struct {
 										Time time.Time
 										Type EventType

@@ -29,8 +29,6 @@ import (
 	"github.com/oschwald/maxminddb-golang"
 	geojson "github.com/paulmach/go.geojson"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
-	"golang.org/x/image/font/gofont/gomono"
-	"golang.org/x/image/font/gofont/goregular"
 )
 
 type Location []interface{}
@@ -181,6 +179,7 @@ type Engine struct {
 	VisualHubs map[string]*VisualHub
 
 	prefixImpactHistory []map[string]int
+	prefixToASN         map[string]uint32
 	VisualImpact        map[string]*VisualImpact
 
 	SeenDB *utils.DiskTrie
@@ -188,6 +187,8 @@ type Engine struct {
 	audioPlayer *AudioPlayer
 
 	processor *BGPProcessor
+
+	asnMapping *utils.ASNMapping
 
 	FrameCaptureInterval time.Duration
 	FrameCaptureDir      string
@@ -207,6 +208,8 @@ type VisualHub struct {
 
 type VisualImpact struct {
 	Prefix      string
+	ASN         uint32
+	NetworkName string
 	Count       float64
 	DisplayY    float64
 	TargetY     float64
@@ -221,13 +224,13 @@ type MetricSnapshot struct {
 }
 
 func NewEngine(width, height int, scale float64) *Engine {
-	s, err := text.NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
+	s, err := text.NewGoTextFaceSource(bytes.NewReader(fontInter))
 	if err != nil {
-		log.Printf("Fatal: failed to load regular font: %v", err)
+		log.Printf("Fatal: failed to load Inter font: %v", err)
 	}
-	m, err := text.NewGoTextFaceSource(bytes.NewReader(gomono.TTF))
+	m, err := text.NewGoTextFaceSource(bytes.NewReader(fontMono))
 	if err != nil {
-		log.Printf("Fatal: failed to load mono font: %v", err)
+		log.Printf("Fatal: failed to load Mono font: %v", err)
 	}
 
 	e := &Engine{
@@ -586,6 +589,11 @@ func (e *Engine) LoadData() error {
 	}
 	if err := e.loadRemoteCityData(); err != nil {
 		return err
+	}
+
+	e.asnMapping = utils.NewASNMapping()
+	if err := e.asnMapping.Load(); err != nil {
+		log.Printf("Warning: Failed to load ASN mapping: %v", err)
 	}
 
 	e.processor = NewBGPProcessor(e.geo.GetIPCoords, e.SeenDB, e.prefixToIP, e.recordEvent)
@@ -1053,7 +1061,7 @@ func (e *Engine) StartBufferLoop() {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, prefix string) {
+func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, prefix string, asn uint32) {
 	// 1. Track prefix impact (latest bucket)
 	if prefix != "" {
 		e.metricsMu.Lock()
@@ -1064,6 +1072,12 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 				e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
 			}
 			bucket[prefix]++
+		}
+		if e.prefixToASN == nil {
+			e.prefixToASN = make(map[string]uint32)
+		}
+		if asn != 0 {
+			e.prefixToASN[prefix] = asn
 		}
 		if utils.IsBeaconPrefix(prefix) {
 			e.windowBeacon++
