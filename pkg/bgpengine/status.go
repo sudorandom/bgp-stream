@@ -49,10 +49,13 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		// Draw subtle hacker-green accent next to title
 		vector.FillRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
-		titleOp := &text.DrawOptions{}
-		titleOp.GeoM.Translate(hubX+5, hubYBase-fontSize-5)
-		titleOp.ColorScale.Scale(1, 1, 1, 0.5)
-		text.Draw(screen, titleLabel, titleFace, titleOp)
+		now := time.Now()
+		isHubUpdating := now.Sub(e.hubUpdatedAt) < 2*time.Second
+		hubIntensity := 0.0
+		if isHubUpdating {
+			hubIntensity = 1.0 - (now.Sub(e.hubUpdatedAt).Seconds() / 2.0)
+		}
+		e.drawGlitchTextSubtle(screen, titleLabel, titleFace, hubX+5, hubYBase-fontSize-5, 0.5, hubIntensity, isHubUpdating)
 	}
 
 	for _, vh := range e.VisualHubs {
@@ -112,10 +115,13 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		// Draw subtle hacker-green accent
 		vector.FillRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
-		impactOp := &text.DrawOptions{}
-		impactOp.GeoM.Translate(hubX+5, impactYBase-fontSize-5)
-		impactOp.ColorScale.Scale(1, 1, 1, 0.5)
-		text.Draw(screen, impactTitle, titleFace, impactOp)
+		now := time.Now()
+		isImpactUpdating := now.Sub(e.impactUpdatedAt) < 2*time.Second
+		impactIntensity := 0.0
+		if isImpactUpdating {
+			impactIntensity = 1.0 - (now.Sub(e.impactUpdatedAt).Seconds() / 2.0)
+		}
+		e.drawGlitchTextSubtle(screen, impactTitle, titleFace, hubX+5, impactYBase-fontSize-5, 0.5, impactIntensity, isImpactUpdating)
 	}
 
 	for _, vi := range e.VisualImpact {
@@ -551,6 +557,8 @@ func (e *Engine) StartMetricsLoop() {
 			lastUIUpdate = now
 			firstRun = false
 			uiTicks = 0
+			e.hubUpdatedAt = now
+			e.impactUpdatedAt = now
 
 			type hub struct {
 				cc   string
@@ -592,11 +600,11 @@ func (e *Engine) StartMetricsLoop() {
 					vh.TargetAlpha = 1.0
 					vh.Rate = current[i].rate
 				} else {
-					// New hub, fade in from the bottom
+					// New hub, fade in
 					e.VisualHubs[current[i].cc] = &VisualHub{
 						CC:          current[i].cc,
 						Rate:        current[i].rate,
-						DisplayY:    hubYBase + float64(maxItems+1)*spacing,
+						DisplayY:    targetY,
 						TargetY:     targetY,
 						Alpha:       0,
 						TargetAlpha: 1.0,
@@ -675,7 +683,7 @@ func (e *Engine) StartMetricsLoop() {
 						ASN:         asn,
 						NetworkName: networkName,
 						Count:       allImpact[i].rate,
-						DisplayY:    impactYBase + float64(maxImpact+1)*impactSpacing,
+						DisplayY:    targetY,
 						TargetY:     targetY,
 						Alpha:       0,
 						TargetAlpha: 1.0,

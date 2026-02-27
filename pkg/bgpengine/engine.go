@@ -175,6 +175,8 @@ type Engine struct {
 	lastHubs          map[string]int
 	hubPosition       map[string]int
 	lastMetricsUpdate time.Time
+	hubUpdatedAt      time.Time
+	impactUpdatedAt   time.Time
 
 	VisualHubs map[string]*VisualHub
 
@@ -327,8 +329,8 @@ func (e *Engine) Update() error {
 
 	e.metricsMu.Lock()
 	for cc, vh := range e.VisualHubs {
-		// Smoothly interpolate Y position
-		vh.DisplayY += (vh.TargetY - vh.DisplayY) * 0.2
+		// Snap Y position
+		vh.DisplayY = vh.TargetY
 
 		// Interpolate Alpha
 		vh.Alpha += (vh.TargetAlpha - vh.Alpha) * 0.2
@@ -340,8 +342,8 @@ func (e *Engine) Update() error {
 	}
 
 	for p, vi := range e.VisualImpact {
-		// Smoothly interpolate Y position
-		vi.DisplayY += (vi.TargetY - vi.DisplayY) * 0.2
+		// Snap Y position
+		vi.DisplayY = vi.TargetY
 		// Interpolate Alpha
 		vi.Alpha += (vi.TargetAlpha - vi.Alpha) * 0.2
 
