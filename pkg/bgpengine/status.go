@@ -39,15 +39,63 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	}
 
 	if len(e.VisualHubs) > 0 {
-		// Draw styled background box
-		vector.FillRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
-		vector.StrokeRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+		if e.hubsBuffer == nil || e.hubsBuffer.Bounds().Dx() != int(boxW) || e.hubsBuffer.Bounds().Dy() != int(boxH) {
+			e.hubsBuffer = ebiten.NewImage(int(boxW), int(boxH))
+		}
+		e.hubsBuffer.Clear()
+
+		// Draw into buffer using local coordinates (relative to hubX-10, hubYBase-fontSize-15)
+		localX, localY := 10.0, fontSize+15.0
+		vector.FillRect(e.hubsBuffer, 0, 0, float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(e.hubsBuffer, 0, 0, float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		titleLabel := "TOP ACTIVITY HUBS (ops/s)"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+		vector.FillRect(e.hubsBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
-		// Draw subtle hacker-green accent next to title
-		vector.FillRect(screen, float32(hubX-10), float32(hubYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+		titleOp := &text.DrawOptions{}
+		titleOp.GeoM.Translate(localX+5, localY-fontSize-5)
+		titleOp.ColorScale.Scale(1, 1, 1, 0.5)
+		text.Draw(e.hubsBuffer, titleLabel, titleFace, titleOp)
+
+		for _, vh := range e.VisualHubs {
+			countryName := countries.ByName(vh.CC).String()
+			if countryName == "Unknown" {
+				countryName = vh.CC
+			}
+			if idx := strings.Index(countryName, " ("); idx != -1 {
+				countryName = countryName[:idx]
+			}
+			if strings.Contains(countryName, "Hong Kong") {
+				countryName = "Hong Kong"
+			}
+			if strings.Contains(countryName, "Macao") {
+				countryName = "Macao"
+			}
+			if strings.Contains(countryName, "Taiwan") {
+				countryName = "Taiwan"
+			}
+
+			// Truncate long names to fit in the box
+			const maxLen = 18
+			if len(countryName) > maxLen {
+				countryName = countryName[:maxLen-3] + "..."
+			}
+
+			// Draw Country Name (Left Aligned)
+			nameOp := &text.DrawOptions{}
+			nameOp.GeoM.Translate(localX, vh.DisplayY-(hubYBase-localY))
+			nameOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
+			text.Draw(e.hubsBuffer, countryName, monoFace, nameOp)
+
+			// Draw Rate (Right Aligned)
+			rateStr := fmt.Sprintf("%.0f", vh.Rate)
+			tw, _ := text.Measure(rateStr, monoFace, 0)
+			rateOp := &text.DrawOptions{}
+			rateOp.GeoM.Translate(localX+boxW-tw-25, vh.DisplayY-(hubYBase-localY))
+			rateOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.6))
+			text.Draw(e.hubsBuffer, rateStr, monoFace, rateOp)
+		}
 
 		now := time.Now()
 		isHubUpdating := now.Sub(e.hubUpdatedAt) < 2*time.Second
@@ -55,47 +103,7 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		if isHubUpdating {
 			hubIntensity = 1.0 - (now.Sub(e.hubUpdatedAt).Seconds() / 2.0)
 		}
-		e.drawGlitchTextSubtle(screen, titleLabel, titleFace, hubX+5, hubYBase-fontSize-5, 0.5, hubIntensity, isHubUpdating)
-	}
-
-	for _, vh := range e.VisualHubs {
-		countryName := countries.ByName(vh.CC).String()
-		if countryName == "Unknown" {
-			countryName = vh.CC
-		}
-		if idx := strings.Index(countryName, " ("); idx != -1 {
-			countryName = countryName[:idx]
-		}
-		if strings.Contains(countryName, "Hong Kong") {
-			countryName = "Hong Kong"
-		}
-		if strings.Contains(countryName, "Macao") {
-			countryName = "Macao"
-		}
-		if strings.Contains(countryName, "Taiwan") {
-			countryName = "Taiwan"
-		}
-
-		// Truncate long names to fit in the box
-		const maxLen = 18
-		if len(countryName) > maxLen {
-			countryName = countryName[:maxLen-3] + "..."
-		}
-
-		// Draw Country Name (Left Aligned)
-		nameOp := &text.DrawOptions{}
-		nameOp.GeoM.Translate(hubX, vh.DisplayY)
-		nameOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
-		text.Draw(screen, countryName, monoFace, nameOp)
-
-		// Draw Rate (Right Aligned)
-		rateStr := fmt.Sprintf("%.0f", vh.Rate)
-		tw, _ := text.Measure(rateStr, monoFace, 0)
-		rateOp := &text.DrawOptions{}
-		// Position at box right edge minus some padding
-		rateOp.GeoM.Translate(hubX+boxW-tw-25, vh.DisplayY)
-		rateOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.6))
-		text.Draw(screen, rateStr, monoFace, rateOp)
+		e.drawGlitchImage(screen, e.hubsBuffer, hubX-10, hubYBase-fontSize-15, 1.0, hubIntensity, isHubUpdating)
 	}
 
 	// 2. West Side: Most Active Prefixes
@@ -105,15 +113,63 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	}
 
 	if len(e.VisualImpact) > 0 {
-		// Draw styled background box
-		vector.FillRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
-		vector.StrokeRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
+		if e.impactBuffer == nil || e.impactBuffer.Bounds().Dx() != int(boxW) || e.impactBuffer.Bounds().Dy() != int(impactBoxH) {
+			e.impactBuffer = ebiten.NewImage(int(boxW), int(impactBoxH))
+		}
+		e.impactBuffer.Clear()
+
+		localX, localY := 10.0, fontSize+15.0
+		vector.FillRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		impactTitle := "MOST ACTIVE PREFIXES (ops/s)"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+		vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
-		// Draw subtle hacker-green accent
-		vector.FillRect(screen, float32(hubX-10), float32(impactYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+		impactOp := &text.DrawOptions{}
+		impactOp.GeoM.Translate(localX+5, localY-fontSize-5)
+		impactOp.ColorScale.Scale(1, 1, 1, 0.5)
+		text.Draw(e.impactBuffer, impactTitle, titleFace, impactOp)
+
+		for _, vi := range e.VisualImpact {
+			// Draw Prefix (Left Aligned)
+			prefixOp := &text.DrawOptions{}
+			prefixOp.GeoM.Translate(localX, vi.DisplayY-(impactYBase-localY))
+			prefixOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.8))
+			text.Draw(e.impactBuffer, vi.Prefix, monoFace, prefixOp)
+
+			// Draw Count (Right Aligned)
+			countStr := fmt.Sprintf("%.0f", vi.Count)
+			tw, _ := text.Measure(countStr, monoFace, 0)
+			countOp := &text.DrawOptions{}
+			countOp.GeoM.Translate(localX+boxW-tw-25, vi.DisplayY-(impactYBase-localY))
+			countOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.6))
+			text.Draw(e.impactBuffer, countStr, monoFace, countOp)
+
+			// Draw ASN and Network Name (Subtle line underneath, wrapped)
+			if vi.ASN != 0 || vi.NetworkName != "" {
+				subFontSize := fontSize * 0.6
+				subMonoFace := &text.GoTextFace{Source: e.monoSource, Size: subFontSize}
+				asnStr := fmt.Sprintf("AS%d", vi.ASN)
+				if vi.NetworkName != "" {
+					asnStr = fmt.Sprintf("AS%d - %s", vi.ASN, vi.NetworkName)
+				}
+
+				charW, _ := text.Measure("A", subMonoFace, 0)
+				maxChars := int((boxW - 25) / charW)
+				if maxChars < 10 {
+					maxChars = 10
+				}
+
+				lines := wrapString(asnStr, maxChars, 2) // Limit to 2 lines
+				for j, line := range lines {
+					asnOp := &text.DrawOptions{}
+					asnOp.GeoM.Translate(localX, vi.DisplayY-(impactYBase-localY)+fontSize*1.2+float64(j)*subFontSize*1.1)
+					asnOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.4))
+					text.Draw(e.impactBuffer, line, subMonoFace, asnOp)
+				}
+			}
+		}
 
 		now := time.Now()
 		isImpactUpdating := now.Sub(e.impactUpdatedAt) < 2*time.Second
@@ -121,47 +177,7 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		if isImpactUpdating {
 			impactIntensity = 1.0 - (now.Sub(e.impactUpdatedAt).Seconds() / 2.0)
 		}
-		e.drawGlitchTextSubtle(screen, impactTitle, titleFace, hubX+5, impactYBase-fontSize-5, 0.5, impactIntensity, isImpactUpdating)
-	}
-
-	for _, vi := range e.VisualImpact {
-		// Draw Prefix (Left Aligned)
-		prefixOp := &text.DrawOptions{}
-		prefixOp.GeoM.Translate(hubX, vi.DisplayY)
-		prefixOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.8))
-		text.Draw(screen, vi.Prefix, monoFace, prefixOp)
-
-		// Draw Count (Right Aligned)
-		countStr := fmt.Sprintf("%.0f", vi.Count)
-		tw, _ := text.Measure(countStr, monoFace, 0)
-		countOp := &text.DrawOptions{}
-		countOp.GeoM.Translate(hubX+boxW-tw-25, vi.DisplayY)
-		countOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.6))
-		text.Draw(screen, countStr, monoFace, countOp)
-
-		// Draw ASN and Network Name (Subtle line underneath, wrapped)
-		if vi.ASN != 0 || vi.NetworkName != "" {
-			subFontSize := fontSize * 0.6
-			subMonoFace := &text.GoTextFace{Source: e.monoSource, Size: subFontSize}
-			asnStr := fmt.Sprintf("AS%d", vi.ASN)
-			if vi.NetworkName != "" {
-				asnStr = fmt.Sprintf("AS%d - %s", vi.ASN, vi.NetworkName)
-			}
-
-			charW, _ := text.Measure("A", subMonoFace, 0)
-			maxChars := int((boxW - 25) / charW)
-			if maxChars < 10 {
-				maxChars = 10
-			}
-
-			lines := wrapString(asnStr, maxChars, 2) // Limit to 2 lines
-			for j, line := range lines {
-				asnOp := &text.DrawOptions{}
-				asnOp.GeoM.Translate(hubX, vi.DisplayY+fontSize*1.2+float64(j)*subFontSize*1.1)
-				asnOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.4))
-				text.Draw(screen, line, subMonoFace, asnOp)
-			}
-		}
+		e.drawGlitchImage(screen, e.impactBuffer, hubX-10, impactYBase-fontSize-15, 1.0, impactIntensity, isImpactUpdating)
 	}
 
 	// 4. Top Right: Now Playing
@@ -179,20 +195,23 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 			boxH_song += fontSize * 1.2
 		}
 
-		// Draw background and frame
-		vector.FillRect(screen, float32(songX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
-		vector.StrokeRect(screen, float32(songX-10), float32(songYBase-fontSize-15), float32(songBoxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
+		if e.nowPlayingBuffer == nil || e.nowPlayingBuffer.Bounds().Dx() != int(songBoxW) || e.nowPlayingBuffer.Bounds().Dy() != int(boxH_song) {
+			e.nowPlayingBuffer = ebiten.NewImage(int(songBoxW), int(boxH_song))
+		}
+		e.nowPlayingBuffer.Clear()
+
+		localX, localY := 10.0, fontSize+15.0
+		vector.FillRect(e.nowPlayingBuffer, 0, 0, float32(songBoxW), float32(boxH_song), color.RGBA{0, 0, 0, 100}, false)
+		vector.StrokeRect(e.nowPlayingBuffer, 0, 0, float32(songBoxW), float32(boxH_song), 1, color.RGBA{36, 42, 53, 255}, false)
 
 		songTitle := "NOW PLAYING"
 		titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
-
-		// Draw subtle hacker-green accent
-		vector.FillRect(screen, float32(songX-10), float32(songYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+		vector.FillRect(e.nowPlayingBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 		songTitleOp := &text.DrawOptions{}
-		songTitleOp.GeoM.Translate(songX+10, songYBase-fontSize-5)
+		songTitleOp.GeoM.Translate(localX, localY-fontSize-5)
 		songTitleOp.ColorScale.Scale(1, 1, 1, 0.5)
-		text.Draw(screen, songTitle, titleFace, songTitleOp)
+		text.Draw(e.nowPlayingBuffer, songTitle, titleFace, songTitleOp)
 
 		now := time.Now()
 		glitchDuration := 2 * time.Second
@@ -234,15 +253,19 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 				op.ColorScale.Scale(1, 1, 1, alpha)
 				text.Draw(*buffer, label, f, op)
 
-				// Draw clipped result to screen
+				// Draw clipped result to buffer
 				drawOp := &ebiten.DrawImageOptions{}
-				drawOp.GeoM.Translate(songX+10, songYBase+yOffset)
-				screen.DrawImage(*buffer, drawOp)
+				drawOp.GeoM.Translate(localX, localY+yOffset)
+				e.nowPlayingBuffer.DrawImage(*buffer, drawOp)
 			} else {
-				if sub {
-					e.drawGlitchTextSubtle(screen, label, f, songX+10, songYBase+yOffset, alpha, intensity, isGlitching)
+				if isGlitching {
+					// Draw glitched text into buffer
+					e.drawGlitchTextSubtle(e.nowPlayingBuffer, label, f, localX, localY+yOffset, alpha, intensity, true)
 				} else {
-					e.drawGlitchTextAggressive(screen, label, f, songX+10, songYBase+yOffset, alpha, intensity, isGlitching)
+					op := &text.DrawOptions{}
+					op.GeoM.Translate(localX, localY+yOffset)
+					op.ColorScale.Scale(1, 1, 1, alpha)
+					text.Draw(e.nowPlayingBuffer, label, f, op)
 				}
 			}
 		}
@@ -263,6 +286,8 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 			extraFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.6}
 			drawMarquee(e.CurrentExtra, extraFace, yOffset, 0.4, true, &e.extraBuffer)
 		}
+
+		e.drawGlitchImage(screen, e.nowPlayingBuffer, songX-10, songYBase-fontSize-15, 1.0, intensity, isGlitching)
 	}
 
 	// 3. Bottom Right: Legend & Trendlines
@@ -579,7 +604,7 @@ func (e *Engine) StartMetricsLoop() {
 				fontSize = 36.0
 			}
 			spacing := fontSize * 1.2
-			hubYBase := float64(e.Height)/2.0 + 10.0
+			hubYBase := float64(e.Height) / 2.0
 
 			// Mark all current hubs as inactive so they fade out if not refreshed
 			for _, vh := range e.VisualHubs {

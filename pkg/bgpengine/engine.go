@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"image/png"
 	"io"
 	"log"
 	"math"
@@ -170,6 +171,9 @@ type Engine struct {
 	songBuffer    *ebiten.Image
 	artistBuffer  *ebiten.Image
 	extraBuffer   *ebiten.Image
+	hubsBuffer    *ebiten.Image
+	impactBuffer  *ebiten.Image
+	nowPlayingBuffer *ebiten.Image
 
 	hubChangedAt      map[string]time.Time
 	lastHubs          map[string]int
@@ -394,6 +398,49 @@ func (e *Engine) Update() error {
 	e.pulses = active
 	e.pulsesMu.Unlock()
 	return nil
+}
+
+func (e *Engine) drawGlitchImage(screen *ebiten.Image, img *ebiten.Image, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
+	if img == nil {
+		return
+	}
+	if isGlitching && rand.Float64() < intensity {
+		// More aggressive chromatic aberration
+		offset := 8.0 * intensity
+		jx := (rand.Float64() - 0.5) * 12.0 * intensity
+		jy := (rand.Float64() - 0.5) * 4.0 * intensity
+
+		ro := &ebiten.DrawImageOptions{}
+		ro.GeoM.Translate(tx+jx+offset, ty+jy)
+		ro.ColorScale.Scale(1, 0, 0, baseAlpha*0.6)
+		screen.DrawImage(img, ro)
+
+		co := &ebiten.DrawImageOptions{}
+		co.GeoM.Translate(tx+jx-offset, ty+jy)
+		co.ColorScale.Scale(0, 1, 1, baseAlpha*0.6)
+		screen.DrawImage(img, co)
+
+		// Occasional white flash
+		if rand.Float64() < 0.2*intensity {
+			fo := &ebiten.DrawImageOptions{}
+			fo.GeoM.Translate(tx+jx, ty+jy)
+			fo.ColorScale.Scale(1, 1, 1, baseAlpha*0.3)
+			fo.Blend = ebiten.BlendLighter
+			screen.DrawImage(img, fo)
+		}
+	}
+
+	op := &ebiten.DrawImageOptions{}
+	jx, jy := 0.0, 0.0
+	alpha := baseAlpha
+	if isGlitching && rand.Float64() < intensity {
+		jx = (rand.Float64() - 0.5) * 6.0 * intensity
+		jy = (rand.Float64() - 0.5) * 3.0 * intensity
+		alpha = float32((0.4 + rand.Float64()*0.6) * float64(baseAlpha))
+	}
+	op.GeoM.Translate(tx+jx, ty+jy)
+	op.ColorScale.Scale(1, 1, 1, alpha)
+	screen.DrawImage(img, op)
 }
 
 func (e *Engine) drawGlitchTextAggressive(screen *ebiten.Image, label string, face *text.GoTextFace, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
@@ -742,6 +789,29 @@ func (e *Engine) loadCloudData() error {
 }
 
 func (e *Engine) generateBackground() error {
+	cacheDir := "data/cache"
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		log.Printf("Warning: Failed to create cache directory: %v", err)
+	}
+	cacheFile := fmt.Sprintf("%s/bg_%dx%d_s%.1f.png", cacheDir, e.Width, e.Height, e.Scale)
+
+	if _, err := os.Stat(cacheFile); err == nil {
+		log.Printf("Loading cached background map from %s...", cacheFile)
+		f, err := os.Open(cacheFile)
+		if err == nil {
+			defer f.Close()
+			img, err := png.Decode(f)
+			if err == nil {
+				e.bgImage = ebiten.NewImageFromImage(img)
+				log.Println("Cached background map loaded successfully")
+				return nil
+			}
+			log.Printf("Warning: Failed to decode cached background: %v", err)
+		} else {
+			log.Printf("Warning: Failed to open cached background: %v", err)
+		}
+	}
+
 	log.Println("Generating background map...")
 	start := time.Now()
 	cpuImg := image.NewRGBA(image.Rect(0, 0, e.Width, e.Height))
@@ -788,6 +858,22 @@ func (e *Engine) generateBackground() error {
 	}
 	e.bgImage = ebiten.NewImageFromImage(cpuImg)
 	log.Printf("Background map generated in %v", time.Since(start))
+
+	// Save to cache
+	go func() {
+		f, err := os.Create(cacheFile)
+		if err != nil {
+			log.Printf("Warning: Failed to create background cache file: %v", err)
+			return
+		}
+		defer f.Close()
+		if err := png.Encode(f, cpuImg); err != nil {
+			log.Printf("Warning: Failed to encode background cache: %v", err)
+		} else {
+			log.Printf("Background map cached to %s", cacheFile)
+		}
+	}()
+
 	return nil
 }
 
