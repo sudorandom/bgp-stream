@@ -16,6 +16,18 @@ jobs:
         with:
           go-version: '1.26.0'
           cache: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxxf86vm-dev \
+            libasound2-dev \
+            pkg-config
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
@@ -30,6 +42,18 @@ jobs:
         with:
           go-version: '1.26.0'
           cache: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxxf86vm-dev \
+            libasound2-dev \
+            pkg-config
       - name: Install Dependencies
         run: go mod download
       - name: Run Tests
