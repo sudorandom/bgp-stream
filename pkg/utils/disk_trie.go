@@ -155,3 +155,23 @@ func (t *DiskTrie) Lookup(ip net.IP) ([]byte, int, error) {
 	}
 	return val, foundMask, err
 }
+
+func (t *DiskTrie) ForEach(fn func(k []byte, v []byte) error) error {
+	return t.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			k := item.Key()
+			err := item.Value(func(v []byte) error {
+				return fn(k, v)
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

@@ -41,18 +41,30 @@ func main() {
 	}
 
 	engine.InitPulseTexture()
-	if err := engine.LoadData(); err != nil {
-		log.Fatalf("Failed to initialize engine data: %v", err)
-	}
 
-	if engine.GetProcessor() != nil {
-		go engine.GetProcessor().Listen()
-	}
-	if engine.GetAudioPlayer() != nil {
-		go engine.GetAudioPlayer().Start()
-	}
-	go engine.StartBufferLoop()
-	go engine.StartMetricsLoop()
+	// Start all data loading in the background
+	go func() {
+		// 1. Generate initial map background
+		if err := engine.GenerateInitialBackground(); err != nil {
+			log.Printf("Warning: Failed to generate background: %v", err)
+		}
+
+		// 2. Load the rest of the data
+		if err := engine.LoadRemainingData(); err != nil {
+			log.Printf("Fatal: failed to load remaining data: %v", err)
+			os.Exit(1)
+		}
+
+		if engine.GetProcessor() != nil {
+			go engine.GetProcessor().Listen()
+		}
+		if engine.GetAudioPlayer() != nil {
+			go engine.GetAudioPlayer().Start()
+		}
+		go engine.StartBufferLoop()
+		go engine.StartMetricsLoop()
+	}()
+
 	go engine.StartMemoryWatcher()
 
 	// Handle graceful shutdown for audio fade-out
@@ -85,6 +97,7 @@ func main() {
 
 	ebiten.SetWindowSize(w, h)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+	log.Println("Starting ebiten game loop...")
 	if err := ebiten.RunGame(engine); err != nil {
 		log.Fatal(err)
 	}

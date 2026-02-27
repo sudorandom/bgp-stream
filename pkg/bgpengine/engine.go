@@ -464,7 +464,11 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		e.mapImage = ebiten.NewImage(e.Width, e.Height)
 	}
 
-	e.mapImage.DrawImage(e.bgImage, nil)
+	if e.bgImage != nil {
+		e.mapImage.DrawImage(e.bgImage, nil)
+	} else {
+		e.mapImage.Fill(color.RGBA{8, 10, 15, 255})
+	}
 	e.pulsesMu.Lock()
 	now := time.Now()
 	op := &ebiten.DrawImageOptions{}
@@ -560,12 +564,38 @@ func (e *Engine) InitPulseTexture() {
 	e.pulseImage.WritePixels(pixels)
 }
 
-func (e *Engine) LoadData() error {
+func (e *Engine) GenerateInitialBackground() error {
 	if err := os.MkdirAll("data", 0755); err != nil {
 		log.Printf("Warning: Failed to create data directory: %v", err)
 	}
 
-	// 1. Download worldcities.csv if missing
+	// Generate basic map background immediately
+	if err := e.generateBackground(); err != nil {
+		return fmt.Errorf("failed to generate background: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) LoadRemainingData() error {
+	// 1. Open seen prefixes database
+	var err error
+	e.SeenDB, err = utils.OpenDiskTrie("data/seen-prefixes.db")
+	if err != nil {
+		log.Printf("Warning: Failed to open seen prefixes database: %v. Persistent state will be disabled.", err)
+	}
+
+	// 2. Load prefix data (this maps prefixes to coordinates)
+	// This is fast if cached, slow if it has to download from RIRs
+	if err := e.loadPrefixData(); err != nil {
+		return err
+	}
+
+	// 3. Render historical activity if we have both data sources
+	if e.SeenDB != nil {
+		go e.renderHistoricalData()
+	}
+
+	// 4. Download worldcities.csv if missing
 	citiesPath := "data/worldcities.csv"
 	if _, err := os.Stat(citiesPath); os.IsNotExist(err) {
 		url := "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/csv/cities.csv"
@@ -575,20 +605,11 @@ func (e *Engine) LoadData() error {
 		}
 	}
 
-	// 2. Load cloud data from sources of truth
+	// 5. Load cloud data from sources of truth
 	if err := e.loadCloudData(); err != nil {
 		log.Printf("Warning: Failed to load cloud data: %v", err)
 	}
 
-	var err error
-	e.SeenDB, err = utils.OpenDiskTrie("data/seen-prefixes.db")
-	if err != nil {
-		log.Printf("Warning: Failed to open seen prefixes database: %v. Persistent state will be disabled.", err)
-	}
-
-	if err := e.loadPrefixData(); err != nil {
-		return err
-	}
 	if err := e.loadRemoteCityData(); err != nil {
 		return err
 	}
@@ -600,7 +621,51 @@ func (e *Engine) LoadData() error {
 
 	e.processor = NewBGPProcessor(e.geo.GetIPCoords, e.SeenDB, e.prefixToIP, e.recordEvent)
 
-	return e.generateBackground()
+	return nil
+}
+
+func (e *Engine) renderHistoricalData() {
+	if e.bgImage == nil {
+		return
+	}
+
+	// Create a copy of the background to draw on
+	bounds := e.bgImage.Bounds()
+
+	// Note: We can't easily read back from ebiten.Image in a background thread efficiently,
+	// but we can just re-generate the base background quickly since it's already done once.
+	// For simplicity, let's just draw the dots on top of what's already there by creating
+	// a transparent overlay or just re-running the background generation.
+	// Actually, let's just draw dots on a new transparent image and composite it.
+
+	overlay := image.NewRGBA(bounds)
+	dotCol := color.RGBA{100, 100, 100, 40} // Very subtle gray dots
+
+	count := 0
+	e.SeenDB.ForEach(func(k, v []byte) error {
+		// Key is 5 bytes: 4 bytes IP + 1 byte mask
+		if len(k) != 5 {
+			return nil
+		}
+		ip := binary.BigEndian.Uint32(k[:4])
+		lat, lng, _ := e.geo.GetIPCoords(ip)
+		if lat != 0 || lng != 0 {
+			x, y := e.geo.Project(lat, lng)
+			ix, iy := int(x), int(y)
+			if ix >= 0 && ix < bounds.Dx() && iy >= 0 && iy < bounds.Dy() {
+				overlay.Set(ix, iy, dotCol)
+				count++
+			}
+		}
+		return nil
+	})
+
+	if count > 0 {
+		log.Printf("Rendered %d historical prefixes onto the map", count)
+		// Composite the historical data onto the background
+		overlayImg := ebiten.NewImageFromImage(overlay)
+		e.bgImage.DrawImage(overlayImg, nil)
+	}
 }
 
 func (e *Engine) loadRemoteCityData() error {
@@ -677,6 +742,8 @@ func (e *Engine) loadCloudData() error {
 }
 
 func (e *Engine) generateBackground() error {
+	log.Println("Generating background map...")
+	start := time.Now()
 	cpuImg := image.NewRGBA(image.Rect(0, 0, e.Width, e.Height))
 	draw.Draw(cpuImg, cpuImg.Bounds(), &image.Uniform{color.RGBA{8, 10, 15, 255}}, image.Point{}, draw.Src)
 
@@ -720,6 +787,7 @@ func (e *Engine) generateBackground() error {
 		}
 	}
 	e.bgImage = ebiten.NewImageFromImage(cpuImg)
+	log.Printf("Background map generated in %v", time.Since(start))
 	return nil
 }
 
