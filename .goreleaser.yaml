@@ -39,7 +39,6 @@ archives:
   - formats: ["tar.gz"]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - audio/**/*
       - README.md
 
 checksum:
