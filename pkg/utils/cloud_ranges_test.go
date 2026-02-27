@@ -53,7 +53,7 @@ func TestParseGoogleRanges(t *testing.T) {
 func TestCloudTrie(t *testing.T) {
 	_, net1, _ := net.ParseCIDR("1.2.3.0/24")
 	_, net2, _ := net.ParseCIDR("5.6.0.0/16")
-	
+
 	prefixes := []CloudPrefix{
 		{Prefix: net1, Region: "us-east-1", Service: "AWS"},
 		{Prefix: net2, Region: "europe-west1", Service: "GCP"},

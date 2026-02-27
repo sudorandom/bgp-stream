@@ -1,3 +1,4 @@
+// Package bgpengine provides the core logic for the BGP stream engine, including audio playback.
 package bgpengine
 
 import (
@@ -55,22 +56,10 @@ func (p *AudioPlayer) Start() {
 			default:
 			}
 
-			var playlists []string
-			err := filepath.Walk(p.AudioDir, func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return err
-				}
-				if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
-					playlists = append(playlists, path)
-				}
-				return nil
-			})
-
+			playlists, err := p.findPlaylists()
 			if err != nil {
 				log.Printf("Failed to read audio directory: %v", err)
-				select {
-				case <-time.After(5 * time.Second):
-				case <-p.stopChan:
+				if p.waitForRetry() {
 					return
 				}
 				continue
@@ -78,29 +67,16 @@ func (p *AudioPlayer) Start() {
 
 			if len(playlists) == 0 {
 				log.Println("No MP3 files found in audio directory.")
-				select {
-				case <-time.After(5 * time.Second):
-				case <-p.stopChan:
+				if p.waitForRetry() {
 					return
 				}
 				continue
 			}
 
-			// Pick a random track
-			path := playlists[rand.Intn(len(playlists))]
-
-			// Extract extra credit from parent directory
-			extra := ""
-			parent := filepath.Dir(path)
-			if parent != p.AudioDir && parent != "." {
-				extra = filepath.Base(parent)
-			}
-
+			path, extra := p.pickRandomTrack(playlists)
 			if err := p.playTrack(path, extra); err != nil {
 				log.Printf("Failed to play track %s: %v", path, err)
-				select {
-				case <-time.After(5 * time.Second):
-				case <-p.stopChan:
+				if p.waitForRetry() {
 					return
 				}
 			}
@@ -112,13 +88,69 @@ func (p *AudioPlayer) Start() {
 	}()
 }
 
-func (p *AudioPlayer) playTrack(path string, extra string) error {
+func (p *AudioPlayer) findPlaylists() ([]string, error) {
+	var playlists []string
+	err := filepath.Walk(p.AudioDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
+			playlists = append(playlists, path)
+		}
+		return nil
+	})
+	return playlists, err
+}
+
+func (p *AudioPlayer) pickRandomTrack(playlists []string) (trackPath, extra string) {
+	trackPath = playlists[rand.Intn(len(playlists))]
+	extra = ""
+	parent := filepath.Dir(trackPath)
+	if parent != p.AudioDir && parent != "." {
+		extra = filepath.Base(parent)
+	}
+	return trackPath, extra
+}
+
+func (p *AudioPlayer) waitForRetry() bool {
+	select {
+	case <-time.After(5 * time.Second):
+		return false
+	case <-p.stopChan:
+		return true
+	}
+}
+
+func (p *AudioPlayer) playTrack(path, extra string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Printf("Error closing audio file: %v", err)
+		}
+	}()
 
+	p.handleMetadata(f, path, extra)
+
+	if _, err := f.Seek(0, 0); err != nil {
+		return err
+	}
+
+	d, err := mp3.NewDecoder(f)
+	if err != nil {
+		return err
+	}
+
+	if p.AudioWriter != nil {
+		return p.streamTrack(d, path)
+	}
+
+	return p.playTrackLocally(d, path)
+}
+
+func (p *AudioPlayer) handleMetadata(f *os.File, path, extra string) {
 	var artist, song string
 	if m, err := tag.ReadFrom(f); err == nil {
 		artist = m.Artist()
@@ -137,76 +169,50 @@ func (p *AudioPlayer) playTrack(path string, extra string) error {
 	if p.OnMetadata != nil {
 		p.OnMetadata(song, artist, extra)
 	}
+}
 
-	if _, err := f.Seek(0, 0); err != nil {
-		return err
-	}
-
-	d, err := mp3.NewDecoder(f)
-	if err != nil {
-		return err
-	}
-
+func (p *AudioPlayer) streamTrack(d *mp3.Decoder, path string) error {
+	log.Printf("Streaming audio: %s", path)
 	fadeDuration := 5 * time.Second
-	if p.AudioWriter != nil {
-		log.Printf("Streaming audio: %s", path)
-		totalBytes := d.Length()
-		duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
-		
-		buf := make([]byte, 8192)
-		startTime := time.Now()
-		var stoppingAt time.Time
+	totalBytes := d.Length()
+	duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
 
-		for {
-			if p.isStopping && stoppingAt.IsZero() {
-				stoppingAt = time.Now()
+	buf := make([]byte, 8192)
+	startTime := time.Now()
+	var stoppingAt time.Time
+
+	for {
+		if p.isStopping && stoppingAt.IsZero() {
+			stoppingAt = time.Now()
+		}
+
+		n, err := d.Read(buf)
+		if n > 0 {
+			vol := p.calculateVolume(startTime, duration, stoppingAt, fadeDuration)
+			if vol <= 0 && !stoppingAt.IsZero() {
+				return nil
 			}
 
-			n, err := d.Read(buf)
-			if n > 0 {
-				elapsed := time.Since(startTime)
-				remaining := duration - elapsed
-				
-				vol := 1.0
-				if remaining <= fadeDuration {
-					vol = float64(remaining) / float64(fadeDuration)
-				}
-
-				if !stoppingAt.IsZero() {
-					stopElapsed := time.Since(stoppingAt)
-					stopVol := 1.0 - (float64(stopElapsed) / float64(fadeDuration))
-					if stopVol < vol {
-						vol = stopVol
-					}
-					if stopVol <= 0 {
-						return nil
-					}
-				}
-
-				if vol < 0 { vol = 0 }
-				if vol < 1.0 {
-					for i := 0; i < n; i += 2 {
-						sample := int16(binary.LittleEndian.Uint16(buf[i:]))
-						sample = int16(float64(sample) * vol)
-						binary.LittleEndian.PutUint16(buf[i:], uint16(sample))
-					}
-				}
-				
-				if _, err := p.AudioWriter.Write(buf[:n]); err != nil {
-					log.Printf("Stream write error: %v", err)
-					return err
-				}
+			if vol < 1.0 {
+				p.applyVolume(buf[:n], vol)
 			}
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
+
+			if _, err := p.AudioWriter.Write(buf[:n]); err != nil {
+				log.Printf("Stream write error: %v", err)
 				return err
 			}
 		}
-		return nil
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
 	}
+	return nil
+}
 
+func (p *AudioPlayer) playTrackLocally(d *mp3.Decoder, path string) error {
 	if p.audioContext == nil {
 		p.audioContext = audio.NewContext(44100)
 	}
@@ -214,9 +220,16 @@ func (p *AudioPlayer) playTrack(path string, extra string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := player.Close(); err != nil {
+			log.Printf("Error closing audio player: %v", err)
+		}
+	}()
+
 	player.Play()
 	log.Printf("Playing: %s", path)
 
+	fadeDuration := 5 * time.Second
 	totalBytes := d.Length()
 	duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
 	startTime := time.Now()
@@ -226,32 +239,44 @@ func (p *AudioPlayer) playTrack(path string, extra string) error {
 			stoppingAt = time.Now()
 		}
 
-		elapsed := time.Since(startTime)
-		remaining := duration - elapsed
-		vol := 1.0
-		if remaining <= fadeDuration {
-			vol = float64(remaining) / float64(fadeDuration)
-		}
-
-		if !stoppingAt.IsZero() {
-			stopElapsed := time.Since(stoppingAt)
-			stopVol := 1.0 - (float64(stopElapsed) / float64(fadeDuration))
-			if stopVol < vol {
-				vol = stopVol
-			}
-			if stopVol <= 0 {
-				break
-			}
-		}
-
-		if vol < 0 { vol = 0 }
+		vol := p.calculateVolume(startTime, duration, stoppingAt, fadeDuration)
 		player.SetVolume(vol)
 
-		if remaining <= 0 {
+		if vol <= 0 && (!stoppingAt.IsZero() || time.Since(startTime) >= duration) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	player.Close()
 	return nil
+}
+
+func (p *AudioPlayer) calculateVolume(startTime time.Time, duration time.Duration, stoppingAt time.Time, fadeDuration time.Duration) float64 {
+	elapsed := time.Since(startTime)
+	remaining := duration - elapsed
+
+	vol := 1.0
+	if remaining <= fadeDuration {
+		vol = float64(remaining) / float64(fadeDuration)
+	}
+
+	if !stoppingAt.IsZero() {
+		stopElapsed := time.Since(stoppingAt)
+		stopVol := 1.0 - (float64(stopElapsed) / float64(fadeDuration))
+		if stopVol < vol {
+			vol = stopVol
+		}
+	}
+
+	if vol < 0 {
+		vol = 0
+	}
+	return vol
+}
+
+func (p *AudioPlayer) applyVolume(buf []byte, vol float64) {
+	for i := 0; i < len(buf); i += 2 {
+		sample := int16(binary.LittleEndian.Uint16(buf[i:]))
+		sample = int16(float64(sample) * vol)
+		binary.LittleEndian.PutUint16(buf[i:], uint16(sample))
+	}
 }

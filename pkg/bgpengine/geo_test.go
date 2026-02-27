@@ -9,7 +9,7 @@ func TestProject(t *testing.T) {
 	g := NewGeoService(1920, 1080, 380.0)
 
 	tests := []struct {
-		lat, lng float64
+		lat, lng     float64
 		wantX, wantY float64
 	}{
 		{0, 0, 960, 540},
@@ -29,7 +29,7 @@ func TestProject(t *testing.T) {
 
 func TestGetIPCoords(t *testing.T) {
 	g := NewGeoService(1920, 1080, 380.0)
-	
+
 	// Mock some data
 	g.prefixData = PrefixData{
 		L: []Location{
@@ -44,7 +44,7 @@ func TestGetIPCoords(t *testing.T) {
 	if lat == 0 || lng == 0 || cc != "US" {
 		t.Errorf("GetIPCoords(8.8.8.8) = (%f, %f, %s); want SF coordinates and US", lat, lng, cc)
 	}
-	
+
 	if lat != 37.7749 || lng != -122.4194 {
 		t.Errorf("Expected SF coordinates (37.7749, -122.4194), got (%f, %f)", lat, lng)
 	}

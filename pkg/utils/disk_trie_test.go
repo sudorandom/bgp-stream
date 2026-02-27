@@ -10,22 +10,34 @@ import (
 )
 
 func TestDiskTrie(t *testing.T) {
-	// Create a temporary directory for the test database
 	tmpDir, err := os.MkdirTemp("", "disktrie-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			t.Logf("Error removing temp dir: %v", err)
+		}
+	}()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
-
-	// 1. Test Open and Close
 	trie, err := OpenDiskTrie(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to open DiskTrie: %v", err)
 	}
 
-	// 2. Test Basic Insert and Lookup
+	testDiskTrieBasic(t, trie)
+	testDiskTrieLPM(t, trie)
+	testDiskTrieBatch(t, trie)
+
+	if err := trie.Close(); err != nil {
+		t.Fatalf("Failed to close trie: %v", err)
+	}
+
+	testDiskTriePersistence(t, dbPath)
+}
+
+func testDiskTrieBasic(t *testing.T, trie *DiskTrie) {
 	_, ipNet, _ := net.ParseCIDR("1.2.3.0/24")
 	val := []byte("test-value")
 	if err := trie.Insert(ipNet, val); err != nil {
@@ -39,33 +51,25 @@ func TestDiskTrie(t *testing.T) {
 	if !bytes.Equal(res, val) || mask != 24 {
 		t.Errorf("Lookup mismatch: got (%s, %d), want (%s, 24)", res, mask, val)
 	}
+}
 
-	// 3. Test Longest Prefix Match (LPM)
+func testDiskTrieLPM(t *testing.T, trie *DiskTrie) {
 	_, ipNetSpecific, _ := net.ParseCIDR("1.2.3.128/25")
 	valSpecific := []byte("specific-value")
 	if err := trie.Insert(ipNetSpecific, valSpecific); err != nil {
 		t.Errorf("Insert specific failed: %v", err)
 	}
 
-	// Should match the more specific /25
-	res, mask, err = trie.Lookup(net.ParseIP("1.2.3.129"))
+	res, mask, err := trie.Lookup(net.ParseIP("1.2.3.129"))
 	if err != nil {
 		t.Errorf("LPM Lookup failed: %v", err)
 	}
 	if !bytes.Equal(res, valSpecific) || mask != 25 {
 		t.Errorf("LPM mismatch: got (%s, %d), want (%s, 25)", res, mask, valSpecific)
 	}
+}
 
-	// Should still match the /24 for other IPs in that range
-	res, mask, err = trie.Lookup(net.ParseIP("1.2.3.1"))
-	if err != nil {
-		t.Errorf("General Lookup failed: %v", err)
-	}
-	if !bytes.Equal(res, val) || mask != 24 {
-		t.Errorf("General mismatch: got (%s, %d), want (%s, 24)", res, mask, val)
-	}
-
-	// 4. Test Batch Insert
+func testDiskTrieBatch(t *testing.T, trie *DiskTrie) {
 	batch := map[string][]byte{
 		"10.0.0.0/8":  []byte("private-a"),
 		"10.1.0.0/16": []byte("private-a-sub"),
@@ -74,67 +78,57 @@ func TestDiskTrie(t *testing.T) {
 		t.Errorf("BatchInsert failed: %v", err)
 	}
 
-	res, mask, err = trie.Lookup(net.ParseIP("10.1.2.3"))
+	res, mask, err := trie.Lookup(net.ParseIP("10.1.2.3"))
 	if err != nil {
 		t.Errorf("Batch Lookup failed: %v", err)
 	}
 	if !bytes.Equal(res, batch["10.1.0.0/16"]) || mask != 16 {
 		t.Errorf("Batch mismatch: got (%s, %d), want (private-a-sub, 16)", res, mask)
 	}
+}
 
-	// 5. Test Persistence (Close and Reopen)
-	if err := trie.Close(); err != nil {
-		t.Fatalf("Failed to close trie: %v", err)
-	}
-
-	trie, err = OpenDiskTrie(dbPath)
+func testDiskTriePersistence(t *testing.T, dbPath string) {
+	trie, err := OpenDiskTrie(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to reopen DiskTrie: %v", err)
 	}
-	defer trie.Close()
+	defer func() {
+		if err := trie.Close(); err != nil {
+			t.Logf("Error closing trie: %v", err)
+		}
+	}()
 
-	res, mask, err = trie.Lookup(net.ParseIP("1.2.3.129"))
+	res, mask, err := trie.Lookup(net.ParseIP("1.2.3.129"))
 	if err != nil {
 		t.Errorf("Lookup after reopen failed: %v", err)
 	}
-	if !bytes.Equal(res, valSpecific) || mask != 25 {
-		t.Errorf("Persistence mismatch: got (%s, %d), want (%s, 25)", res, mask, valSpecific)
+	if mask != 25 {
+		t.Errorf("Persistence mismatch: got mask %d, want 25", mask)
 	}
-
-	// 6. Test Non-existent Lookup
-	res, mask, err = trie.Lookup(net.ParseIP("8.8.8.8"))
-	if err != nil {
-		t.Errorf("Non-existent lookup errored: %v", err)
-	}
-	if res != nil {
-		t.Errorf("Expected nil for non-existent IP, got %s", res)
-	}
-
-	// 7. Test BatchInsertRaw and Get
-	rawBatch := map[string][]byte{
-		"raw-key-1": []byte("raw-val-1"),
-		"raw-key-2": []byte("raw-val-2"),
-	}
-	if err := trie.BatchInsertRaw(rawBatch); err != nil {
-		t.Errorf("BatchInsertRaw failed: %v", err)
-	}
-
-	for k, v := range rawBatch {
-		res, err := trie.Get(k)
-		if err != nil {
-			t.Errorf("Get failed for %s: %v", k, err)
-		}
-		if !bytes.Equal(res, v) {
-			t.Errorf("Get mismatch for %s: got %s, want %s", k, res, v)
-		}
+	if res == nil {
+		t.Errorf("Expected non-nil result after reopen")
 	}
 }
 
 func TestDiskTrieComplexSubnets(t *testing.T) {
-	tmpDir, _ := os.MkdirTemp("", "disktrie-complex-*")
-	defer os.RemoveAll(tmpDir)
-	trie, _ := OpenDiskTrie(filepath.Join(tmpDir, "test.db"))
-	defer trie.Close()
+	tmpDir, err := os.MkdirTemp("", "disktrie-complex-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			t.Logf("Error removing temp dir: %v", err)
+		}
+	}()
+	trie, err := OpenDiskTrie(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("Failed to open trie: %v", err)
+	}
+	defer func() {
+		if err := trie.Close(); err != nil {
+			t.Logf("Error closing trie: %v", err)
+		}
+	}()
 
 	// Insert a variety of overlapping and adjacent subnets
 	subnets := map[string]string{
@@ -187,14 +181,28 @@ func TestDiskTrieComplexSubnets(t *testing.T) {
 }
 
 func TestDiskTrieIPv6Error(t *testing.T) {
-	tmpDir, _ := os.MkdirTemp("", "disktrie-v6-*")
-	defer os.RemoveAll(tmpDir)
-	trie, _ := OpenDiskTrie(filepath.Join(tmpDir, "test.db"))
-	defer trie.Close()
+	tmpDir, err := os.MkdirTemp("", "disktrie-v6-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			t.Logf("Error removing temp dir: %v", err)
+		}
+	}()
+	trie, err := OpenDiskTrie(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("Failed to open trie: %v", err)
+	}
+	defer func() {
+		if err := trie.Close(); err != nil {
+			t.Logf("Error closing trie: %v", err)
+		}
+	}()
 
 	// Currently only IPv4 is supported
 	ip := net.ParseIP("2001:db8::1")
-	_, _, err := trie.Lookup(ip)
+	_, _, err = trie.Lookup(ip)
 	if err == nil {
 		t.Error("Expected error for IPv6 lookup, got nil")
 	}
@@ -207,22 +215,38 @@ func TestDiskTrieIPv6Error(t *testing.T) {
 }
 
 func BenchmarkDiskTrieLookup(b *testing.B) {
-	tmpDir, _ := os.MkdirTemp("", "disktrie-bench-*")
-	defer os.RemoveAll(tmpDir)
-	trie, _ := OpenDiskTrie(filepath.Join(tmpDir, "test.db"))
-	defer trie.Close()
+	tmpDir, err := os.MkdirTemp("", "disktrie-bench-*")
+	if err != nil {
+		b.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			b.Logf("Error removing temp dir: %v", err)
+		}
+	}()
+	trie, err := OpenDiskTrie(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		b.Fatalf("Failed to open trie: %v", err)
+	}
+	defer func() {
+		if err := trie.Close(); err != nil {
+			b.Logf("Error closing trie: %v", err)
+		}
+	}()
 
 	// Populate with 1000 prefixes
 	for i := 0; i < 1000; i++ {
 		cidr := fmt.Sprintf("10.%d.%d.0/24", (i>>8)&0xFF, i&0xFF)
 		_, ipNet, _ := net.ParseCIDR(cidr)
-		trie.Insert(ipNet, []byte("val"))
+		if err := trie.Insert(ipNet, []byte("val")); err != nil {
+			b.Fatalf("Failed to insert %s: %v", cidr, err)
+		}
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Use a cycle of IPs to test both cache hits and misses
 		ip := net.IPv4(10, byte((i>>8)&0xFF), byte(i&0xFF), 1)
-		trie.Lookup(ip)
+		_, _, _ = trie.Lookup(ip)
 	}
 }

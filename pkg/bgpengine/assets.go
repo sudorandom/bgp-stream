@@ -1,3 +1,4 @@
+// Package bgpengine provides the core logic for the BGP stream engine.
 package bgpengine
 
 import _ "embed"

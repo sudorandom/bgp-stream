@@ -1,3 +1,4 @@
+// Package bgpengine provides the core logic for the BGP stream engine, including data processing and visualization.
 package bgpengine
 
 import (
@@ -154,23 +155,18 @@ type Engine struct {
 	displayBeaconPercent                   float64
 
 	countryActivity map[string]int
-	topHubs         []struct {
-		CC   string
-		Rate float64
-	}
 
 	// History for trendlines (last 60 snapshots, 2s each = 2 mins)
 	history   []MetricSnapshot
 	metricsMu sync.Mutex
 
-	CurrentSong   string
-	CurrentArtist string
-	CurrentExtra  string
-	lastSong      string
-	songChangedAt time.Time
-	songBuffer    *ebiten.Image
-	artistBuffer  *ebiten.Image
-	extraBuffer   *ebiten.Image
+	CurrentSong      string
+	CurrentArtist    string
+	CurrentExtra     string
+	songChangedAt    time.Time
+	songBuffer       *ebiten.Image
+	artistBuffer     *ebiten.Image
+	extraBuffer      *ebiten.Image
 	hubsBuffer       *ebiten.Image
 	impactBuffer     *ebiten.Image
 	trendLinesBuffer *ebiten.Image
@@ -241,11 +237,11 @@ func NewEngine(width, height int, scale float64) *Engine {
 	}
 
 	e := &Engine{
-		Width:  width,
-		Height: height,
-		FPS:    30,
-		Scale:  scale,
-		geo:    NewGeoService(width, height, scale),
+		Width:      width,
+		Height:     height,
+		FPS:        30,
+		Scale:      scale,
+		geo:        NewGeoService(width, height, scale),
 		cityBuffer: make(map[uint64]*BufferedCity),
 		cityBufferPool: sync.Pool{
 			New: func() interface{} {
@@ -401,7 +397,7 @@ func (e *Engine) Update() error {
 	return nil
 }
 
-func (e *Engine) drawGlitchImage(screen *ebiten.Image, img *ebiten.Image, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
+func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
 	if img == nil {
 		return
 	}
@@ -442,37 +438,6 @@ func (e *Engine) drawGlitchImage(screen *ebiten.Image, img *ebiten.Image, tx, ty
 	op.GeoM.Translate(tx+jx, ty+jy)
 	op.ColorScale.Scale(1, 1, 1, alpha)
 	screen.DrawImage(img, op)
-}
-
-func (e *Engine) drawGlitchTextAggressive(screen *ebiten.Image, label string, face *text.GoTextFace, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
-	fontSize := face.Size
-	if isGlitching && rand.Float64() < intensity {
-		offset := 4.0 * intensity
-		jx := (rand.Float64() - 0.5) * fontSize * intensity
-		jy := (rand.Float64() - 0.5) * (fontSize / 2) * intensity
-
-		ro := &text.DrawOptions{}
-		ro.GeoM.Translate(tx+jx+offset, ty+jy)
-		ro.ColorScale.Scale(1, 0, 0, baseAlpha*0.7)
-		text.Draw(screen, label, face, ro)
-
-		co := &text.DrawOptions{}
-		co.GeoM.Translate(tx+jx-offset, ty+jy)
-		co.ColorScale.Scale(0, 1, 1, baseAlpha*0.7)
-		text.Draw(screen, label, face, co)
-	}
-
-	op := &text.DrawOptions{}
-	jx, jy := 0.0, 0.0
-	alpha := baseAlpha
-	if isGlitching && rand.Float64() < intensity {
-		jx = (rand.Float64() - 0.5) * (fontSize / 2) * intensity
-		jy = (rand.Float64() - 0.5) * (fontSize / 4) * intensity
-		alpha = float32((0.2 + rand.Float64()*0.8) * float64(baseAlpha))
-	}
-	op.GeoM.Translate(tx+jx, ty+jy)
-	op.ColorScale.Scale(1, 1, 1, float32(alpha))
-	text.Draw(screen, label, face, op)
 }
 
 func (e *Engine) drawGlitchTextSubtle(screen *ebiten.Image, label string, face *text.GoTextFace, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
@@ -548,7 +513,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		// Use a smaller base offset (+1) and more conservative scaling
 		scale := (1 + progress*p.MaxRadius) / float64(imgW) * 2.0
 		if p.Type == EventNew {
-			easeOut := 1.0 - math.Pow(1.0-progress, 3)
+			easeOut := 1.0 - (1.0-progress)*(1.0-progress)*(1.0-progress)
 			scale = (1 + easeOut*p.MaxRadius) / float64(imgW) * 2.0
 		}
 
@@ -580,7 +545,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	}
 }
 
-func (e *Engine) Layout(w, h int) (int, int) { return e.Width, e.Height }
+func (e *Engine) Layout(w, h int) (width, height int) { return e.Width, e.Height }
 
 func (e *Engine) InitPulseTexture() {
 	size := 128
@@ -613,7 +578,7 @@ func (e *Engine) InitPulseTexture() {
 }
 
 func (e *Engine) GenerateInitialBackground() error {
-	if err := os.MkdirAll("data", 0755); err != nil {
+	if err := os.MkdirAll("data", 0o755); err != nil {
 		log.Printf("Warning: Failed to create data directory: %v", err)
 	}
 
@@ -690,7 +655,7 @@ func (e *Engine) renderHistoricalData() {
 	dotCol := color.RGBA{100, 100, 100, 40} // Very subtle gray dots
 
 	count := 0
-	e.SeenDB.ForEach(func(k, v []byte) error {
+	if err := e.SeenDB.ForEach(func(k, v []byte) error {
 		// Key is 5 bytes: 4 bytes IP + 1 byte mask
 		if len(k) != 5 {
 			return nil
@@ -706,7 +671,9 @@ func (e *Engine) renderHistoricalData() {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		log.Printf("Error iterating over historical prefixes: %v", err)
+	}
 
 	if count > 0 {
 		log.Printf("Rendered %d historical prefixes onto the map", count)
@@ -721,7 +688,11 @@ func (e *Engine) loadRemoteCityData() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Error closing response body: %v", err)
+		}
+	}()
 	var meta struct {
 		MaxYear int `json:"max_year"`
 	}
@@ -732,7 +703,11 @@ func (e *Engine) loadRemoteCityData() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Error closing response body: %v", err)
+		}
+	}()
 	var cities []struct {
 		Country             string
 		Coordinates         []float64
@@ -772,7 +747,11 @@ func (e *Engine) loadCloudData() error {
 	log.Println("Fetching AWS IP Ranges...")
 	resp, err := http.Get("https://ip-ranges.amazonaws.com/ip-ranges.json")
 	if err == nil {
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("Error closing AWS response body: %v", err)
+			}
+		}()
 		aws, err := utils.ParseAWSRanges(resp.Body)
 		if err == nil {
 			allPrefixes = append(allPrefixes, aws...)
@@ -789,35 +768,7 @@ func (e *Engine) loadCloudData() error {
 	return nil
 }
 
-func (e *Engine) generateBackground() error {
-	cacheDir := "data/cache"
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		log.Printf("Warning: Failed to create cache directory: %v", err)
-	}
-	cacheFile := fmt.Sprintf("%s/bg_%dx%d_s%.1f.png", cacheDir, e.Width, e.Height, e.Scale)
-
-	if _, err := os.Stat(cacheFile); err == nil {
-		log.Printf("Loading cached background map from %s...", cacheFile)
-		f, err := os.Open(cacheFile)
-		if err == nil {
-			defer f.Close()
-			img, err := png.Decode(f)
-			if err == nil {
-				e.bgImage = ebiten.NewImageFromImage(img)
-				log.Println("Cached background map loaded successfully")
-				return nil
-			}
-			log.Printf("Warning: Failed to decode cached background: %v", err)
-		} else {
-			log.Printf("Warning: Failed to open cached background: %v", err)
-		}
-	}
-
-	log.Println("Generating background map...")
-	start := time.Now()
-	cpuImg := image.NewRGBA(image.Rect(0, 0, e.Width, e.Height))
-	draw.Draw(cpuImg, cpuImg.Bounds(), &image.Uniform{color.RGBA{8, 10, 15, 255}}, image.Point{}, draw.Src)
-
+func (e *Engine) drawGrid(img *image.RGBA) {
 	// Draw subtle latitude/longitude grid (Cyber-grid)
 	gridColor := color.RGBA{30, 35, 45, 255}
 	// Longitude lines
@@ -826,7 +777,7 @@ func (e *Engine) generateBackground() error {
 		for lat := -90.0; lat <= 90.0; lat += 2.0 {
 			points = append(points, []float64{lng, lat})
 		}
-		e.drawRingFast(cpuImg, points, gridColor)
+		e.drawRingFast(img, points, gridColor)
 	}
 	// Latitude lines
 	for lat := -90.0; lat <= 90.0; lat += 15.0 {
@@ -834,9 +785,64 @@ func (e *Engine) generateBackground() error {
 		for lng := -180.0; lng <= 180.0; lng += 2.0 {
 			points = append(points, []float64{lng, lat})
 		}
-		e.drawRingFast(cpuImg, points, gridColor)
+		e.drawRingFast(img, points, gridColor)
+	}
+}
+
+func (e *Engine) generateBackground() error {
+	cacheDir := "data/cache"
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		log.Printf("Warning: Failed to create cache directory: %v", err)
+	}
+	cacheFile := fmt.Sprintf("%s/bg_%dx%d_s%.1f.png", cacheDir, e.Width, e.Height, e.Scale)
+
+	if img, err := e.loadCachedBackground(cacheFile); err == nil {
+		e.bgImage = img
+		return nil
 	}
 
+	log.Println("Generating background map...")
+	start := time.Now()
+	cpuImg := image.NewRGBA(image.Rect(0, 0, e.Width, e.Height))
+	draw.Draw(cpuImg, cpuImg.Bounds(), &image.Uniform{color.RGBA{8, 10, 15, 255}}, image.Point{}, draw.Src)
+
+	e.drawGrid(cpuImg)
+
+	if err := e.drawFeatures(cpuImg); err != nil {
+		return err
+	}
+
+	e.bgImage = ebiten.NewImageFromImage(cpuImg)
+	log.Printf("Background map generated in %v", time.Since(start))
+
+	go e.cacheBackground(cacheFile, cpuImg)
+
+	return nil
+}
+
+func (e *Engine) loadCachedBackground(cacheFile string) (*ebiten.Image, error) {
+	if _, err := os.Stat(cacheFile); err != nil {
+		return nil, err
+	}
+	log.Printf("Loading cached background map from %s...", cacheFile)
+	f, err := os.Open(cacheFile)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Printf("Error closing cache file: %v", err)
+		}
+	}()
+	img, err := png.Decode(f)
+	if err != nil {
+		return nil, err
+	}
+	log.Println("Cached background map loaded successfully")
+	return ebiten.NewImageFromImage(img), nil
+}
+
+func (e *Engine) drawFeatures(cpuImg *image.RGBA) error {
 	fc, err := geojson.UnmarshalFeatureCollection(worldGeoJSON)
 	if err != nil {
 		return err
@@ -857,25 +863,25 @@ func (e *Engine) generateBackground() error {
 			}
 		}
 	}
-	e.bgImage = ebiten.NewImageFromImage(cpuImg)
-	log.Printf("Background map generated in %v", time.Since(start))
+	return nil
+}
 
-	// Save to cache
-	go func() {
-		f, err := os.Create(cacheFile)
-		if err != nil {
-			log.Printf("Warning: Failed to create background cache file: %v", err)
-			return
-		}
-		defer f.Close()
-		if err := png.Encode(f, cpuImg); err != nil {
-			log.Printf("Warning: Failed to encode background cache: %v", err)
-		} else {
-			log.Printf("Background map cached to %s", cacheFile)
+func (e *Engine) cacheBackground(cacheFile string, cpuImg *image.RGBA) {
+	f, err := os.Create(cacheFile)
+	if err != nil {
+		log.Printf("Warning: Failed to create background cache file: %v", err)
+		return
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Printf("Error closing background cache file: %v", err)
 		}
 	}()
-
-	return nil
+	if err := png.Encode(f, cpuImg); err != nil {
+		log.Printf("Warning: Failed to encode background cache: %v", err)
+	} else {
+		log.Printf("Background map cached to %s", cacheFile)
+	}
 }
 
 type ipRange struct {
@@ -895,10 +901,45 @@ func (e *Engine) loadPrefixData() error {
 		}
 	}
 
-	// Try to load world cities from disk, fallback to embed
+	e.loadWorldCities()
+
+	geoReader, err := e.getGeoIPReader()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := geoReader.Close(); err != nil {
+			log.Printf("Error closing GeoIP database: %v", err)
+		}
+	}()
+
+	allRanges := e.fetchRIRData(geoReader)
+	segments := e.flattenPrefixData(allRanges)
+	e.indexPrefixData(segments)
+
+	if err := os.MkdirAll("data", 0o755); err != nil {
+		log.Printf("Warning: Failed to create data directory: %v", err)
+	}
+	if f, err := os.Create(cachePath); err == nil {
+		if err := json.NewEncoder(f).Encode(e.geo.prefixData); err != nil {
+			log.Printf("Warning: Failed to encode prefix cache: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			log.Printf("Error closing prefix cache file: %v", err)
+		}
+	}
+	debug.FreeOSMemory()
+	return nil
+}
+
+func (e *Engine) loadWorldCities() {
 	var citiesReader io.Reader
 	if f, err := os.Open("data/worldcities.csv"); err == nil {
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				log.Printf("Error closing world cities file: %v", err)
+			}
+		}()
 		citiesReader = f
 		log.Println("Using worldcities.csv from disk")
 	} else if len(worldCitiesCSV) > 0 {
@@ -934,8 +975,9 @@ func (e *Engine) loadPrefixData() error {
 	} else {
 		log.Println("Warning: No world cities data available.")
 	}
+}
 
-	// Try to load geoip DB from disk, fallback to embed
+func (e *Engine) getGeoIPReader() (*maxminddb.Reader, error) {
 	var geoReader *maxminddb.Reader
 	if f, err := os.ReadFile("data/ipinfo_lite.mmdb"); err == nil {
 		geoReader, _ = maxminddb.FromBytes(f)
@@ -951,42 +993,16 @@ func (e *Engine) loadPrefixData() error {
 	}
 
 	if geoReader == nil {
-		return fmt.Errorf("no GeoIP database available (ipinfo_lite.mmdb)")
+		return nil, fmt.Errorf("no GeoIP database available (ipinfo_lite.mmdb)")
 	}
-	defer geoReader.Close()
+	return geoReader, nil
+}
+
+func (e *Engine) fetchRIRData(geoReader *maxminddb.Reader) []ipRange {
 	var mu sync.Mutex
 	var allRanges []ipRange
 	var wg sync.WaitGroup
-	handler := func(start, end uint32, city, cc string, lat, lng float32, priority int) {
-		if lat == 0 && lng == 0 {
-			if city != "" {
-				if c, ok := e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
-					lat, lng = c[0], c[1]
-				}
-			}
-			if lat == 0 {
-				var record struct {
-					City struct {
-						Names map[string]string `maxminddb:"names"`
-					} `maxminddb:"city"`
-				}
-				ip := make(net.IP, 4)
-				binary.BigEndian.PutUint32(ip, start)
-				if err := geoReader.Lookup(ip, &record); err == nil {
-					cityName := record.City.Names["en"]
-					if c, ok := e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(cityName), strings.ToUpper(cc))]; ok {
-						lat, lng = c[0], c[1]
-						city = cityName
-					}
-				}
-			}
-		}
-		if cc != "" {
-			mu.Lock()
-			allRanges = append(allRanges, ipRange{Start: start, End: end, City: city, CC: cc, Lat: lat, Lng: lng, Priority: priority})
-			mu.Unlock()
-		}
-	}
+
 	rirNames := []string{"APNIC", "RIPE", "AFRINIC", "LACNIC", "ARIN"}
 	urls := map[string]string{
 		"APNIC":   "https://ftp.apnic.net/stats/apnic/delegated-apnic-latest",
@@ -995,40 +1011,82 @@ func (e *Engine) loadPrefixData() error {
 		"LACNIC":  "https://ftp.lacnic.net/pub/stats/lacnic/delegated-lacnic-latest",
 		"ARIN":    "https://ftp.arin.net/pub/stats/arin/delegated-arin-extended-latest",
 	}
+
 	for _, name := range rirNames {
 		wg.Add(1)
 		go func(n string) {
 			defer wg.Done()
-			r, err := utils.GetCachedReader(urls[n], true, "[RIR-"+n+"]")
-			if err != nil {
-				log.Printf("[RIR-%s] Error fetching data: %v", n, err)
-				return
-			}
-			defer r.Close()
-
-			scanner := bufio.NewScanner(r)
-			for scanner.Scan() {
-				parts := strings.Split(scanner.Text(), "|")
-				if len(parts) < 7 || parts[2] != "ipv4" {
-					continue
-				}
-				count, _ := strconv.ParseUint(parts[4], 10, 32)
-				startIP := net.ParseIP(parts[3]).To4()
-				if startIP != nil {
-					start := binary.BigEndian.Uint32(startIP)
-					// Priority based on mask size (shorter mask = lower priority)
-					p := 32
-					for c := uint32(count); c > 1; c >>= 1 {
-						p--
-					}
-					handler(start, start+uint32(count)-1, "", strings.ToUpper(parts[1]), 0, 0, p)
-				}
-			}
+			e.processRIRData(n, urls[n], geoReader, &mu, &allRanges)
 		}(name)
 	}
 	wg.Wait()
+	return allRanges
+}
 
-	// STAGE 1: Proper Flattening (Sweep-line)
+func (e *Engine) processRIRData(name, url string, geoReader *maxminddb.Reader, mu *sync.Mutex, allRanges *[]ipRange) {
+	r, err := utils.GetCachedReader(url, true, "[RIR-"+name+"]")
+	if err != nil {
+		log.Printf("[RIR-%s] Error fetching data: %v", name, err)
+		return
+	}
+	defer func() {
+		if err := r.Close(); err != nil {
+			log.Printf("Error closing RIR reader: %v", err)
+		}
+	}()
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), "|")
+		if len(parts) < 7 || parts[2] != "ipv4" {
+			continue
+		}
+		count, _ := strconv.ParseUint(parts[4], 10, 32)
+		startIP := net.ParseIP(parts[3]).To4()
+		if startIP != nil {
+			start := binary.BigEndian.Uint32(startIP)
+			p := 32
+			for c := uint32(count); c > 1; c >>= 1 {
+				p--
+			}
+			e.handleRIRRange(start, start+uint32(count)-1, strings.ToUpper(parts[1]), p, geoReader, mu, allRanges)
+		}
+	}
+}
+
+func (e *Engine) handleRIRRange(start, end uint32, cc string, priority int, geoReader *maxminddb.Reader, mu *sync.Mutex, allRanges *[]ipRange) {
+	var lat, lng float32
+	var city string
+
+	var record struct {
+		City struct {
+			Names map[string]string `maxminddb:"names"`
+		} `maxminddb:"city"`
+	}
+	ip := make(net.IP, 4)
+	binary.BigEndian.PutUint32(ip, start)
+	if err := geoReader.Lookup(ip, &record); err == nil {
+		cityName := record.City.Names["en"]
+		if c, ok := e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(cityName), strings.ToUpper(cc))]; ok {
+			lat, lng = c[0], c[1]
+			city = cityName
+		}
+	}
+
+	if cc != "" {
+		mu.Lock()
+		*allRanges = append(*allRanges, ipRange{Start: start, End: end, City: city, CC: cc, Lat: lat, Lng: lng, Priority: priority})
+		mu.Unlock()
+	}
+}
+
+type prefixSegment struct {
+	start, end uint32
+	r          *ipRange
+}
+
+func (e *Engine) flattenPrefixData(allRanges []ipRange) []prefixSegment {
+	// Proper Flattening (Sweep-line)
 	type event struct {
 		pos   uint32
 		isEnd bool
@@ -1036,10 +1094,11 @@ func (e *Engine) loadPrefixData() error {
 	}
 	events := make([]event, 0, len(allRanges)*2)
 	for i := range allRanges {
-		events = append(events, event{allRanges[i].Start, false, &allRanges[i]})
-		events = append(events, event{allRanges[i].End, true, &allRanges[i]})
+		events = append(events,
+			event{allRanges[i].Start, false, &allRanges[i]},
+			event{allRanges[i].End, true, &allRanges[i]},
+		)
 	}
-	allRanges = nil // Clear early to free memory
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].pos != events[j].pos {
 			return events[i].pos < events[j].pos
@@ -1047,10 +1106,7 @@ func (e *Engine) loadPrefixData() error {
 		return !events[i].isEnd
 	})
 
-	var segments []struct {
-		start, end uint32
-		r          *ipRange
-	}
+	var segments []prefixSegment
 	activeStacks := make([][]*ipRange, 161)
 	getBest := func() *ipRange {
 		for p := 160; p >= 0; p-- {
@@ -1066,10 +1122,7 @@ func (e *Engine) loadPrefixData() error {
 		pos := events[i].pos
 		best := getBest()
 		if hasActive && pos > lastPos {
-			segments = append(segments, struct {
-				start, end uint32
-				r          *ipRange
-			}{lastPos, pos - 1, best})
+			segments = append(segments, prefixSegment{lastPos, pos - 1, best})
 		}
 		for i < len(events) && events[i].pos == pos {
 			r := events[i].r
@@ -1089,9 +1142,11 @@ func (e *Engine) loadPrefixData() error {
 		hasActive = getBest() != nil
 		lastPos = pos
 	}
-	events = nil // Clear events slice as it is no longer needed
+	return segments
+}
 
-	// STAGE 2: Indexing
+func (e *Engine) indexPrefixData(segments []prefixSegment) {
+	// Indexing
 	locToIdx := make(map[string]int)
 	var locations []Location
 	var flatRanges []uint32
@@ -1109,17 +1164,6 @@ func (e *Engine) loadPrefixData() error {
 		flatRanges = append(flatRanges, seg.start, uint32(idx))
 	}
 	e.geo.prefixData = PrefixData{L: locations, R: flatRanges}
-	if err := os.MkdirAll("data", 0755); err != nil {
-		log.Printf("Warning: Failed to create data directory: %v", err)
-	}
-	if f, err := os.Create(cachePath); err == nil {
-		if err := json.NewEncoder(f).Encode(e.geo.prefixData); err != nil {
-			log.Printf("Warning: Failed to encode prefix cache: %v", err)
-		}
-		f.Close()
-	}
-	debug.FreeOSMemory()
-	return nil
 }
 
 // StartBufferLoop runs a background loop that periodically processes buffered BGP events.
@@ -1128,93 +1172,106 @@ func (e *Engine) loadPrefixData() error {
 func (e *Engine) StartBufferLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	for range ticker.C {
-		e.bufferMu.Lock()
-		var nextBatch []*QueuedPulse
-
-		// 1. Batch persist seen prefixes
-		if len(e.seenBuffer) > 0 && e.SeenDB != nil {
-			batch := make(map[string][]byte)
-			for _, p := range e.seenBuffer {
-				batch[p] = []byte{1}
-			}
-			e.seenBuffer = e.seenBuffer[:0]
-
-			// Execute write in a separate goroutine to avoid blocking the visual queue
-			go func(b map[string][]byte) {
-				if err := e.SeenDB.BatchInsertRaw(b); err != nil {
-					// Only log if it's not a "closing" error to reduce shutdown noise
-					if !strings.Contains(err.Error(), "blocked") && !strings.Contains(err.Error(), "closed") {
-						log.Printf("Warning: Failed to update seen database: %v", err)
-					}
-				}
-			}(batch)
-		}
-
-		// 2. Convert buffered city activity into discrete pulse events for each type
-		for key, d := range e.cityBuffer {
-			if d.With > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventWithdrawal, Count: d.With})
-			}
-			if d.Upd > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventUpdate, Count: d.Upd})
-			}
-			if d.New > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventNew, Count: d.New})
-			}
-			if d.Gossip > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventGossip, Count: d.Gossip})
-			}
-			// Reset and return to pool
-			*d = BufferedCity{}
-			e.cityBufferPool.Put(d)
-			delete(e.cityBuffer, key)
-		}
-		e.bufferMu.Unlock()
+		e.processSeenBuffer()
+		nextBatch := e.drainCityBuffer()
 
 		if len(nextBatch) == 0 {
 			continue
 		}
 
-		// Shuffle the batch so events from different geographic locations are interleaved
-		rand.Shuffle(len(nextBatch), func(i, j int) { nextBatch[i], nextBatch[j] = nextBatch[j], nextBatch[i] })
+		e.scheduleVisualPulses(nextBatch)
+	}
+}
 
-		// Spread the batch evenly across the next 500ms interval
-		spacing := 500 * time.Millisecond / time.Duration(len(nextBatch))
-		now := time.Now()
-		if e.nextPulseEmittedAt.Before(now) {
-			e.nextPulseEmittedAt = now
+func (e *Engine) processSeenBuffer() {
+	e.bufferMu.Lock()
+	defer e.bufferMu.Unlock()
+	// 1. Batch persist seen prefixes
+	if len(e.seenBuffer) > 0 && e.SeenDB != nil {
+		batch := make(map[string][]byte)
+		for _, p := range e.seenBuffer {
+			batch[p] = []byte{1}
 		}
+		e.seenBuffer = e.seenBuffer[:0]
 
-		e.queueMu.Lock()
-		// Cap the visual backlog to prevent memory exhaustion during massive BGP spikes
-		maxQueueSize := MaxVisualQueueSize
-		currentSize := len(e.visualQueue)
-
-		if currentSize < maxQueueSize {
-			if currentSize+len(nextBatch) > maxQueueSize {
-				log.Printf("Truncating batch of %d pulses to fit queue (Current: %d, Max: %d)", len(nextBatch), currentSize, maxQueueSize)
-				nextBatch = nextBatch[:maxQueueSize-currentSize]
-				if len(nextBatch) > 0 {
-					spacing = 500 * time.Millisecond / time.Duration(len(nextBatch))
+		// Execute write in a separate goroutine to avoid blocking the visual queue
+		go func(b map[string][]byte) {
+			if err := e.SeenDB.BatchInsertRaw(b); err != nil {
+				// Only log if it's not a "closing" error to reduce shutdown noise
+				if !strings.Contains(err.Error(), "blocked") && !strings.Contains(err.Error(), "closed") {
+					log.Printf("Warning: Failed to update seen database: %v", err)
 				}
 			}
+		}(batch)
+	}
+}
 
-			for i, p := range nextBatch {
-				// Schedule the pulse to be processed by the Update() loop at a specific time
-				p.ScheduledTime = e.nextPulseEmittedAt.Add(time.Duration(i) * spacing)
-				e.visualQueue = append(e.visualQueue, p)
+func (e *Engine) drainCityBuffer() []*QueuedPulse {
+	e.bufferMu.Lock()
+	defer e.bufferMu.Unlock()
+	var nextBatch []*QueuedPulse
+	// 2. Convert buffered city activity into discrete pulse events for each type
+	for key, d := range e.cityBuffer {
+		if d.With > 0 {
+			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventWithdrawal, Count: d.With})
+		}
+		if d.Upd > 0 {
+			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventUpdate, Count: d.Upd})
+		}
+		if d.New > 0 {
+			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventNew, Count: d.New})
+		}
+		if d.Gossip > 0 {
+			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventGossip, Count: d.Gossip})
+		}
+		// Reset and return to pool
+		*d = BufferedCity{}
+		e.cityBufferPool.Put(d)
+		delete(e.cityBuffer, key)
+	}
+	return nextBatch
+}
+
+func (e *Engine) scheduleVisualPulses(nextBatch []*QueuedPulse) {
+	// Shuffle the batch so events from different geographic locations are interleaved
+	rand.Shuffle(len(nextBatch), func(i, j int) { nextBatch[i], nextBatch[j] = nextBatch[j], nextBatch[i] })
+
+	// Spread the batch evenly across the next 500ms interval
+	spacing := 500 * time.Millisecond / time.Duration(len(nextBatch))
+	now := time.Now()
+	if e.nextPulseEmittedAt.Before(now) {
+		e.nextPulseEmittedAt = now
+	}
+
+	e.queueMu.Lock()
+	defer e.queueMu.Unlock()
+	// Cap the visual backlog to prevent memory exhaustion during massive BGP spikes
+	maxQueueSize := MaxVisualQueueSize
+	currentSize := len(e.visualQueue)
+
+	if currentSize < maxQueueSize {
+		if currentSize+len(nextBatch) > maxQueueSize {
+			log.Printf("Truncating batch of %d pulses to fit queue (Current: %d, Max: %d)", len(nextBatch), currentSize, maxQueueSize)
+			nextBatch = nextBatch[:maxQueueSize-currentSize]
+			if len(nextBatch) > 0 {
+				spacing = 500 * time.Millisecond / time.Duration(len(nextBatch))
 			}
-		} else {
-			log.Printf("Dropping batch of %d pulses (Queue size: %d)", len(nextBatch), len(e.visualQueue))
 		}
 
-		// Advance the next emission baseline, capping the visual backlog to 2 seconds
-		// to prevent the visualization from falling too far behind real-time spikes.
-		e.nextPulseEmittedAt = e.nextPulseEmittedAt.Add(500 * time.Millisecond)
-		if e.nextPulseEmittedAt.After(now.Add(2 * time.Second)) {
-			e.nextPulseEmittedAt = now.Add(2 * time.Second)
+		for i, p := range nextBatch {
+			// Schedule the pulse to be processed by the Update() loop at a specific time
+			p.ScheduledTime = e.nextPulseEmittedAt.Add(time.Duration(i) * spacing)
+			e.visualQueue = append(e.visualQueue, p)
 		}
-		e.queueMu.Unlock()
+	} else {
+		log.Printf("Dropping batch of %d pulses (Queue size: %d)", len(nextBatch), len(e.visualQueue))
+	}
+
+	// Advance the next emission baseline, capping the visual backlog to 2 seconds
+	// to prevent the visualization from falling too far behind real-time spikes.
+	e.nextPulseEmittedAt = e.nextPulseEmittedAt.Add(500 * time.Millisecond)
+	if e.nextPulseEmittedAt.After(now.Add(2 * time.Second)) {
+		e.nextPulseEmittedAt = now.Add(2 * time.Second)
 	}
 }
 
@@ -1279,13 +1336,11 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 	e.metricsMu.Unlock()
 }
 
-func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA) {
-	if len(rings) == 0 {
-		return
-	}
-	type point struct{ x, y float64 }
-	projectedRings := make([][]point, len(rings))
-	minY, maxY := float64(e.Height), 0.0
+type point struct{ x, y float64 }
+
+func (e *Engine) projectRings(rings [][][]float64) (projectedRings [][]point, minY, maxY float64) {
+	projectedRings = make([][]point, len(rings))
+	minY, maxY = float64(e.Height), 0.0
 	for i, ring := range rings {
 		projectedRings[i] = make([]point, 0, len(ring))
 		for _, p := range ring {
@@ -1302,6 +1357,10 @@ func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA)
 			}
 		}
 	}
+	return projectedRings, minY, maxY
+}
+
+func (e *Engine) scanlineFill(img *image.RGBA, projectedRings [][]point, minY, maxY float64, c color.RGBA) {
 	for y := int(minY); y <= int(maxY); y++ {
 		if y < 0 || y >= e.Height {
 			continue
@@ -1332,6 +1391,14 @@ func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA)
 			}
 		}
 	}
+}
+
+func (e *Engine) fillPolygon(img *image.RGBA, rings [][][]float64, c color.RGBA) {
+	if len(rings) == 0 {
+		return
+	}
+	projectedRings, minY, maxY := e.projectRings(rings)
+	e.scanlineFill(img, projectedRings, minY, maxY, c)
 }
 
 func (e *Engine) drawRingFast(img *image.RGBA, coords [][]float64, c color.RGBA) {

@@ -1,3 +1,4 @@
+// Package bgpengine provides the core logic for the BGP stream engine, including frame capture.
 package bgpengine
 
 import (
@@ -18,7 +19,7 @@ func (e *Engine) captureFrame(img *ebiten.Image, suffix string, timestamp time.T
 	}
 
 	// Create directory if it doesn't exist
-	if err := os.MkdirAll(e.FrameCaptureDir, 0755); err != nil {
+	if err := os.MkdirAll(e.FrameCaptureDir, 0o755); err != nil {
 		log.Printf("Error creating capture directory: %v", err)
 		return
 	}
@@ -27,10 +28,10 @@ func (e *Engine) captureFrame(img *ebiten.Image, suffix string, timestamp time.T
 	path := filepath.Join(e.FrameCaptureDir, filename)
 
 	// Clone the image data. ebiten.Image.SubImage is not enough as it's a view.
-	// We need to create a new ebiten.Image and draw the current image into it, 
+	// We need to create a new ebiten.Image and draw the current image into it,
 	// OR convert to a standard image.RGBA.
 	// Actually, converting to image.RGBA is better for saving to disk in a goroutine.
-	
+
 	bounds := img.Bounds()
 	rgba := image.NewRGBA(bounds)
 	img.ReadPixels(rgba.Pix)
@@ -41,7 +42,11 @@ func (e *Engine) captureFrame(img *ebiten.Image, suffix string, timestamp time.T
 			log.Printf("Error creating capture file: %v", err)
 			return
 		}
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				log.Printf("Error closing capture file: %v", err)
+			}
+		}()
 
 		if err := png.Encode(f, rgba); err != nil {
 			log.Printf("Error encoding capture: %v", err)

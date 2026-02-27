@@ -1,3 +1,4 @@
+// Package utils provides various utility functions and data structures for BGP stream processing.
 package utils
 
 import (
@@ -24,7 +25,11 @@ func (m *ASNMapping) Load() error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch ASN mapping: %v", err)
 	}
-	defer r.Close()
+	defer func() {
+		if err := r.Close(); err != nil {
+			log.Printf("Error closing ASN mapping reader: %v", err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {

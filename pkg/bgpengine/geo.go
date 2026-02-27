@@ -1,3 +1,4 @@
+// Package bgpengine provides the core logic for the BGP stream engine, including geographic services.
 package bgpengine
 
 import (
@@ -34,7 +35,7 @@ func NewGeoService(width, height int, scale float64) *GeoService {
 	}
 }
 
-func (g *GeoService) GetIPCoords(ip uint32) (float64, float64, string) {
+func (g *GeoService) GetIPCoords(ip uint32) (lat, lng float64, countryCode string) {
 	g.cacheMu.Lock()
 	if c, ok := g.prefixToCityCache[ip]; ok {
 		g.cacheMu.Unlock()
@@ -42,40 +43,51 @@ func (g *GeoService) GetIPCoords(ip uint32) (float64, float64, string) {
 	}
 	g.cacheMu.Unlock()
 
-	var lat, lng float64
-	var cc, city string
+	lat, lng, countryCode = g.resolveIP(ip)
 
-	// 1. Check CloudTrie first (highest precision for cloud IP blocks)
+	if lat == 0 && lng == 0 {
+		return 0, 0, ""
+	}
+
+	g.updateCityCache(ip, lat, lng, countryCode)
+
+	return lat, lng, countryCode
+}
+
+func (g *GeoService) resolveIP(ip uint32) (lat, lng float64, countryCode string) {
+	var city string
+
+	// 1. Check CloudTrie first
 	if g.cloudTrie != nil {
 		ipObj := make(net.IP, 4)
 		binary.BigEndian.PutUint32(ipObj, ip)
 		if loc, ok := g.cloudTrie.Lookup(ipObj); ok {
 			parts := strings.Split(loc, "|")
 			if len(parts) == 2 {
-				city, cc = parts[0], parts[1]
-				lat, lng, cc = g.ResolveCityToCoords(city, cc)
+				city, countryCode = parts[0], parts[1]
+				lat, lng, countryCode = g.ResolveCityToCoords(city, countryCode)
 			}
 		}
 	}
 
-	// 2. Fallback to generic GeoIP if not a cloud IP or cloud resolution failed
+	// 2. Fallback to generic GeoIP
 	if lat == 0 && lng == 0 {
 		loc := g.lookupIP(ip)
 		if loc != nil {
 			lat, _ = loc[0].(float64)
 			lng, _ = loc[1].(float64)
-			cc, _ = loc[2].(string)
+			countryCode, _ = loc[2].(string)
 			city, _ = loc[3].(string)
 
 			if lat == 0 && lng == 0 && city != "" {
-				lat, lng, cc = g.ResolveCityToCoords(city, cc)
+				lat, lng, countryCode = g.ResolveCityToCoords(city, countryCode)
 			}
 		}
 	}
 
 	// 3. Final Fallback: Country Hubs
-	if lat == 0 && lng == 0 && cc != "" {
-		hubs := g.countryHubs[cc]
+	if lat == 0 && lng == 0 && countryCode != "" {
+		hubs := g.countryHubs[countryCode]
 		if len(hubs) > 0 {
 			r := rand.Float64() * hubs[len(hubs)-1].CumulativeWeight
 			for _, h := range hubs {
@@ -86,12 +98,12 @@ func (g *GeoService) GetIPCoords(ip uint32) (float64, float64, string) {
 			}
 		}
 	}
+	return lat, lng, countryCode
+}
 
-	if lat == 0 && lng == 0 {
-		return 0, 0, ""
-	}
-
+func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc string) {
 	g.cacheMu.Lock()
+	defer g.cacheMu.Unlock()
 	if len(g.prefixToCityCache) > 100000 {
 		count := 0
 		for k := range g.prefixToCityCache {
@@ -103,12 +115,9 @@ func (g *GeoService) GetIPCoords(ip uint32) (float64, float64, string) {
 		}
 	}
 	g.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc}
-	g.cacheMu.Unlock()
-
-	return lat, lng, cc
 }
 
-func (g *GeoService) ResolveCityToCoords(city, cc string) (float64, float64, string) {
+func (g *GeoService) ResolveCityToCoords(city, cc string) (lat, lng float64, countryCode string) {
 	if c, ok := g.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
 		return float64(c[0]), float64(c[1]), cc
 	}

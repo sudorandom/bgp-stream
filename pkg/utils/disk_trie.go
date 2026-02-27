@@ -1,3 +1,4 @@
+// Package utils provides various utility functions and data structures for BGP stream processing.
 package utils
 
 import (
@@ -17,7 +18,7 @@ type DiskTrie struct {
 func OpenDiskTrie(path string) (*DiskTrie, error) {
 	opts := badger.DefaultOptions(path)
 	// Decrease logging verbosity
-	opts.Logger = nil 
+	opts.Logger = nil
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func (t *DiskTrie) Insert(ipNet *net.IPNet, value []byte) error {
 		return fmt.Errorf("only IPv4 supported")
 	}
 	ones, _ := ipNet.Mask.Size()
-	
+
 	// Key: IP (4 bytes) + Mask (1 byte)
 	key := make([]byte, 5)
 	copy(key, ip)
@@ -104,7 +105,7 @@ type lookupResult struct {
 }
 
 // Lookup returns the value and mask length associated with the longest prefix matching the IP.
-func (t *DiskTrie) Lookup(ip net.IP) ([]byte, int, error) {
+func (t *DiskTrie) Lookup(ip net.IP) (val []byte, maskLen int, err error) {
 	target := ip.To4()
 	if target == nil {
 		return nil, 0, fmt.Errorf("invalid IPv4")
@@ -119,41 +120,41 @@ func (t *DiskTrie) Lookup(ip net.IP) ([]byte, int, error) {
 		return res.val, res.maskLen, nil
 	}
 
-	var val []byte
+	var foundVal []byte
 	var foundMask int
-	err := t.db.View(func(txn *badger.Txn) error {
+	err = t.db.View(func(txn *badger.Txn) error {
 		// Key buffer to avoid allocations in the loop
 		key := make([]byte, 5)
-		for maskLen := 32; maskLen >= 0; maskLen-- {
+		for m := 32; m >= 0; m-- {
 			var mask uint32
-			if maskLen > 0 {
-				mask = uint32(0xFFFFFFFF) << (32 - maskLen)
+			if m > 0 {
+				mask = uint32(0xFFFFFFFF) << (32 - m)
 			} else {
 				mask = 0
 			}
 
 			prefixIP := targetInt & mask
 			binary.BigEndian.PutUint32(key, prefixIP)
-			key[4] = byte(maskLen)
+			key[4] = byte(m)
 
-			item, err := txn.Get(key)
-			if err == nil {
-				val, err = item.ValueCopy(nil)
-				foundMask = maskLen
-				return err
+			item, getErr := txn.Get(key)
+			if getErr == nil {
+				foundVal, getErr = item.ValueCopy(nil)
+				foundMask = m
+				return getErr
 			}
 		}
 		return nil
 	})
 
 	if err == nil {
-		if val == nil {
+		if foundVal == nil {
 			t.cache.Store(targetInt, nil)
 		} else {
-			t.cache.Store(targetInt, lookupResult{val: val, maskLen: foundMask})
+			t.cache.Store(targetInt, lookupResult{val: foundVal, maskLen: foundMask})
 		}
 	}
-	return val, foundMask, err
+	return foundVal, foundMask, err
 }
 
 func (t *DiskTrie) ForEach(fn func(k []byte, v []byte) error) error {

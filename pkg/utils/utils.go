@@ -1,3 +1,4 @@
+// Package utils provides various utility functions and data structures for BGP stream processing.
 package utils
 
 import (
@@ -36,7 +37,11 @@ func DownloadFile(url, path string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Error closing response body: %v", err)
+		}
+	}()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return ErrNotFound
@@ -51,14 +56,20 @@ func DownloadFile(url, path string) error {
 		return err
 	}
 	tmpName := tmpFile.Name()
-	defer os.Remove(tmpName) // Clean up if we fail
+	defer func() {
+		if err := os.Remove(tmpName); err != nil && !os.IsNotExist(err) {
+			log.Printf("Error removing temp file %s: %v", tmpName, err)
+		}
+	}() // Clean up if we fail
 
 	pw := &progressWriter{Writer: tmpFile, label: filepath.Base(path)}
 	if _, err := io.Copy(pw, resp.Body); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return err
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
 
 	// Atomic rename to final path
 	return os.Rename(tmpName, path)
@@ -70,11 +81,16 @@ func Exists(url string) bool {
 	if err != nil {
 		return false
 	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Error closing response body: %v", err)
+		}
+	}()
 	return resp.StatusCode == http.StatusOK
 }
 
 // GetCacheFileName returns the expected local filename for a given URL and logPrefix.
-func GetCacheFileName(url string, logPrefix string) string {
+func GetCacheFileName(url, logPrefix string) string {
 	urlParts := strings.Split(url, "/")
 	fileName := urlParts[len(urlParts)-1]
 
@@ -103,7 +119,7 @@ func FindCachedURL(urls []string, logPrefix string) (string, bool) {
 func GetCachedReader(url string, useCache bool, logPrefix string) (io.ReadCloser, error) {
 	if useCache {
 		cacheDir := "data/cache"
-		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create cache dir: %w", err)
 		}
 		fileName := GetCacheFileName(url, logPrefix)
@@ -130,7 +146,9 @@ func GetCachedReader(url string, useCache bool, logPrefix string) (io.ReadCloser
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Error closing response body: %v", err)
+		}
 		if resp.StatusCode == http.StatusNotFound {
 			return nil, ErrNotFound
 		}

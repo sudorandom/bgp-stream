@@ -1,3 +1,4 @@
+// Package main provides the entry point for the BGP Real-Time Map Viewer.
 package main
 
 import (
@@ -12,17 +13,17 @@ import (
 )
 
 var (
-	renderWidth  = flag.Int("width", 1920, "Internal rendering width")
-	renderHeight = flag.Int("height", 1080, "Internal rendering height")
-	renderScale  = flag.Float64("scale", 380.0, "Internal rendering scale")
-	windowWidth  = flag.Int("window-width", 0, "Initial window width (defaults to render width)")
-	windowHeight = flag.Int("window-height", 0, "Initial window height (defaults to render height)")
-	tpsFlag      = flag.Int("tps", 30, "Ticks per second (engine updates)")
-	audioFd      = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
+	renderWidth        = flag.Int("width", 1920, "Internal rendering width")
+	renderHeight       = flag.Int("height", 1080, "Internal rendering height")
+	renderScale        = flag.Float64("scale", 380.0, "Internal rendering scale")
+	windowWidth        = flag.Int("window-width", 0, "Initial window width (defaults to render width)")
+	windowHeight       = flag.Int("window-height", 0, "Initial window height (defaults to render height)")
+	tpsFlag            = flag.Int("tps", 30, "Ticks per second (engine updates)")
+	audioFd            = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
 	hideWindowControls = flag.Bool("hide-window-controls", false, "Whether to hide window decorations (title bar, etc.)")
-	floating     = flag.Bool("floating", false, "Whether to keep the window always on top")
-	captureInterval = flag.Duration("capture-interval", 0, "Interval to periodically capture high-quality frames (e.g., 1m, 1h). 0 to disable.")
-	captureDir      = flag.String("capture-dir", "captures", "Directory to store captured frames")
+	floating           = flag.Bool("floating", false, "Whether to keep the window always on top")
+	captureInterval    = flag.Duration("capture-interval", 0, "Interval to periodically capture high-quality frames (e.g., 1m, 1h). 0 to disable.")
+	captureDir         = flag.String("capture-dir", "captures", "Directory to store captured frames")
 )
 
 func main() {
@@ -77,7 +78,9 @@ func main() {
 			ap.Shutdown()
 		}
 		if engine.SeenDB != nil {
-			engine.SeenDB.Close()
+			if err := engine.SeenDB.Close(); err != nil {
+				log.Printf("Error closing database: %v", err)
+			}
 		}
 		os.Exit(0)
 	}()
@@ -103,6 +106,8 @@ func main() {
 	}
 
 	if engine.SeenDB != nil {
-		engine.SeenDB.Close()
+		if err := engine.SeenDB.Close(); err != nil {
+			log.Printf("Error closing database: %v", err)
+		}
 	}
 }

@@ -1,3 +1,4 @@
+// Package utils provides various utility functions and data structures for BGP stream processing.
 package utils
 
 import (
@@ -7,6 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -19,7 +21,7 @@ type CloudPrefix struct {
 	City    string // Optional: if already resolved (e.g. from Geofeed)
 }
 
-// AWS IP Ranges Format
+// AWSRanges represents the AWS IP Ranges Format
 type AWSRanges struct {
 	Prefixes []struct {
 		IPPrefix string `json:"ip_prefix"`
@@ -49,7 +51,7 @@ func ParseAWSRanges(r io.Reader) ([]CloudPrefix, error) {
 	return results, nil
 }
 
-// Google Cloud IP Ranges Format
+// GoogleRanges represents the Google Cloud IP Ranges Format
 type GoogleRanges struct {
 	Prefixes []struct {
 		IPv4Prefix string `json:"ipv4Prefix"`
@@ -82,7 +84,7 @@ func ParseGoogleRanges(r io.Reader) ([]CloudPrefix, error) {
 	return results, nil
 }
 
-// Azure IP Ranges Format (JSON)
+// AzureRanges represents the Azure IP Ranges Format (JSON)
 type AzureRanges struct {
 	Values []struct {
 		Name       string `json:"name"`
@@ -116,11 +118,11 @@ func ParseAzureRanges(r io.Reader) ([]CloudPrefix, error) {
 	return results, nil
 }
 
-// Azure IP Ranges Format (XML - Legacy)
+// AzureXMLRanges represents the Azure IP Ranges Format (XML - Legacy)
 type AzureXMLRanges struct {
 	Regions []struct {
 		Name     string `xml:"Name,attr"`
-		IpRanges []struct {
+		IPRanges []struct {
 			Subnet string `xml:"Subnet,attr"`
 		} `xml:"IpRange"`
 	} `xml:"Region"`
@@ -134,7 +136,7 @@ func ParseAzureXMLRanges(r io.Reader) ([]CloudPrefix, error) {
 
 	var results []CloudPrefix
 	for _, reg := range azure.Regions {
-		for _, ipr := range reg.IpRanges {
+		for _, ipr := range reg.IPRanges {
 			_, ipNet, err := net.ParseCIDR(ipr.Subnet)
 			if err != nil {
 				continue
@@ -149,7 +151,7 @@ func ParseAzureXMLRanges(r io.Reader) ([]CloudPrefix, error) {
 	return results, nil
 }
 
-// Oracle Cloud IP Ranges Format
+// OracleRanges represents the Oracle Cloud IP Ranges Format
 type OracleRanges struct {
 	Regions []struct {
 		Region string `json:"region"`
@@ -353,7 +355,11 @@ func FetchGoogleGeofeed() ([]CloudPrefix, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Error closing Google geofeed response body: %v", err)
+		}
+	}()
 
 	entries, err := ParseGeofeed(resp.Body)
 	if err != nil {

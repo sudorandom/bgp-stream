@@ -1,3 +1,4 @@
+// Package utils provides various utility functions and data structures for BGP stream processing.
 package utils
 
 import (
