@@ -502,9 +502,9 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 		gridFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.5}
 		top := &text.DrawOptions{}
 		// Align text to the left of the right margin with closer padding from the chart
-		labelX := chartX + chartW + 3 // Slightly reduced from 8
+		labelX := chartX + chartW + 8
 		if e.Width > 2000 {
-			labelX = chartX + chartW + 6
+			labelX = chartX + chartW + 16
 		}
 		top.GeoM.Translate(labelX, gy+y-(fontSize*0.3))
 		top.ColorScale.Scale(1, 1, 1, 0.6)
@@ -520,10 +520,48 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 	// Draw layers in reverse order of the sorted rows (least active first)
 	for i := len(rows) - 1; i >= 0; i-- {
 		r := rows[i]
+
+		// Skip layers that are entirely zero across the whole history
+		hasAnyActivity := false
+		for _, s := range e.history {
+			if r.accessor(s) > 0 {
+				hasAnyActivity = true
+				break
+			}
+		}
+		if !hasAnyActivity {
+			continue
+		}
+
 		numSteps := float64(len(e.history) - 2)
 		step := chartW / numSteps
 
 		for j := 0; j < len(e.history)-1; j++ {
+			// Optimization: Skip segments if there's no activity in a 10-second window around them.
+			// This makes the line "disappear" during inactive periods.
+			val1 := r.accessor(e.history[j])
+			val2 := r.accessor(e.history[j+1])
+			if val1 == 0 && val2 == 0 {
+				windowStart := j - 5
+				if windowStart < 0 {
+					windowStart = 0
+				}
+				windowEnd := j + 5
+				if windowEnd >= len(e.history) {
+					windowEnd = len(e.history) - 1
+				}
+				hasWindowActivity := false
+				for k := windowStart; k <= windowEnd; k++ {
+					if r.accessor(e.history[k]) > 0 {
+						hasWindowActivity = true
+						break
+					}
+				}
+				if !hasWindowActivity {
+					continue
+				}
+			}
+
 			x1 := (float64(j) - smoothOffset) * step
 			x2 := (float64(j+1) - smoothOffset) * step
 
