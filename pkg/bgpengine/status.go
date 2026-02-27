@@ -293,11 +293,11 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	// 3. Bottom Right: Legend & Trendlines
 	graphW, graphH := 300.0, 100.0
 	ratesW := 120.0
-	legendW, legendH := 260.0, 180.0
+	legendW, legendH := 260.0, 150.0
 	if e.Width > 2000 {
 		graphW, graphH = 600.0, 200.0
 		ratesW = 240.0
-		legendW, legendH = 520.0, 360.0
+		legendW, legendH = 520.0, 300.0
 	}
 
 	// Match heights
