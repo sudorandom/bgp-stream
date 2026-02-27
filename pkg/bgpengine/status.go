@@ -159,18 +159,18 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	}
 
 	// 4. Top Right: Now Playing
-	songX := float64(e.Width) - margin - (boxW * 1.6)
+	songX := float64(e.Width) - margin - (boxW * 1.0)
 	songYBase := margin + fontSize + 15
 
 	if e.CurrentSong != "" {
-		songBoxW := boxW * 1.6
+		songBoxW := boxW * 1.0
 		// Calculate height based on font size and whether there is an artist/extra
-		boxH_song := fontSize * 3.0
+		boxH_song := fontSize * 2.5
 		if e.CurrentArtist != "" {
-			boxH_song += fontSize * 1.5
+			boxH_song += fontSize * 1.2
 		}
 		if e.CurrentExtra != "" {
-			boxH_song += fontSize * 1.5
+			boxH_song += fontSize * 1.2
 		}
 
 		// Draw background and frame
@@ -184,7 +184,7 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		vector.FillRect(screen, float32(songX-10), float32(songYBase-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
 
 		songTitleOp := &text.DrawOptions{}
-		songTitleOp.GeoM.Translate(songX+5, songYBase-fontSize-5)
+		songTitleOp.GeoM.Translate(songX+10, songYBase-fontSize-5)
 		songTitleOp.ColorScale.Scale(1, 1, 1, 0.5)
 		text.Draw(screen, songTitle, titleFace, songTitleOp)
 
@@ -199,7 +199,7 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		// Helper for marquee drawing
 		drawMarquee := func(label string, f *text.GoTextFace, yOffset float64, alpha float32, sub bool, buffer **ebiten.Image) {
 			tw, _ := text.Measure(label, f, 0)
-			availW := songBoxW - 20
+			availW := songBoxW - 40
 
 			if tw > availW {
 				// Marquee effect
@@ -230,13 +230,13 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 				// Draw clipped result to screen
 				drawOp := &ebiten.DrawImageOptions{}
-				drawOp.GeoM.Translate(songX, songYBase+yOffset)
+				drawOp.GeoM.Translate(songX+10, songYBase+yOffset)
 				screen.DrawImage(*buffer, drawOp)
 			} else {
 				if sub {
-					e.drawGlitchTextSubtle(screen, label, f, songX, songYBase+yOffset, alpha, intensity, isGlitching)
+					e.drawGlitchTextSubtle(screen, label, f, songX+10, songYBase+yOffset, alpha, intensity, isGlitching)
 				} else {
-					e.drawGlitchTextAggressive(screen, label, f, songX, songYBase+yOffset, alpha, intensity, isGlitching)
+					e.drawGlitchTextAggressive(screen, label, f, songX+10, songYBase+yOffset, alpha, intensity, isGlitching)
 				}
 			}
 		}
@@ -245,11 +245,11 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		drawMarquee(e.CurrentSong, face, fontSize*0.2, 0.8, false, &e.songBuffer)
 
 		// Draw Artist Name
-		yOffset := fontSize * 1.3
+		yOffset := fontSize * 1.1
 		if e.CurrentArtist != "" {
 			artistFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.7}
 			drawMarquee(e.CurrentArtist, artistFace, yOffset, 0.5, true, &e.artistBuffer)
-			yOffset += fontSize * 1.3
+			yOffset += fontSize * 1.1
 		}
 
 		// Draw Extra (Source/License)
