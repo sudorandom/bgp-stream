@@ -15,6 +15,14 @@ import (
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
+type legendRow struct {
+	label    string
+	val      float64
+	col      color.RGBA
+	uiCol    color.RGBA
+	accessor func(s MetricSnapshot) int
+}
+
 func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	if e.fontSource == nil {
 		return
@@ -292,11 +300,9 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 
 	// 3. Bottom Right: Legend & Trendlines
 	graphW, graphH := 300.0, 100.0
-	ratesW := 120.0
 	legendW, legendH := 260.0, 150.0
 	if e.Width > 2000 {
 		graphW, graphH = 600.0, 200.0
-		ratesW = 240.0
 		legendW, legendH = 520.0, 300.0
 	}
 
@@ -310,7 +316,11 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	if e.Width > 2000 {
 		beaconW = 440.0
 	}
-	trendBoxW := graphW + ratesW
+	// The trend box width includes the graph and the right margin for labels
+	trendBoxW := graphW + 60.0
+	if e.Width > 2000 {
+		trendBoxW = graphW + 120.0
+	}
 	// Each box has a width: legendW, trendBoxW+20, beaconW
 	totalW := legendW + spacing + (trendBoxW + 20) + spacing + beaconW
 	baseX := float64(e.Width) - margin - totalW
@@ -320,9 +330,6 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	firehoseY := baseY
 	gx := baseX + legendW + spacing
 	gy := baseY
-
-	// Draw Trendlines Box
-	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH)
 
 	// Draw Beacon Analysis Box
 	beaconX := gx + trendBoxW + 20 + spacing // Gap between (gx-10+trendBoxW+20) and (beaconX-10) should be exactly spacing
@@ -367,30 +374,17 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		return float64(getValue(e.history[idx])) / 1.0
 	}
 
-	type row struct {
-		label string
-		val   float64
-		col   color.RGBA
-		uiCol color.RGBA
-	}
-
 	// Calculate interpolated rates based on what's currently at the right edge of the graph
-	rows := []row{
-		{"PROPAGATION", 0, ColorGossip, ColorGossipUI},
-		{"PATH CHANGE", 0, ColorUpd, ColorUpdUI},
-		{"WITHDRAWAL", 0, ColorWith, ColorWithUI},
-		{"NEW PATHS", 0, ColorNew, ColorNewUI},
-	}
-	accessors := []func(s MetricSnapshot) int{
-		func(s MetricSnapshot) int { return s.Gossip },
-		func(s MetricSnapshot) int { return s.Upd },
-		func(s MetricSnapshot) int { return s.With },
-		func(s MetricSnapshot) int { return s.New },
+	rows := []legendRow{
+		{"PROPAGATION", 0, ColorGossip, ColorGossipUI, func(s MetricSnapshot) int { return s.Gossip }},
+		{"PATH CHANGE", 0, ColorUpd, ColorUpdUI, func(s MetricSnapshot) int { return s.Upd }},
+		{"WITHDRAWAL", 0, ColorWith, ColorWithUI, func(s MetricSnapshot) int { return s.With }},
+		{"NEW PATHS", 0, ColorNew, ColorNewUI, func(s MetricSnapshot) int { return s.New }},
 	}
 	for i := range rows {
 		// Use the stable rate from the previous snapshot (1s ago)
 		// to prevent the numbers from spinning/flickering.
-		rows[i].val = getRate(hLen-2, accessors[i])
+		rows[i].val = getRate(hLen-2, rows[i].accessor)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].val > rows[j].val })
 
@@ -418,25 +412,17 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 		top.GeoM.Translate(firehoseX+swatchSize+15, y)
 		top.ColorScale.Scale(tr, tg, tb, 0.9)
 		text.Draw(screen, r.label, face, top)
-
-		// Draw the numerical rate on the right side of the trendlines box
-		rateStr := fmt.Sprintf("%.0f ops/s", r.val)
-		if r.val < 10 {
-			rateStr = fmt.Sprintf("%.1f ops/s", r.val)
-		}
-		rateOp := &text.DrawOptions{}
-		// Place rate to the right of the graph area
-		rateOp.GeoM.Translate(gx+graphW+15, y)
-		rateOp.ColorScale.Scale(tr, tg, tb, 0.9)
-		text.Draw(screen, rateStr, face, rateOp)
 	}
+
+	// Draw Trendlines Box
+	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH, rows)
 }
 
-func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64) {
+func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64, rows []legendRow) {
 	vector.FillRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	trendTitle := "ACTIVITY TREND (1m)"
+	trendTitle := "ACTIVITY TREND (last minute)"
 	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 	// Draw subtle hacker-green accent
@@ -483,51 +469,86 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 		}
 	}
 
+	// Layout constants
+	titlePadding := 15.0 // Extra gap from the title
+	if e.Width > 2000 {
+		titlePadding = 30.0
+	}
+	chartX := gx
+	chartW := graphW + 30.0 // Slightly reduced from 35
+	if e.Width > 2000 {
+		chartW = graphW + 60.0
+	}
+	chartH := graphH - titlePadding // Deduct padding from height to keep within box
+
+	// Draw logarithmic grid lines (behind the trend lines)
+	for _, val := range []int{1, 10, 100, 1000, 10000, 100000} {
+		lVal := logVal(val)
+		if lVal > globalMaxLog+0.1 {
+			break
+		}
+		// Round to nearest pixel to prevent shimmering during resize
+		y := math.Round(titlePadding + chartH - (lVal/globalMaxLog)*chartH)
+		// Darker, thicker, and more stable grid lines
+		vector.StrokeLine(screen, float32(chartX), float32(gy+y), float32(gx+chartW), float32(gy+y), 2.0, color.RGBA{40, 40, 40, 255}, true)
+
+		// Draw labels on the right
+		labelStr := fmt.Sprintf("%d", val)
+		if val >= 1000000 {
+			labelStr = fmt.Sprintf("%dm", val/1000000)
+		} else if val >= 1000 {
+			labelStr = fmt.Sprintf("%dk", val/1000)
+		}
+		gridFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.5}
+		top := &text.DrawOptions{}
+		// Align text to the left of the right margin with closer padding from the chart
+		labelX := chartX + chartW + 3 // Slightly reduced from 8
+		if e.Width > 2000 {
+			labelX = chartX + chartW + 6
+		}
+		top.GeoM.Translate(labelX, gy+y-(fontSize*0.3))
+		top.ColorScale.Scale(1, 1, 1, 0.6)
+		text.Draw(screen, labelStr, gridFace, top)
+	}
+
 	// Create a temporary image for clipping
-	trendImg := ebiten.NewImage(int(graphW), int(graphH+10))
+	trendImg := ebiten.NewImage(int(chartW), int(chartH+10))
 
-	drawLayer := func(getValue func(s MetricSnapshot) int, col color.RGBA) {
+	// Draw layers in reverse order of the sorted rows (least active first)
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
 		numSteps := float64(len(e.history) - 2)
-		step := graphW / numSteps
+		step := chartW / numSteps
 
-		for i := 0; i < len(e.history)-1; i++ {
-			x1 := (float64(i) - smoothOffset) * step
-			x2 := (float64(i+1) - smoothOffset) * step
+		for j := 0; j < len(e.history)-1; j++ {
+			x1 := (float64(j) - smoothOffset) * step
+			x2 := (float64(j+1) - smoothOffset) * step
 
-			// Calculate alpha based on position to create a fade-out on the left
-			// Fade starts at 20% of the graph width and reaches 0 at the far left
+			// Fade-out on the left
 			alpha := 1.0
-			fadeWidth := graphW * 0.2
+			fadeWidth := chartW * 0.1
 			if x1 < fadeWidth {
 				alpha = x1 / fadeWidth
-				if alpha < 0 {
-					alpha = 0
-				}
+			}
+			if alpha < 0 {
+				alpha = 0
 			}
 
 			// Shared logarithmic scale
-			y1 := graphH - (logVal(getValue(e.history[i]))/globalMaxLog)*graphH
-			y2 := graphH - (logVal(getValue(e.history[i+1]))/globalMaxLog)*graphH
+			y1 := chartH - (logVal(r.accessor(e.history[j]))/globalMaxLog)*chartH
+			y2 := chartH - (logVal(r.accessor(e.history[j+1]))/globalMaxLog)*chartH
 
-			// Manually premultiply the color components to ensure a true fade-out
-			// This prevents the lines from appearing "white" as they fade.
-			c := color.RGBA{
-				R: uint8(float64(col.R) * alpha),
-				G: uint8(float64(col.G) * alpha),
-				B: uint8(float64(col.B) * alpha),
-				A: uint8(float64(col.A) * alpha),
-			}
-			vector.StrokeLine(trendImg, float32(x1), float32(y1), float32(x2), float32(y2), 2, c, false)
+			// Restore vibrant map colors with stable opacity
+			c := r.col
+			c.A = uint8(255 * alpha * 0.8)
+
+			vector.StrokeLine(trendImg, float32(x1), float32(y1), float32(x2), float32(y2), 3.0, c, true)
 		}
 	}
-	drawLayer(func(s MetricSnapshot) int { return s.Gossip }, ColorGossipUI)
-	drawLayer(func(s MetricSnapshot) int { return s.New }, ColorNewUI)
-	drawLayer(func(s MetricSnapshot) int { return s.Upd }, ColorUpdUI)
-	drawLayer(func(s MetricSnapshot) int { return s.With }, ColorWithUI)
 
 	// Draw the clipped trend image back to the screen
 	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(gx, gy)
+	op.GeoM.Translate(chartX, gy+titlePadding)
 	screen.DrawImage(trendImg, op)
 }
 
