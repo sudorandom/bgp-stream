@@ -511,8 +511,11 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 		text.Draw(screen, labelStr, gridFace, top)
 	}
 
-	// Create a temporary image for clipping
-	trendImg := ebiten.NewImage(int(chartW), int(chartH+10))
+	// Use persistent buffer for trendlines to avoid per-frame allocations
+	if e.trendLinesBuffer == nil || e.trendLinesBuffer.Bounds().Dx() != int(chartW) || e.trendLinesBuffer.Bounds().Dy() != int(chartH+10) {
+		e.trendLinesBuffer = ebiten.NewImage(int(chartW), int(chartH+10))
+	}
+	e.trendLinesBuffer.Clear()
 
 	// Draw layers in reverse order of the sorted rows (least active first)
 	for i := len(rows) - 1; i >= 0; i-- {
@@ -542,14 +545,14 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 			c := r.col
 			c.A = uint8(255 * alpha * 0.8)
 
-			vector.StrokeLine(trendImg, float32(x1), float32(y1), float32(x2), float32(y2), 3.0, c, true)
+			vector.StrokeLine(e.trendLinesBuffer, float32(x1), float32(y1), float32(x2), float32(y2), 4.0, c, true)
 		}
 	}
 
 	// Draw the clipped trend image back to the screen
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(chartX, gy+titlePadding)
-	screen.DrawImage(trendImg, op)
+	screen.DrawImage(e.trendLinesBuffer, op)
 }
 
 func (e *Engine) StartMetricsLoop() {

@@ -171,8 +171,9 @@ type Engine struct {
 	songBuffer    *ebiten.Image
 	artistBuffer  *ebiten.Image
 	extraBuffer   *ebiten.Image
-	hubsBuffer    *ebiten.Image
-	impactBuffer  *ebiten.Image
+	hubsBuffer       *ebiten.Image
+	impactBuffer     *ebiten.Image
+	trendLinesBuffer *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
 	hubChangedAt      map[string]time.Time
