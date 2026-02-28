@@ -211,7 +211,6 @@ type Engine struct {
 	drawOp                                      *ebiten.DrawImageOptions
 	textOp                                      *text.DrawOptions
 	legendRows                                  []legendRow
-	vectorPath                                  vector.Path
 	vectorDrawPathOp                            vector.DrawPathOptions
 	vectorFillOp                                vector.FillOptions
 	vectorStrokeOp                              vector.StrokeOptions
