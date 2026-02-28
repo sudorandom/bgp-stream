@@ -2,8 +2,8 @@ package bgpengine
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -274,10 +274,21 @@ func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals
 	}
 	if len(data.Path) > 0 {
 		ctx.PathLen = len(data.Path)
-		ctx.PathStr = fmt.Sprintf("%v", data.Path)
+		// data.Path is []json.RawMessage, avoiding fmt.Sprintf reflection on byte slices
+		var pathBuilder strings.Builder
+		for i, p := range data.Path {
+			if i > 0 {
+				pathBuilder.WriteByte(',')
+			}
+			pathBuilder.Write(p)
+		}
+		ctx.PathStr = pathBuilder.String()
 	}
 	if len(data.Community) > 0 {
-		ctx.CommStr = fmt.Sprintf("%v", data.Community)
+		// data.Community is [][]interface{}, we should just marshal it back
+		// or avoid fmt.Sprintf. Wait, we can just use json.Marshal
+		commBytes, _ := json.Marshal(data.Community)
+		ctx.CommStr = string(commBytes)
 	}
 
 	if len(data.Withdrawals) > 0 {
@@ -518,10 +529,8 @@ func (p *BGPProcessor) evaluatePrefixState(prefix string, state *PrefixState, no
 	}
 
 	if classified {
-		p.mu.Lock()
 		p.level2Stats[eventType]++
 		p.totalLevel2Events++
-		p.mu.Unlock()
 		// Reset state so we don't count it again immediately
 		delete(p.prefixStates, prefix)
 	}
