@@ -279,9 +279,12 @@ func main() {
 
 	c, _, err := websocket.DefaultDialer.Dial(u, nil)
 	if err != nil {
-		log.Fatal("dial:", err)
+		log.Printf("dial: %v", err)
+		return
 	}
-	defer c.Close()
+	defer func() {
+		_ = c.Close()
+	}()
 
 	stats := &Stats{
 		Peers:         make(map[string]int),
@@ -315,7 +318,8 @@ func main() {
 	log.Printf("Subscribing to: %s", *prefix)
 	err = c.WriteMessage(websocket.TextMessage, subBytes)
 	if err != nil {
-		log.Fatal("subscribe error:", err)
+		log.Printf("subscribe error: %v", err)
+		return
 	}
 
 	ticker := time.NewTicker(time.Second)
