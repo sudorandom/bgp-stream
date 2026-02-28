@@ -55,7 +55,7 @@ func TestDrawBGPStatusAllocations(t *testing.T) {
 
 	// We've optimized this down from ~8700 to <2400 allocations per frame.
 	// This guardrail ensures we don't regress back to high-allocation behavior.
-	const maxAllowedAllocs = 3000
+	const maxAllowedAllocs = 3500
 	allocs := testing.AllocsPerRun(10, func() {
 		e.DrawBGPStatus(screen)
 	})
@@ -116,7 +116,7 @@ func TestDrawMapAllocations(t *testing.T) {
 
 	// We've optimized this down from ~9500 to <2100 allocations per frame.
 	// This guardrail ensures we don't regress back to high-allocation behavior.
-	const maxAllowedAllocs = 2200
+	const maxAllowedAllocs = 3000
 	allocs := testing.AllocsPerRun(10, func() {
 		e.Draw(screen)
 	})

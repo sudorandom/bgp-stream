@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1081,7 +1082,9 @@ func (e *Engine) drawLevel2Metrics(screen *ebiten.Image, x, y, w, h, fontSize fl
 		e.textOp.ColorScale.Scale(1, 1, 1, 0.9)
 		text.Draw(screen, entry.name, e.subFace, e.textOp)
 
-		valStr := fmt.Sprintf("%d (%.1f%%)", entry.count, percentage)
+		// Manual string formatting to avoid fmt.Sprintf allocations
+		percentInt := int(percentage * 10)
+		valStr := strconv.Itoa(entry.count) + " (" + strconv.Itoa(percentInt/10) + "." + strconv.Itoa(percentInt%10) + "%)"
 		valW, _ := text.Measure(valStr, e.subMonoFace, 0)
 
 		e.textOp.GeoM.Reset()

@@ -62,6 +62,18 @@ type ChurnStats struct {
 	LastPathLen       int
 }
 
+type MessageContext struct {
+	IsWithdrawal bool
+	NumPrefixes  int
+	PathStr      string
+	CommStr      string
+	NextHop      string
+	Aggregator   string
+	PathLen      int
+	Peer         string
+	Now          time.Time
+}
+
 type PrefixState struct {
 	Announcements int
 	Withdrawals   int
@@ -255,12 +267,33 @@ func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals
 	p.handleWithdrawals(data.Withdrawals, originASN, now, pendingWithdrawals)
 	p.handleAnnouncements(data.Announcements, originASN, now, pendingWithdrawals)
 
-	for _, prefix := range data.Withdrawals {
-		p.classifyEvent(prefix, data)
+	ctx := &MessageContext{
+		Peer:       data.Peer,
+		Aggregator: data.Aggregator,
+		Now:        now,
 	}
+	if len(data.Path) > 0 {
+		ctx.PathLen = len(data.Path)
+		ctx.PathStr = fmt.Sprintf("%v", data.Path)
+	}
+	if len(data.Community) > 0 {
+		ctx.CommStr = fmt.Sprintf("%v", data.Community)
+	}
+
+	if len(data.Withdrawals) > 0 {
+		ctx.IsWithdrawal = true
+		ctx.NumPrefixes = len(data.Withdrawals)
+		for _, prefix := range data.Withdrawals {
+			p.classifyEvent(prefix, ctx)
+		}
+	}
+
+	ctx.IsWithdrawal = false
 	for _, ann := range data.Announcements {
+		ctx.NumPrefixes = len(ann.Prefixes)
+		ctx.NextHop = ann.NextHop
 		for _, prefix := range ann.Prefixes {
-			p.classifyEvent(prefix, data)
+			p.classifyEvent(prefix, ctx)
 		}
 	}
 }
@@ -371,67 +404,68 @@ func (p *BGPProcessor) handleNewOrUpdate(prefix string, ip, originASN uint32, no
 	}
 }
 
-func (p *BGPProcessor) classifyEvent(prefix string, data *RISMessageData) {
+func (p *BGPProcessor) classifyEvent(prefix string, ctx *MessageContext) {
 	state, ok := p.prefixStates[prefix]
 	if !ok {
 		state = &PrefixState{
 			PeerChurn:     make(map[string]*ChurnStats),
 			PeerLastAttrs: make(map[string]LastAttrs),
-			StartTime:     time.Now(),
+			StartTime:     ctx.Now,
 		}
 		p.prefixStates[prefix] = state
 	}
 
 	state.TotalMessages++
-	peer := data.Peer
 
-	if len(data.Withdrawals) > 0 {
-		state.Withdrawals += len(data.Withdrawals)
+	if ctx.IsWithdrawal {
+		state.Withdrawals += ctx.NumPrefixes
+	} else {
+		p.updateAnnouncementStats(state, ctx)
 	}
 
-	if len(data.Announcements) > 0 {
-		state.Announcements += len(data.Announcements)
+	p.evaluatePrefixState(prefix, state, ctx.Now)
+}
 
-		pathStr := fmt.Sprintf("%v", data.Path)
-		commStr := fmt.Sprintf("%v", data.Community)
-		nextHop := data.Announcements[0].NextHop
-		agg := data.Aggregator
-		pathLen := len(data.Path)
+func (p *BGPProcessor) updateAnnouncementStats(state *PrefixState, ctx *MessageContext) {
+	state.Announcements += ctx.NumPrefixes
 
-		if last, ok := state.PeerLastAttrs[peer]; ok {
-			churn, ok := state.PeerChurn[peer]
-			if !ok {
-				churn = &ChurnStats{}
-				state.PeerChurn[peer] = churn
-			}
+	peer := ctx.Peer
 
-			if pathStr != last.Path {
-				churn.PathChanges++
-			}
-			if commStr != last.Communities {
-				churn.CommunityChanges++
-			}
-			if nextHop != last.NextHop {
-				churn.NextHopChanges++
-			}
-			if agg != last.Aggregator {
-				churn.AggregatorChanges++
-			}
-			if pathLen != churn.LastPathLen && churn.LastPathLen != 0 {
-				churn.PathLengthChanges++
-			}
-			churn.LastPathLen = pathLen
+	if last, ok := state.PeerLastAttrs[peer]; ok {
+		churn, ok := state.PeerChurn[peer]
+		if !ok {
+			churn = &ChurnStats{}
+			state.PeerChurn[peer] = churn
 		}
 
-		state.PeerLastAttrs[peer] = LastAttrs{
-			Path:        pathStr,
-			Communities: commStr,
-			NextHop:     nextHop,
-			Aggregator:  agg,
+		if ctx.PathStr != last.Path {
+			churn.PathChanges++
 		}
+		if ctx.CommStr != last.Communities {
+			churn.CommunityChanges++
+		}
+		if ctx.NextHop != last.NextHop {
+			churn.NextHopChanges++
+		}
+		if ctx.Aggregator != last.Aggregator {
+			churn.AggregatorChanges++
+		}
+		if ctx.PathLen != churn.LastPathLen && churn.LastPathLen != 0 {
+			churn.PathLengthChanges++
+		}
+		churn.LastPathLen = ctx.PathLen
 	}
 
-	elapsed := time.Since(state.StartTime).Seconds()
+	state.PeerLastAttrs[peer] = LastAttrs{
+		Path:        ctx.PathStr,
+		Communities: ctx.CommStr,
+		NextHop:     ctx.NextHop,
+		Aggregator:  ctx.Aggregator,
+	}
+}
+
+func (p *BGPProcessor) evaluatePrefixState(prefix string, state *PrefixState, now time.Time) {
+	elapsed := now.Sub(state.StartTime).Seconds()
 	if elapsed <= 0 {
 		elapsed = 1
 	}
@@ -460,34 +494,40 @@ func (p *BGPProcessor) classifyEvent(prefix string, data *RISMessageData) {
 			uniqueHops[attr.NextHop] = true
 		}
 	}
-	if len(uniqueHops) > 5 && msgRate < 1.0 {
-		p.level2Stats[Level2Anycast]++
+
+	var eventType Level2EventType
+	switch {
+	case len(uniqueHops) > 5 && msgRate < 1.0:
+		eventType = Level2Anycast
 		classified = true
-	} else if totalAgg > 10 && float64(totalAgg)/elapsed > 0.05 {
-		p.level2Stats[Level2AggFlap]++
+	case totalAgg > 10 && float64(totalAgg)/elapsed > 0.05:
+		eventType = Level2AggFlap
 		classified = true
-	} else if totalLen > 10 && float64(totalLen)/elapsed > 0.05 {
-		p.level2Stats[Level2PathLengthOscillation]++
+	case totalLen > 10 && float64(totalLen)/elapsed > 0.05:
+		eventType = Level2PathLengthOscillation
 		classified = true
-	} else if state.Withdrawals > 5 && float64(state.Announcements)/float64(state.Withdrawals) < 2.5 {
-		p.level2Stats[Level2LinkFlap]++
+	case state.Withdrawals > 5 && float64(state.Announcements)/float64(state.Withdrawals) < 2.5:
+		eventType = Level2LinkFlap
 		classified = true
-	} else if state.Announcements > 50 && state.Withdrawals < (state.Announcements/10) && totalPath > state.Announcements/2 {
-		p.level2Stats[Level2PathHunting]++
+	case state.Announcements > 50 && state.Withdrawals < (state.Announcements/10) && totalPath > state.Announcements/2:
+		eventType = Level2PathHunting
 		classified = true
-	} else if msgRate > 2.0 && state.TotalMessages > 10 {
-		p.level2Stats[Level2Babbling]++
+	case msgRate > 2.0 && state.TotalMessages > 10:
+		eventType = Level2Babbling
 		classified = true
 	}
 
 	if classified {
+		p.mu.Lock()
+		p.level2Stats[eventType]++
 		p.totalLevel2Events++
+		p.mu.Unlock()
 		// Reset state so we don't count it again immediately
 		delete(p.prefixStates, prefix)
 	}
 }
 
-func (p *BGPProcessor) GetLevel2Stats() (map[Level2EventType]int, int) {
+func (p *BGPProcessor) GetLevel2Stats() (stats map[Level2EventType]int, totalEvents int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
