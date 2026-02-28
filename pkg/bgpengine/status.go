@@ -16,6 +16,27 @@ import (
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
+var (
+	trendLineImg   *ebiten.Image
+	trendCircleImg *ebiten.Image
+)
+
+func init() {
+	trendLineImg = ebiten.NewImage(1, 1)
+	trendLineImg.Fill(color.White)
+
+	const radius = 3
+	const diameter = radius * 2
+	trendCircleImg = ebiten.NewImage(diameter, diameter)
+	var path vector.Path
+	path.Arc(float32(radius), float32(radius), float32(radius), 0, 2*math.Pi, vector.Clockwise)
+
+	var drawOp vector.DrawPathOptions
+	var fillOp vector.FillOptions
+	drawOp.ColorScale.ScaleWithColor(color.White)
+	vector.FillPath(trendCircleImg, &path, &fillOp, &drawOp)
+}
+
 type legendRow struct {
 	label    string
 	val      float64
@@ -511,16 +532,19 @@ func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64, rows []le
 			continue
 		}
 
-		var path vector.Path
-		started := false
+		c := r.col
+		c.A = 255 // Draw opaque into buffer to avoid blending artifacts
+
+		// Reuse engine's internal options objects instead of local
+		// scope variables which sometimes trigger escape analysis limits
+		e.drawOp.Blend = ebiten.BlendSourceOver
+
+		// Pre-compute scale for circles outside loop
+		circleRadius := 3.0
+		jointScale := 1.5 / circleRadius
 
 		for j := 0; j < hLen-1; j++ {
 			if !e.hasRecentActivity(r, j) {
-				if started {
-					e.strokeTrendPath(&path, r.col)
-					path = vector.Path{}
-					started = false
-				}
 				continue
 			}
 
@@ -529,25 +553,30 @@ func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64, rows []le
 			y1 := chartH - (e.logVal(r.accessor(e.history[j]))/globalMaxLog)*chartH
 			y2 := chartH - (e.logVal(r.accessor(e.history[j+1]))/globalMaxLog)*chartH
 
-			if !started {
-				path.MoveTo(float32(x1), float32(y1))
-				started = true
-			}
-			path.LineTo(float32(x2), float32(y2))
-		}
+			dx := x2 - x1
+			dy := y2 - y1
+			length := math.Hypot(dx, dy)
+			angle := math.Atan2(dy, dx)
+			thickness := 4.0
 
-		if started {
-			e.strokeTrendPath(&path, r.col)
+			e.drawOp.GeoM.Reset()
+			e.drawOp.GeoM.Translate(0, -0.5)
+			e.drawOp.GeoM.Scale(length, thickness)
+			e.drawOp.GeoM.Rotate(angle)
+			e.drawOp.GeoM.Translate(x1, y1)
+			e.drawOp.ColorScale.Reset()
+			e.drawOp.ColorScale.ScaleWithColor(c)
+			e.trendLinesBuffer.DrawImage(trendLineImg, e.drawOp)
+
+			e.drawOp.GeoM.Reset()
+			e.drawOp.GeoM.Translate(-circleRadius, -circleRadius)
+			e.drawOp.GeoM.Scale(jointScale, jointScale)
+			e.drawOp.GeoM.Translate(x2, y2)
+			e.drawOp.ColorScale.Reset()
+			e.drawOp.ColorScale.ScaleWithColor(c)
+			e.trendLinesBuffer.DrawImage(trendCircleImg, e.drawOp)
 		}
 	}
-}
-
-func (e *Engine) strokeTrendPath(path *vector.Path, c color.RGBA) {
-	c.A = 255 // Draw opaque into buffer to avoid blending artifacts
-	e.vectorDrawPathOp.ColorScale.Reset()
-	e.vectorDrawPathOp.ColorScale.ScaleWithColor(c)
-	e.vectorDrawPathOp.Blend = ebiten.BlendSourceOver
-	vector.StrokePath(e.trendLinesBuffer, path, &e.vectorStrokeOp, &e.vectorDrawPathOp)
 }
 
 func (e *Engine) hasActivity(r legendRow) bool {
