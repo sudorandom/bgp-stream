@@ -28,6 +28,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/oschwald/maxminddb-golang"
 	geojson "github.com/paulmach/go.geojson"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
@@ -141,6 +142,8 @@ type Engine struct {
 
 	bgImage    *ebiten.Image
 	pulseImage *ebiten.Image
+	whitePixel *ebiten.Image
+	fadeMask   *ebiten.Image
 	fontSource *text.GoTextFaceSource
 	monoSource *text.GoTextFaceSource
 
@@ -193,15 +196,32 @@ type Engine struct {
 
 	asnMapping *utils.ASNMapping
 
+	MinimalUI           bool
+	minimalUIKeyPressed bool
+
 	FrameCaptureInterval time.Duration
 	FrameCaptureDir      string
 	lastFrameCapturedAt  time.Time
 	mapImage             *ebiten.Image
+
+	// Reusable rendering resources
+	face, monoFace, titleFace, titleMonoFace    *text.GoTextFace
+	subFace, subMonoFace, extraFace, artistFace *text.GoTextFace
+	titleFace09, titleFace05                    *text.GoTextFace
+	drawOp                                      *ebiten.DrawImageOptions
+	textOp                                      *text.DrawOptions
+	legendRows                                  []legendRow
+	vectorDrawPathOp                            vector.DrawPathOptions
+	vectorFillOp                                vector.FillOptions
+	vectorStrokeOp                              vector.StrokeOptions
 }
 
 type VisualHub struct {
 	CC          string
+	CountryStr  string
 	Rate        float64
+	RateStr     string
+	RateWidth   float64
 	DisplayY    float64
 	TargetY     float64
 	Alpha       float32
@@ -213,7 +233,11 @@ type VisualImpact struct {
 	Prefix      string
 	ASN         uint32
 	NetworkName string
+	asnStr      string
+	asnLines    []string
 	Count       float64
+	RateStr     string
+	RateWidth   float64
 	DisplayY    float64
 	TargetY     float64
 	Alpha       float32
@@ -261,6 +285,45 @@ func NewEngine(width, height int, scale float64) *Engine {
 		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 20s = 20 mins
 		VisualImpact:        make(map[string]*VisualImpact),
 		lastFrameCapturedAt: time.Now(),
+		drawOp:              &ebiten.DrawImageOptions{},
+		textOp:              &text.DrawOptions{},
+		vectorDrawPathOp:    vector.DrawPathOptions{AntiAlias: true},
+		vectorStrokeOp:      vector.StrokeOptions{Width: 3, LineJoin: vector.LineJoinBevel, LineCap: vector.LineCapButt},
+	}
+
+	e.whitePixel = ebiten.NewImage(1, 1)
+	e.whitePixel.Fill(color.White)
+
+	e.fadeMask = ebiten.NewImage(256, 1)
+	pix := make([]byte, 256*4)
+	for i := 0; i < 256; i++ {
+		pix[i*4] = 255
+		pix[i*4+1] = 255
+		pix[i*4+2] = 255
+		pix[i*4+3] = uint8(i)
+	}
+	e.fadeMask.WritePixels(pix)
+
+	fontSize := 18.0
+	if width > 2000 {
+		fontSize = 36.0
+	}
+	e.face = &text.GoTextFace{Source: s, Size: fontSize}
+	e.monoFace = &text.GoTextFace{Source: m, Size: fontSize}
+	e.titleFace = &text.GoTextFace{Source: s, Size: fontSize * 0.8}
+	e.titleMonoFace = &text.GoTextFace{Source: m, Size: fontSize * 0.8}
+	e.subFace = &text.GoTextFace{Source: s, Size: fontSize * 0.6}
+	e.subMonoFace = &text.GoTextFace{Source: m, Size: fontSize * 0.6}
+	e.extraFace = &text.GoTextFace{Source: s, Size: fontSize * 0.6}
+	e.artistFace = &text.GoTextFace{Source: s, Size: fontSize * 0.7}
+	e.titleFace09 = &text.GoTextFace{Source: s, Size: fontSize * 0.9}
+	e.titleFace05 = &text.GoTextFace{Source: s, Size: fontSize * 0.5}
+
+	e.legendRows = []legendRow{
+		{"PROPAGATION", 0, ColorGossip, ColorGossipUI, func(s MetricSnapshot) int { return s.Gossip }},
+		{"PATH CHANGE", 0, ColorUpd, ColorUpdUI, func(s MetricSnapshot) int { return s.Upd }},
+		{"WITHDRAWAL", 0, ColorWith, ColorWithUI, func(s MetricSnapshot) int { return s.With }},
+		{"NEW PATHS", 0, ColorNew, ColorNewUI, func(s MetricSnapshot) int { return s.New }},
 	}
 
 	e.audioPlayer = NewAudioPlayer(nil, func(song, artist, extra string) {
@@ -327,6 +390,15 @@ func (e *Engine) Update() error {
 		}
 	}
 	e.queueMu.Unlock()
+
+	if ebiten.IsKeyPressed(ebiten.KeyM) {
+		if !e.minimalUIKeyPressed {
+			e.MinimalUI = !e.MinimalUI
+			e.minimalUIKeyPressed = true
+		}
+	} else {
+		e.minimalUIKeyPressed = false
+	}
 
 	e.metricsMu.Lock()
 	for cc, vh := range e.VisualHubs {
@@ -407,27 +479,29 @@ func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, base
 		jx := (rand.Float64() - 0.5) * 12.0 * intensity
 		jy := (rand.Float64() - 0.5) * 4.0 * intensity
 
-		ro := &ebiten.DrawImageOptions{}
-		ro.GeoM.Translate(tx+jx+offset, ty+jy)
-		ro.ColorScale.Scale(1, 0, 0, baseAlpha*0.6)
-		screen.DrawImage(img, ro)
+		e.drawOp.GeoM.Reset()
+		e.drawOp.GeoM.Translate(tx+jx+offset, ty+jy)
+		e.drawOp.ColorScale.Reset()
+		e.drawOp.ColorScale.Scale(1, 0, 0, baseAlpha*0.6)
+		screen.DrawImage(img, e.drawOp)
 
-		co := &ebiten.DrawImageOptions{}
-		co.GeoM.Translate(tx+jx-offset, ty+jy)
-		co.ColorScale.Scale(0, 1, 1, baseAlpha*0.6)
-		screen.DrawImage(img, co)
+		e.drawOp.GeoM.Reset()
+		e.drawOp.GeoM.Translate(tx+jx-offset, ty+jy)
+		e.drawOp.ColorScale.Reset()
+		e.drawOp.ColorScale.Scale(0, 1, 1, baseAlpha*0.6)
+		screen.DrawImage(img, e.drawOp)
 
 		// Occasional white flash
 		if rand.Float64() < 0.2*intensity {
-			fo := &ebiten.DrawImageOptions{}
-			fo.GeoM.Translate(tx+jx, ty+jy)
-			fo.ColorScale.Scale(1, 1, 1, baseAlpha*0.3)
-			fo.Blend = ebiten.BlendLighter
-			screen.DrawImage(img, fo)
+			e.drawOp.GeoM.Reset()
+			e.drawOp.GeoM.Translate(tx+jx, ty+jy)
+			e.drawOp.ColorScale.Reset()
+			e.drawOp.ColorScale.Scale(1, 1, 1, baseAlpha*0.3)
+			e.drawOp.Blend = ebiten.BlendLighter
+			screen.DrawImage(img, e.drawOp)
 		}
 	}
 
-	op := &ebiten.DrawImageOptions{}
 	jx, jy := 0.0, 0.0
 	alpha := baseAlpha
 	if isGlitching && rand.Float64() < intensity {
@@ -435,9 +509,12 @@ func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, base
 		jy = (rand.Float64() - 0.5) * 3.0 * intensity
 		alpha = float32((0.4 + rand.Float64()*0.6) * float64(baseAlpha))
 	}
-	op.GeoM.Translate(tx+jx, ty+jy)
-	op.ColorScale.Scale(1, 1, 1, alpha)
-	screen.DrawImage(img, op)
+	e.drawOp.GeoM.Reset()
+	e.drawOp.GeoM.Translate(tx+jx, ty+jy)
+	e.drawOp.ColorScale.Reset()
+	e.drawOp.ColorScale.Scale(1, 1, 1, alpha)
+	e.drawOp.Blend = ebiten.BlendSourceOver
+	screen.DrawImage(img, e.drawOp)
 }
 
 func (e *Engine) drawGlitchTextSubtle(screen *ebiten.Image, label string, face *text.GoTextFace, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
@@ -448,18 +525,19 @@ func (e *Engine) drawGlitchTextSubtle(screen *ebiten.Image, label string, face *
 		jx := (rand.Float64() - 0.5) * (fontSize / 4) * intensity
 		jy := (rand.Float64() - 0.5) * (fontSize / 8) * intensity
 
-		ro := &text.DrawOptions{}
-		ro.GeoM.Translate(tx+jx+offset, ty+jy)
-		ro.ColorScale.Scale(1, 0, 0, baseAlpha*0.5)
-		text.Draw(screen, label, face, ro)
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(tx+jx+offset, ty+jy)
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.Scale(1, 0, 0, baseAlpha*0.5)
+		text.Draw(screen, label, face, e.textOp)
 
-		co := &text.DrawOptions{}
-		co.GeoM.Translate(tx+jx-offset, ty+jy)
-		co.ColorScale.Scale(0, 1, 1, baseAlpha*0.5)
-		text.Draw(screen, label, face, co)
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(tx+jx-offset, ty+jy)
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.Scale(0, 1, 1, baseAlpha*0.5)
+		text.Draw(screen, label, face, e.textOp)
 	}
 
-	op := &text.DrawOptions{}
 	jx, jy := 0.0, 0.0
 	alpha := baseAlpha
 	if isGlitching && rand.Float64() < intensity {
@@ -467,9 +545,11 @@ func (e *Engine) drawGlitchTextSubtle(screen *ebiten.Image, label string, face *
 		jy = (rand.Float64() - 0.5) * (fontSize / 8) * intensity
 		alpha = float32((0.4 + rand.Float64()*0.6) * float64(baseAlpha))
 	}
-	op.GeoM.Translate(tx+jx, ty+jy)
-	op.ColorScale.Scale(1, 1, 1, float32(alpha))
-	text.Draw(screen, label, face, op)
+	e.textOp.GeoM.Reset()
+	e.textOp.GeoM.Translate(tx+jx, ty+jy)
+	e.textOp.ColorScale.Reset()
+	e.textOp.ColorScale.Scale(1, 1, 1, float32(alpha))
+	text.Draw(screen, label, face, e.textOp)
 }
 
 func (e *Engine) Draw(screen *ebiten.Image) {
@@ -484,8 +564,9 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	}
 	e.pulsesMu.Lock()
 	now := time.Now()
-	op := &ebiten.DrawImageOptions{}
-	op.Blend = ebiten.BlendLighter
+	e.drawOp.GeoM.Reset()
+	e.drawOp.ColorScale.Reset()
+	e.drawOp.Blend = ebiten.BlendLighter
 	imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
 	halfW := float64(imgW) / 2
 	for _, p := range e.pulses {
@@ -518,16 +599,16 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		}
 
 		alpha := (1.0 - progress) * baseAlpha
-		op.GeoM.Reset()
-		op.GeoM.Translate(-halfW, -halfW)
-		op.GeoM.Scale(scale, scale)
-		op.GeoM.Translate(p.X, p.Y)
+		e.drawOp.GeoM.Reset()
+		e.drawOp.GeoM.Translate(-halfW, -halfW)
+		e.drawOp.GeoM.Scale(scale, scale)
+		e.drawOp.GeoM.Translate(p.X, p.Y)
 
-		r, g, b := float64(p.Color.R)/255.0, float64(p.Color.G)/255.0, float64(p.Color.B)/255.0
-		op.ColorScale.Reset()
+		r, g, b := float32(p.Color.R)/255.0, float32(p.Color.G)/255.0, float32(p.Color.B)/255.0
+		e.drawOp.ColorScale.Reset()
 		// Re-apply alpha multiplication for premultiplied alpha blending
-		op.ColorScale.Scale(float32(r*alpha), float32(g*alpha), float32(b*alpha), float32(alpha))
-		e.mapImage.DrawImage(e.pulseImage, op)
+		e.drawOp.ColorScale.Scale(r*float32(alpha), g*float32(alpha), b*float32(alpha), float32(alpha))
+		e.mapImage.DrawImage(e.pulseImage, e.drawOp)
 	}
 	e.pulsesMu.Unlock()
 
