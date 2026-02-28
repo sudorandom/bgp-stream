@@ -2,6 +2,7 @@ package bgpengine
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -14,6 +15,74 @@ type BGPEventCallback func(lat, lng float64, cc string, eventType EventType, pre
 type IPCoordsProvider func(ip uint32) (float64, float64, string)
 type PrefixToIPConverter func(p string) uint32
 
+type Level2EventType int
+
+const (
+	Level2None Level2EventType = iota
+	Level2LinkFlap
+	Level2AggFlap
+	Level2Anycast
+	Level2PathLengthOscillation
+	Level2Babbling
+	Level2PathHunting
+)
+
+func (t Level2EventType) String() string {
+	switch t {
+	case Level2LinkFlap:
+		return "Link Flap"
+	case Level2AggFlap:
+		return "Aggregator Flapping"
+	case Level2Anycast:
+		return "Anycast"
+	case Level2PathLengthOscillation:
+		return "Path Length Oscillation"
+	case Level2Babbling:
+		return "BGP Babbling"
+	case Level2PathHunting:
+		return "Path Hunting"
+	default:
+		return "None"
+	}
+}
+
+type LastAttrs struct {
+	Path        string
+	Communities string
+	NextHop     string
+	Aggregator  string
+}
+
+type ChurnStats struct {
+	PathChanges       int
+	CommunityChanges  int
+	NextHopChanges    int
+	AggregatorChanges int
+	PathLengthChanges int
+	LastPathLen       int
+}
+
+type PrefixState struct {
+	Announcements int
+	Withdrawals   int
+	TotalMessages int
+	PeerChurn     map[string]*ChurnStats
+	PeerLastAttrs map[string]LastAttrs
+	StartTime     time.Time
+}
+
+type RISMessageData struct {
+	Announcements []struct {
+		NextHop  string   `json:"next_hop"`
+		Prefixes []string `json:"prefixes"`
+	} `json:"announcements"`
+	Withdrawals []string          `json:"withdrawals"`
+	Path        []json.RawMessage `json:"path"`
+	Community   [][]interface{}   `json:"community"`
+	Aggregator  string            `json:"aggregator"`
+	Peer        string            `json:"peer"`
+}
+
 type BGPProcessor struct {
 	geo          IPCoordsProvider
 	seenDB       *utils.DiskTrie
@@ -23,6 +92,11 @@ type BGPProcessor struct {
 		Time time.Time
 		Type EventType
 	}
+
+	level2Stats       map[Level2EventType]int
+	totalLevel2Events int
+	prefixStates      map[string]*PrefixState
+
 	mu  sync.Mutex
 	url string
 }
@@ -37,7 +111,9 @@ func NewBGPProcessor(geo IPCoordsProvider, seenDB *utils.DiskTrie, prefixToIP Pr
 			Time time.Time
 			Type EventType
 		}),
-		url: "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream",
+		level2Stats:  make(map[Level2EventType]int),
+		prefixStates: make(map[string]*PrefixState),
+		url:          "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream",
 	}
 }
 
@@ -87,15 +163,8 @@ func (p *BGPProcessor) Listen() {
 				break
 			}
 			var msg struct {
-				Type string `json:"type"`
-				Data struct {
-					Announcements []struct {
-						Prefixes []string `json:"prefixes"`
-					} `json:"announcements"`
-					Withdrawals []string          `json:"withdrawals"`
-					Path        []json.RawMessage `json:"path"`
-					Peer        string            `json:"peer"`
-				} `json:"data"`
+				Type string         `json:"type"`
+				Data RISMessageData `json:"data"`
 			}
 			if json.Unmarshal(message, &msg) != nil {
 				continue
@@ -157,16 +226,16 @@ func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) {
 			}
 		}
 	}
+	if len(p.prefixStates) > 50000 {
+		for prefix, state := range p.prefixStates {
+			if now.Sub(state.StartTime) > 5*time.Minute {
+				delete(p.prefixStates, prefix)
+			}
+		}
+	}
 }
 
-func (p *BGPProcessor) handleRISMessage(data *struct {
-	Announcements []struct {
-		Prefixes []string `json:"prefixes"`
-	} `json:"announcements"`
-	Withdrawals []string          `json:"withdrawals"`
-	Path        []json.RawMessage `json:"path"`
-	Peer        string            `json:"peer"`
-}, pendingWithdrawals map[uint32]struct {
+func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals map[uint32]struct {
 	Time   time.Time
 	Prefix string
 }) {
@@ -185,6 +254,15 @@ func (p *BGPProcessor) handleRISMessage(data *struct {
 	now := time.Now()
 	p.handleWithdrawals(data.Withdrawals, originASN, now, pendingWithdrawals)
 	p.handleAnnouncements(data.Announcements, originASN, now, pendingWithdrawals)
+
+	for _, prefix := range data.Withdrawals {
+		p.classifyEvent(prefix, data)
+	}
+	for _, ann := range data.Announcements {
+		for _, prefix := range ann.Prefixes {
+			p.classifyEvent(prefix, data)
+		}
+	}
 }
 
 func (p *BGPProcessor) handleWithdrawals(withdrawals []string, originASN uint32, now time.Time, pendingWithdrawals map[uint32]struct {
@@ -212,6 +290,7 @@ func (p *BGPProcessor) handleWithdrawals(withdrawals []string, originASN uint32,
 }
 
 func (p *BGPProcessor) handleAnnouncements(announcements []struct {
+	NextHop  string   `json:"next_hop"`
 	Prefixes []string `json:"prefixes"`
 }, originASN uint32, now time.Time, pendingWithdrawals map[uint32]struct {
 	Time   time.Time
@@ -290,4 +369,132 @@ func (p *BGPProcessor) handleNewOrUpdate(prefix string, ip, originASN uint32, no
 			}{Time: now, Type: EventUpdate}
 		}
 	}
+}
+
+func (p *BGPProcessor) classifyEvent(prefix string, data *RISMessageData) {
+	state, ok := p.prefixStates[prefix]
+	if !ok {
+		state = &PrefixState{
+			PeerChurn:     make(map[string]*ChurnStats),
+			PeerLastAttrs: make(map[string]LastAttrs),
+			StartTime:     time.Now(),
+		}
+		p.prefixStates[prefix] = state
+	}
+
+	state.TotalMessages++
+	peer := data.Peer
+
+	if len(data.Withdrawals) > 0 {
+		state.Withdrawals += len(data.Withdrawals)
+	}
+
+	if len(data.Announcements) > 0 {
+		state.Announcements += len(data.Announcements)
+
+		pathStr := fmt.Sprintf("%v", data.Path)
+		commStr := fmt.Sprintf("%v", data.Community)
+		nextHop := data.Announcements[0].NextHop
+		agg := data.Aggregator
+		pathLen := len(data.Path)
+
+		if last, ok := state.PeerLastAttrs[peer]; ok {
+			churn, ok := state.PeerChurn[peer]
+			if !ok {
+				churn = &ChurnStats{}
+				state.PeerChurn[peer] = churn
+			}
+
+			if pathStr != last.Path {
+				churn.PathChanges++
+			}
+			if commStr != last.Communities {
+				churn.CommunityChanges++
+			}
+			if nextHop != last.NextHop {
+				churn.NextHopChanges++
+			}
+			if agg != last.Aggregator {
+				churn.AggregatorChanges++
+			}
+			if pathLen != churn.LastPathLen && churn.LastPathLen != 0 {
+				churn.PathLengthChanges++
+			}
+			churn.LastPathLen = pathLen
+		}
+
+		state.PeerLastAttrs[peer] = LastAttrs{
+			Path:        pathStr,
+			Communities: commStr,
+			NextHop:     nextHop,
+			Aggregator:  agg,
+		}
+	}
+
+	elapsed := time.Since(state.StartTime).Seconds()
+	if elapsed <= 0 {
+		elapsed = 1
+	}
+
+	// Ensure we have seen enough messages over a small time window to classify
+	if elapsed < 2.0 && state.TotalMessages < 5 {
+		return
+	}
+
+	msgRate := float64(state.TotalMessages) / elapsed
+
+	totalPath, totalComm, totalHop, totalAgg, totalLen := 0, 0, 0, 0, 0
+	for _, c := range state.PeerChurn {
+		totalPath += c.PathChanges
+		totalComm += c.CommunityChanges
+		totalHop += c.NextHopChanges
+		totalAgg += c.AggregatorChanges
+		totalLen += c.PathLengthChanges
+	}
+
+	classified := false
+
+	uniqueHops := make(map[string]bool)
+	for _, attr := range state.PeerLastAttrs {
+		if attr.NextHop != "" {
+			uniqueHops[attr.NextHop] = true
+		}
+	}
+	if len(uniqueHops) > 5 && msgRate < 1.0 {
+		p.level2Stats[Level2Anycast]++
+		classified = true
+	} else if totalAgg > 10 && float64(totalAgg)/elapsed > 0.05 {
+		p.level2Stats[Level2AggFlap]++
+		classified = true
+	} else if totalLen > 10 && float64(totalLen)/elapsed > 0.05 {
+		p.level2Stats[Level2PathLengthOscillation]++
+		classified = true
+	} else if state.Withdrawals > 5 && float64(state.Announcements)/float64(state.Withdrawals) < 2.5 {
+		p.level2Stats[Level2LinkFlap]++
+		classified = true
+	} else if state.Announcements > 50 && state.Withdrawals < (state.Announcements/10) && totalPath > state.Announcements/2 {
+		p.level2Stats[Level2PathHunting]++
+		classified = true
+	} else if msgRate > 2.0 && state.TotalMessages > 10 {
+		p.level2Stats[Level2Babbling]++
+		classified = true
+	}
+
+	if classified {
+		p.totalLevel2Events++
+		// Reset state so we don't count it again immediately
+		delete(p.prefixStates, prefix)
+	}
+}
+
+func (p *BGPProcessor) GetLevel2Stats() (map[Level2EventType]int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	statsCopy := make(map[Level2EventType]int)
+	for k, v := range p.level2Stats {
+		statsCopy[k] = v
+	}
+
+	return statsCopy, p.totalLevel2Events
 }

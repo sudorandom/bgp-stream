@@ -333,12 +333,19 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		trendBoxW = graphW + 120.0
 	}
 	// Each box has a width: legendW, trendBoxW+20, beaconW
-	totalW := legendW + spacing + (trendBoxW + 20) + spacing + beaconW
+	l2W := legendW
+	totalW := l2W + spacing + legendW + spacing + (trendBoxW + 20) + spacing + beaconW
 	baseX := float64(e.Width) - margin - totalW
 	baseY := float64(e.Height) - margin - graphH - 10
 
-	firehoseX := baseX
+	l2X := baseX
+	l2Y := baseY
+	firehoseX := baseX + l2W + spacing
 	firehoseY := baseY
+
+	if e.processor != nil {
+		e.drawLevel2Metrics(screen, l2X, l2Y, l2W, legendH, fontSize)
+	}
 	gx := baseX + legendW + spacing
 	gy := baseY
 
@@ -1019,4 +1026,69 @@ func wrapString(s string, maxChars, maxLines int) []string {
 	}
 
 	return lines
+}
+
+func (e *Engine) drawLevel2Metrics(screen *ebiten.Image, x, y, w, h, fontSize float64) {
+
+	stats, total := e.processor.GetLevel2Stats()
+	if total == 0 {
+		return
+	}
+
+	vector.FillRect(screen, float32(x-10), float32(y-fontSize-15), float32(w), float32(h), color.RGBA{0, 0, 0, 100}, false)
+	vector.StrokeRect(screen, float32(x-10), float32(y-fontSize-15), float32(w), float32(h), 1, color.RGBA{36, 42, 53, 255}, false)
+
+	title := "LEVEL-2 EVENTS"
+	vector.FillRect(screen, float32(x-10), float32(y-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+
+	e.textOp.GeoM.Reset()
+	e.textOp.GeoM.Translate(x+5, y-fontSize-5)
+	e.textOp.ColorScale.Reset()
+	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
+	text.Draw(screen, title, e.titleFace, e.textOp)
+
+	// Filter and sort stats
+	type statEntry struct {
+		name  string
+		count int
+	}
+	// Pre-allocate to avoid GC spikes
+	entries := make([]statEntry, 0, 6)
+	for k, v := range stats {
+		if k != Level2None && v > 0 {
+			entries = append(entries, statEntry{k.String(), v})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].count > entries[j].count
+	})
+
+	maxItems := 6
+	if len(entries) < maxItems {
+		maxItems = len(entries)
+	}
+
+	startY := y + 10
+	lineSpacing := fontSize + 5
+
+	for i := 0; i < maxItems; i++ {
+		entry := entries[i]
+		percentage := (float64(entry.count) / float64(total)) * 100.0
+
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(x+10, startY+float64(i)*lineSpacing)
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.Scale(1, 1, 1, 0.9)
+		text.Draw(screen, entry.name, e.subFace, e.textOp)
+
+		valStr := fmt.Sprintf("%d (%.1f%%)", entry.count, percentage)
+		valW, _ := text.Measure(valStr, e.subMonoFace, 0)
+
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(x+w-valW-15, startY+float64(i)*lineSpacing)
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.Scale(1, 1, 1, 0.7)
+		text.Draw(screen, valStr, e.subMonoFace, e.textOp)
+	}
+
 }
