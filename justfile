@@ -19,3 +19,7 @@ docker-run:
 		-v $(pwd)/audio:/app/audio \
 		-v $(pwd)/data:/app/data \
 		bgp-viewer:latest
+
+# Watch BGP updates for a specific prefix
+debug-prefix prefix="146.66.28.0/22":
+	go run ./cmd/debug-prefix -prefix {{prefix}}
