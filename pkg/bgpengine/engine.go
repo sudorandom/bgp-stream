@@ -205,16 +205,16 @@ type Engine struct {
 	mapImage             *ebiten.Image
 
 	// Reusable rendering resources
-	face, monoFace, titleFace, titleMonoFace *text.GoTextFace
+	face, monoFace, titleFace, titleMonoFace    *text.GoTextFace
 	subFace, subMonoFace, extraFace, artistFace *text.GoTextFace
-	titleFace09, titleFace05                 *text.GoTextFace
-	drawOp                                   *ebiten.DrawImageOptions
-	textOp                                   *text.DrawOptions
-	legendRows                               []legendRow
-	vectorPath                               vector.Path
-	vectorDrawPathOp                         vector.DrawPathOptions
-	vectorFillOp                             vector.FillOptions
-	vectorStrokeOp                           vector.StrokeOptions
+	titleFace09, titleFace05                    *text.GoTextFace
+	drawOp                                      *ebiten.DrawImageOptions
+	textOp                                      *text.DrawOptions
+	legendRows                                  []legendRow
+	vectorPath                                  vector.Path
+	vectorDrawPathOp                            vector.DrawPathOptions
+	vectorFillOp                                vector.FillOptions
+	vectorStrokeOp                              vector.StrokeOptions
 }
 
 type VisualHub struct {
