@@ -1,12 +1,18 @@
 # Run tests
 test:
 	go test ./...
+	go test -bench=. -benchmem ./...
 
 lint:
 	golangci-lint run ./...
 
 run:
-	go run ./cmd/bgp-viewer -capture-interval 1h -capture-dir ./archive -height 2160 -width=3840 -scale=760.0
+	go run ./cmd/bgp-viewer \
+		-capture-interval 1h \
+		-capture-dir ./archive \
+		-height 2160 \
+		-width 3840 \
+		-scale 760.0
 
 # Build the Docker image locally using buildx
 docker-build:

@@ -24,6 +24,7 @@ var (
 	floating           = flag.Bool("floating", false, "Whether to keep the window always on top")
 	captureInterval    = flag.Duration("capture-interval", 0, "Interval to periodically capture high-quality frames (e.g., 1m, 1h). 0 to disable.")
 	captureDir         = flag.String("capture-dir", "captures", "Directory to store captured frames")
+	minimalUI          = flag.Bool("minimal-ui", false, "Start with only the map and now-playing panel visible")
 )
 
 func main() {
@@ -34,6 +35,7 @@ func main() {
 	engine := bgpengine.NewEngine(*renderWidth, *renderHeight, *renderScale)
 	engine.FrameCaptureInterval = *captureInterval
 	engine.FrameCaptureDir = *captureDir
+	engine.MinimalUI = *minimalUI
 
 	// If audio-fd is provided, use it for streaming audio
 	if *audioFd != -1 {
