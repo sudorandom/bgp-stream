@@ -3,7 +3,6 @@ package bgpengine
 
 import (
 	"fmt"
-	"image"
 	"image/color"
 	"math"
 	"sort"
@@ -430,37 +429,21 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 	globalMaxLog := e.calculateGlobalMaxLog()
 	e.drawTrendGrid(screen, gx, gy, chartW, chartH, titlePadding, globalMaxLog, fontSize)
 
-	hLen := len(e.history)
-	numSteps := float64(hLen - 2)
-	if numSteps <= 0 {
-		numSteps = 1
-	}
-	step := chartW / numSteps
-	paddingX := math.Ceil(step * 2)
-
-	// Use persistent buffer for trendlines to avoid per-frame allocations.
-	// We make it wider by paddingX so paths can start before the left edge
-	// and we can cleanly clip out only the valid graph region without drawing glitches.
-	bufW := int(chartW + paddingX)
-	bufH := int(chartH + 10)
-	if e.trendLinesBuffer == nil || e.trendLinesBuffer.Bounds().Dx() != bufW || e.trendLinesBuffer.Bounds().Dy() != bufH {
-		e.trendLinesBuffer = ebiten.NewImage(bufW, bufH)
+	// Use persistent buffer for trendlines to avoid per-frame allocations
+	if e.trendLinesBuffer == nil || e.trendLinesBuffer.Bounds().Dx() != int(chartW) || e.trendLinesBuffer.Bounds().Dy() != int(chartH+10) {
+		e.trendLinesBuffer = ebiten.NewImage(int(chartW), int(chartH+10))
 	}
 	e.trendLinesBuffer.Clear()
 
-	e.drawTrendLayers(chartW, chartH, globalMaxLog, rows, step, paddingX)
-
-	// SubImage out only the portion that corresponds to the chart to chop off the left side padding where strokes begin
-	sub := e.trendLinesBuffer.SubImage(image.Rect(int(paddingX), 0, bufW, bufH)).(*ebiten.Image)
+	e.drawTrendLayers(chartW, chartH, globalMaxLog, rows)
 
 	// Draw the clipped trend image back to the screen
 	e.drawOp.GeoM.Reset()
-	// Compensate for the SubImage crop by translating left by paddingX (which is already chopped)
-	e.drawOp.GeoM.Translate(gx-paddingX, gy+titlePadding)
+	e.drawOp.GeoM.Translate(gx, gy+titlePadding)
 	e.drawOp.ColorScale.Reset()
 	e.drawOp.ColorScale.Scale(1, 1, 1, 0.8) // Apply transparency globally
 	e.drawOp.Blend = ebiten.BlendSourceOver
-	screen.DrawImage(sub, e.drawOp)
+	screen.DrawImage(e.trendLinesBuffer, e.drawOp)
 }
 
 func (e *Engine) calculateGlobalMaxLog() float64 {
@@ -509,13 +492,18 @@ func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, tit
 	}
 }
 
-func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64, rows []legendRow, step, paddingX float64) {
+func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64, rows []legendRow) {
 	smoothOffset := 1.0
 	if time.Since(e.lastMetricsUpdate) <= 1*time.Second {
 		smoothOffset = math.Mod(time.Since(e.lastMetricsUpdate).Seconds(), 1.0)
 	}
 
 	hLen := len(e.history)
+	numSteps := float64(hLen - 2)
+	if numSteps <= 0 {
+		numSteps = 1
+	}
+	step := chartW / numSteps
 
 	for i := len(rows) - 1; i >= 0; i-- {
 		r := rows[i]
@@ -536,10 +524,21 @@ func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64, rows []le
 				continue
 			}
 
-			x1 := (float64(j)-smoothOffset)*step + paddingX
-			x2 := (float64(j+1)-smoothOffset)*step + paddingX
+			x1 := (float64(j) - smoothOffset) * step
+			x2 := (float64(j+1) - smoothOffset) * step
 			y1 := chartH - (e.logVal(r.accessor(e.history[j]))/globalMaxLog)*chartH
 			y2 := chartH - (e.logVal(r.accessor(e.history[j+1]))/globalMaxLog)*chartH
+
+			if x2 < 0 {
+				continue // Entire segment is offscreen to the left
+			}
+
+			if x1 < 0 {
+				// Interpolate Y value at x = 0
+				t := (0 - x1) / (x2 - x1)
+				y1 = y1 + t*(y2-y1)
+				x1 = 0
+			}
 
 			if !started {
 				path.MoveTo(float32(x1), float32(y1))
