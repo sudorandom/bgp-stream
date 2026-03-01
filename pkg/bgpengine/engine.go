@@ -76,6 +76,7 @@ type Pulse struct {
 	StartTime time.Time
 	Color     color.RGBA
 	MaxRadius float64
+	IsFlare   bool
 }
 
 type QueuedPulse struct {
@@ -84,6 +85,7 @@ type QueuedPulse struct {
 	Color         color.RGBA
 	Count         int
 	ScheduledTime time.Time
+	IsFlare       bool
 }
 
 type BufferedCity struct {
@@ -158,6 +160,7 @@ type Engine struct {
 
 	bgImage        *ebiten.Image
 	pulseImage     *ebiten.Image
+	flareImage     *ebiten.Image
 	trendLineImg   *ebiten.Image
 	trendCircleImg *ebiten.Image
 	whitePixel     *ebiten.Image
@@ -433,7 +436,7 @@ func (e *Engine) Update() error {
 		e.visualQueue = e.visualQueue[1:]
 		added++
 		if now.Sub(p.ScheduledTime) < 2*time.Second {
-			e.AddPulse(p.Lat, p.Lng, p.Color, p.Count)
+			e.AddPulse(p.Lat, p.Lng, p.Color, p.Count, p.IsFlare)
 		}
 	}
 	e.queueMu.Unlock()
@@ -576,8 +579,8 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	e.drawOp.GeoM.Reset()
 	e.drawOp.ColorScale.Reset()
 	e.drawOp.Blend = ebiten.BlendLighter
-	imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
-	halfW := float64(imgW) / 2
+	// imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
+	// halfW := float64(imgW) / 2
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
 		totalDuration := 1.5
@@ -588,11 +591,21 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 
 		baseAlpha := 0.5
 
-		// Use a smaller base offset (+1) and more conservative scaling
-		scale := (1 + progress*p.MaxRadius) / float64(imgW) * 2.0
-
 		alpha := (1.0 - progress) * baseAlpha
 		e.drawOp.GeoM.Reset()
+
+		imgW := float64(e.pulseImage.Bounds().Dx())
+		halfW := imgW / 2
+		imgToDraw := e.pulseImage
+		if p.IsFlare {
+			imgW = float64(e.flareImage.Bounds().Dx())
+			halfW = imgW / 2
+			imgToDraw = e.flareImage
+		}
+
+		// Use a smaller base offset (+1) and more conservative scaling
+		scale := (1 + progress*p.MaxRadius) / imgW * 2.0
+
 		e.drawOp.GeoM.Translate(-halfW, -halfW)
 		e.drawOp.GeoM.Scale(scale, scale)
 		e.drawOp.GeoM.Translate(p.X, p.Y)
@@ -601,7 +614,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		e.drawOp.ColorScale.Reset()
 		// Re-apply alpha multiplication for premultiplied alpha blending
 		e.drawOp.ColorScale.Scale(r*float32(alpha), g*float32(alpha), b*float32(alpha), float32(alpha))
-		e.mapImage.DrawImage(e.pulseImage, e.drawOp)
+		e.mapImage.DrawImage(imgToDraw, e.drawOp)
 	}
 	e.pulsesMu.Unlock()
 
@@ -649,6 +662,77 @@ func (e *Engine) InitPulseTexture() {
 		}
 	}
 	e.pulseImage.WritePixels(pixels)
+
+	// Generate lens flare texture for route leaks
+	e.flareImage = ebiten.NewImage(size, size)
+	flarePixels := make([]byte, size*size*4)
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx, dy := float64(x)-center, float64(y)-center
+			dist := math.Sqrt(dx*dx + dy*dy)
+
+			if dist < maxDist {
+				val := 0.0
+
+				// Base dot
+				if dist < maxDist*0.05 {
+					val = 1.0 - (dist / (maxDist * 0.05))
+				}
+
+				// Thin horizontal/vertical lines (astigmatism flare)
+
+				// Horizontal line
+				if math.Abs(dy) < 1.0 {
+					v := 1.0 - (math.Abs(dx) / maxDist)
+					if v > 0 { val += v * 0.8 }
+				}
+
+				// Vertical line
+				if math.Abs(dx) < 1.0 {
+					v := 1.0 - (math.Abs(dy) / maxDist)
+					if v > 0 { val += v * 0.8 }
+				}
+
+				// Diagonal lines (fainter)
+				diagDist1 := math.Abs(dx - dy) / math.Sqrt(2)
+				diagDist2 := math.Abs(dx + dy) / math.Sqrt(2)
+
+				diagLen1 := math.Abs(dx + dy) / math.Sqrt(2)
+				diagLen2 := math.Abs(dx - dy) / math.Sqrt(2)
+
+				if diagDist1 < 1.0 {
+					v := (1.0 - (diagLen1 / (maxDist * 0.6))) * 0.4
+					if v > 0 { val += v }
+				}
+
+				if diagDist2 < 1.0 {
+					v := (1.0 - (diagLen2 / (maxDist * 0.6))) * 0.4
+					if v > 0 { val += v }
+				}
+
+				if val > 1.0 {
+					val = 1.0
+				} else if val < 0.0 {
+					val = 0.0
+				}
+
+				// Make the streaks non-linear so they look longer and sharper
+				if dist > maxDist*0.05 {
+					val = math.Pow(val, 1.5)
+				}
+
+				// Second pass, make sure core is bright
+				if dist < maxDist*0.05 {
+					coreVal := 1.0 - (dist / (maxDist * 0.05))
+					val = math.Max(val, coreVal)
+				}
+
+				flarePixels[(y*size+x)*4+3] = uint8(val * 255)
+				flarePixels[(y*size+x)*4+0], flarePixels[(y*size+x)*4+1], flarePixels[(y*size+x)*4+2] = 255, 255, 255
+			}
+		}
+	}
+	e.flareImage.WritePixels(flarePixels)
 
 	// Create a 1x1 white image for trendlines
 	e.trendLineImg = ebiten.NewImage(1, 1)
@@ -1267,7 +1351,8 @@ func (e *Engine) drainCityBuffer() []*QueuedPulse {
 	for key, d := range e.cityBuffer {
 		for c, count := range d.Counts {
 			if count > 0 {
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Color: c, Count: count})
+				isFlare := (c == ColorLeak)
+				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Color: c, Count: count, IsFlare: isFlare})
 			}
 		}
 		// Reset and return to pool
@@ -1604,7 +1689,14 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 	}
 }
 
-func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int) {
+func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...bool) {
+	flare := false
+	if len(isFlare) > 0 {
+		flare = isFlare[0]
+	} else {
+		flare = (c == ColorLeak)
+	}
+
 	lat += (rand.Float64() - 0.5) * 0.8
 	lng += (rand.Float64() - 0.5) * 0.8
 	x, y := e.geo.Project(lat, lng)
@@ -1622,7 +1714,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int) {
 		if radius > 240 {
 			radius = 240
 		}
-		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius})
+		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius, IsFlare: flare})
 	}
 }
 
