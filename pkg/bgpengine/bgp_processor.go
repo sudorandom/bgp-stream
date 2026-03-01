@@ -128,13 +128,16 @@ type BGPProcessor struct {
 	totalLevel2Events    int
 	prefixStates         map[string]*bgpproto.PrefixState
 
+	stateWriteQueue  chan map[string]*bgpproto.PrefixState
+	stateDeleteQueue chan string
+
 	mu       sync.Mutex
 	url      string
 	stopping atomic.Bool
 }
 
 func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnMapping *utils.ASNMapping, prefixToIP PrefixToIPConverter, onEvent BGPEventCallback) *BGPProcessor {
-	return &BGPProcessor{
+	p := &BGPProcessor{
 		geo:        geo,
 		seenDB:     seenDB,
 		stateDB:    stateDB,
@@ -148,7 +151,47 @@ func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnM
 		level2Stats:          make(map[Level2EventType]int),
 		level2UniquePrefixes: make(map[Level2EventType]map[string]struct{}),
 		prefixStates:         make(map[string]*bgpproto.PrefixState),
+		stateWriteQueue:      make(chan map[string]*bgpproto.PrefixState, 100),
+		stateDeleteQueue:     make(chan string, 1000),
 		url:                  "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream",
+	}
+
+	if stateDB != nil {
+		go p.stateWorker()
+	}
+
+	return p
+}
+
+func (p *BGPProcessor) stateWorker() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		if p.isStopping() {
+			return
+		}
+		select {
+		case batch := <-p.stateWriteQueue:
+			rawBatch := make(map[string][]byte)
+			for prefix, state := range batch {
+				data, err := proto.Marshal(state)
+				if err == nil {
+					rawBatch[prefix] = data
+				}
+			}
+			if len(rawBatch) > 0 {
+				if err := p.stateDB.BatchInsertRaw(rawBatch); err != nil {
+					log.Printf("Error saving prefix states: %v", err)
+				}
+			}
+		case prefix := <-p.stateDeleteQueue:
+			if err := p.stateDB.DeleteRaw([]byte(prefix)); err != nil {
+				log.Printf("Error deleting prefix state: %v", err)
+			}
+		case <-ticker.C:
+			// periodically check stopping
+		}
 	}
 }
 
@@ -269,16 +312,21 @@ func (p *BGPProcessor) startWithdrawalPacer(pendingWithdrawals map[uint32]struct
 			}
 
 			ticks++
+			var batch map[string]*bgpproto.PrefixState
 			if ticks >= 30 {
 				ticks = 0
-				p.cleanupRecentlySeen(now)
+				batch = p.cleanupRecentlySeen(now)
 			}
 			p.mu.Unlock()
+
+			if len(batch) > 0 {
+				p.stateWriteQueue <- batch
+			}
 		}
 	}()
 }
 
-func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) {
+func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) map[string]*bgpproto.PrefixState {
 	if len(p.recentlySeen) > 500000 {
 		for ip, entry := range p.recentlySeen {
 			if now.Sub(entry.Time) > 5*time.Minute {
@@ -287,26 +335,17 @@ func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) {
 		}
 	}
 
-	batch := make(map[string][]byte)
+	batch := make(map[string]*bgpproto.PrefixState)
 	for prefix, state := range p.prefixStates {
 		if now.Sub(time.Unix(state.LastUpdateTs, 0)) > 5*time.Minute {
 			if p.stateDB != nil && !p.isStopping() {
-				data, err := proto.Marshal(state)
-				if err == nil {
-					batch[prefix] = data
-				}
+				batch[prefix] = state
 			}
 			delete(p.prefixStates, prefix)
 		}
 	}
 
-	if len(batch) > 0 && p.stateDB != nil && !p.isStopping() {
-		go func(b map[string][]byte) {
-			if err := p.stateDB.BatchInsertRaw(b); err != nil {
-				log.Printf("Error saving prefix states: %v", err)
-			}
-		}(batch)
-	}
+	return batch
 }
 
 func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals map[uint32]struct {
@@ -775,7 +814,7 @@ func (p *BGPProcessor) recordClassification(prefix string, state *bgpproto.Prefi
 	state.ClassifiedTimeTs = now
 
 	if p.stateDB != nil {
-		go p.deleteState(prefix)
+		p.deleteState(prefix)
 	}
 }
 
@@ -783,9 +822,10 @@ func (p *BGPProcessor) deleteState(prefix string) {
 	if p.stateDB == nil || p.isStopping() {
 		return
 	}
-	if err := p.stateDB.DeleteRaw([]byte(prefix)); err != nil {
-		log.Printf("Error deleting prefix state: %v", err)
-	}
+
+	go func() {
+		p.stateDeleteQueue <- prefix
+	}()
 }
 
 func (p *BGPProcessor) hasRouteLeak(prefix string, ctx *MessageContext) bool {
