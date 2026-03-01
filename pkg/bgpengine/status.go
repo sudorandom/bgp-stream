@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
-	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
 type legendRow struct {
@@ -216,7 +216,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 
 			critStr := fmt.Sprintf("%d critical", e.redCount)
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize)
+			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.ScaleWithColor(ColorCritical)
 			text.Draw(e.impactBuffer, critStr, e.subMonoFace, e.textOp)
@@ -622,6 +622,7 @@ func (e *Engine) StartMetricsLoop() {
 			e.updateVisualImpacts(uiInterval)
 
 			e.prefixImpactHistory = append(e.prefixImpactHistory[1:], make(map[string]int))
+			e.currentAnomalies = make(map[Level2EventType]map[string]int)
 			e.countryActivity = make(map[string]int)
 		}
 	}
@@ -780,8 +781,16 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 	sort.SliceStable(allImpact, func(i, j int) bool {
 		p1, p2 := e.GetPriority(allImpact[i].ClassificationName), e.GetPriority(allImpact[j].ClassificationName)
 		if p1 != p2 {
-			return p1 > p2
+			return p1 > p2 // Prioritize Critical (Red) over Bad (Orange)
 		}
+
+		// Prioritize by network size (less specific/smaller mask first, e.g. /16 > /24)
+		m1, m2 := getMaskLen(allImpact[i].Prefix), getMaskLen(allImpact[j].Prefix)
+		if m1 != m2 {
+			return m1 < m2
+		}
+
+		// Use count as a final tie-breaker for same-sized prefixes
 		return allImpact[i].Count > allImpact[j].Count
 	})
 
@@ -799,36 +808,37 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 	}
 }
 
+func getMaskLen(prefix string) int {
+	parts := strings.Split(prefix, "/")
+	if len(parts) != 2 {
+		return 0
+	}
+	mask, _ := strconv.Atoi(parts[1])
+	return mask
+}
+
 func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
-	combinedBucket := make(map[string]int)
-	numBuckets := 30
-	if len(e.prefixImpactHistory) < numBuckets {
-		numBuckets = len(e.prefixImpactHistory)
-	}
-	for i := 0; i < numBuckets; i++ {
-		bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1-i]
-		for p, count := range bucket {
-			combinedBucket[p] += count
-		}
-	}
-
-	allImpact := make([]*VisualImpact, 0, len(combinedBucket))
-	for p, count := range combinedBucket {
-		if utils.IsBeaconPrefix(p) {
-			continue
-		}
-		v, ok := e.VisualImpact[p]
-		if !ok {
-			v = &VisualImpact{Prefix: p}
-			e.VisualImpact[p] = v
-		}
-
-		if e.GetPriority(v.ClassificationName) == 0 {
+	allImpact := make([]*VisualImpact, 0)
+	for et, prefixes := range e.currentAnomalies {
+		prio := e.GetPriority(et.String())
+		if prio < 2 {
 			continue
 		}
 
-		v.Count = float64(count) / (uiInterval * float64(numBuckets))
-		allImpact = append(allImpact, v)
+		for p, count := range prefixes {
+			v, ok := e.VisualImpact[p]
+			if !ok {
+				v = &VisualImpact{Prefix: p}
+				e.VisualImpact[p] = v
+			}
+
+			// Store the anomaly categorization
+			v.ClassificationName = et.String()
+			v.ClassificationColor, _ = e.getLevel2Visuals(et)
+
+			v.Count = float64(count) / uiInterval
+			allImpact = append(allImpact, v)
+		}
 	}
 	return allImpact
 }

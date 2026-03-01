@@ -210,6 +210,8 @@ type Engine struct {
 
 	prefixImpactHistory []map[string]int
 	prefixToASN         map[string]uint32
+	prefixToLevel2      map[string]Level2EventType
+	currentAnomalies    map[Level2EventType]map[string]int
 	VisualImpact        map[string]*VisualImpact
 	ActiveImpacts       []*VisualImpact
 
@@ -318,6 +320,8 @@ func NewEngine(width, height int, scale float64) *Engine {
 		lastMetricsUpdate:   time.Now(),
 		VisualHubs:          make(map[string]*VisualHub),
 		prefixImpactHistory: make([]map[string]int, 30), // 30 buckets * 20s = 10 mins
+		prefixToLevel2:      make(map[string]Level2EventType),
+		currentAnomalies:    make(map[Level2EventType]map[string]int),
 		VisualImpact:        make(map[string]*VisualImpact),
 		lastFrameCapturedAt: time.Now(),
 		drawOp:              &ebiten.DrawImageOptions{},
@@ -1332,6 +1336,21 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 		}
 		if utils.IsBeaconPrefix(prefix) {
 			e.windowBeacon++
+		}
+
+		// Track bad/critical anomalies specifically
+		prio := e.GetPriority(level2Type.String())
+		if prio >= 2 {
+			e.prefixToLevel2[prefix] = level2Type
+		}
+
+		if actualType, ok := e.prefixToLevel2[prefix]; ok {
+			if e.GetPriority(actualType.String()) >= 2 {
+				if e.currentAnomalies[actualType] == nil {
+					e.currentAnomalies[actualType] = make(map[string]int)
+				}
+				e.currentAnomalies[actualType][prefix]++
+			}
 		}
 	}
 
