@@ -938,6 +938,28 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 }
 
 func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
+	e.updatePrefixCounts(allImpact)
+
+	fontSize := 18.0
+	hubsBoxH, boxW := 130.0, 280.0
+	if e.Width > 2000 {
+		fontSize = 36.0
+		hubsBoxH, boxW = 260.0, 560.0
+	}
+	spacing := fontSize * 1.2
+	hubYBase := float64(e.Height) * 0.48
+	if e.Width > 2000 {
+		hubYBase = float64(e.Height) * 0.42
+	}
+	impactYBase := hubYBase + hubsBoxH + 20.0
+	if e.Width > 2000 {
+		impactYBase = hubYBase + hubsBoxH + 40.0
+	}
+
+	e.activateVisualAnomalies(allImpact, impactYBase, boxW, spacing)
+}
+
+func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 	countMap := make(map[string]*PrefixCount)
 	for _, vi := range allImpact {
 		if vi.ClassificationName == "" {
@@ -970,24 +992,10 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 		}
 		return e.prefixCounts[i].Name < e.prefixCounts[j].Name
 	})
+}
 
-	fontSize := 18.0
-	hubsBoxH, boxW := 130.0, 280.0
-	if e.Width > 2000 {
-		fontSize = 36.0
-		hubsBoxH, boxW = 260.0, 560.0
-	}
-	spacing := fontSize * 1.2
-	hubYBase := float64(e.Height) * 0.48
-	if e.Width > 2000 {
-		hubYBase = float64(e.Height) * 0.42
-	}
-	impactYBase := hubYBase + hubsBoxH + 20.0
-	if e.Width > 2000 {
-		impactYBase = hubYBase + hubsBoxH + 40.0
-	}
-
-	// Filter to only show anomalies (priority >= 1) in the visual list
+func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact, impactYBase, boxW, spacing float64) {
+	// Filter to only show significant anomalies (priority >= 1) in the visual list
 	var filteredImpact []*VisualImpact
 	for _, vi := range allImpact {
 		if e.GetPriority(vi.ClassificationName) >= 1 {

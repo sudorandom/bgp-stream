@@ -1732,6 +1732,10 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 }
 
 func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...bool) {
+	// De-emphasize Discovery/None pulses (Blue)
+	if c == ColorDiscovery && rand.Float64() > 0.25 {
+		return
+	}
 	flare := false
 	if len(isFlare) > 0 {
 		flare = isFlare[0]
