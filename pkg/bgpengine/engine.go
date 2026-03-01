@@ -259,6 +259,7 @@ type VisualHub struct {
 
 type VisualImpact struct {
 	Prefix                     string
+	MaskLen                    int
 	ASN                        uint32
 	NetworkName                string
 	ClassificationName         string
