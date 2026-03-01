@@ -555,13 +555,15 @@ func (e *Engine) logVal(v int) float64 {
 }
 
 func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, titlePadding, globalMaxLog, fontSize float64) {
+	var gridPath vector.Path
 	for _, val := range []int{1, 10, 100, 1000, 10000, 100000} {
 		lVal := e.logVal(val)
 		if lVal > globalMaxLog+0.1 {
 			break
 		}
 		y := math.Round(titlePadding + chartH - (lVal/globalMaxLog)*chartH)
-		vector.StrokeLine(screen, float32(gx), float32(gy+y), float32(gx+chartW), float32(gy+y), 2.0, color.RGBA{40, 40, 40, 255}, true)
+		gridPath.MoveTo(float32(gx), float32(gy+y))
+		gridPath.LineTo(float32(gx+chartW), float32(gy+y))
 
 		labelStr := fmt.Sprintf("%d", val)
 		if val >= 1000000 {
@@ -579,6 +581,30 @@ func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, tit
 		e.textOp.ColorScale.Scale(1, 1, 1, 0.6)
 		text.Draw(screen, labelStr, e.titleFace05, e.textOp)
 	}
+
+	strokeOp := &vector.StrokeOptions{Width: 2.0}
+
+	// Reuse slices to avoid allocations every frame
+	e.trendGridVertices = e.trendGridVertices[:0]
+	e.trendGridIndices = e.trendGridIndices[:0]
+
+	//nolint:staticcheck // deprecated in ebiten 2.9, but avoids allocations per frame in tight animation loops
+	e.trendGridVertices, e.trendGridIndices = gridPath.AppendVerticesAndIndicesForStroke(e.trendGridVertices, e.trendGridIndices, strokeOp)
+
+	r := float32(40.0 / 255.0)
+	g := float32(40.0 / 255.0)
+	b := float32(40.0 / 255.0)
+	a := float32(1.0)
+
+	for i := range e.trendGridVertices {
+		e.trendGridVertices[i].ColorR = r
+		e.trendGridVertices[i].ColorG = g
+		e.trendGridVertices[i].ColorB = b
+		e.trendGridVertices[i].ColorA = a
+	}
+
+	op := &ebiten.DrawTrianglesOptions{}
+	screen.DrawTriangles(e.trendGridVertices, e.trendGridIndices, e.whitePixel, op)
 }
 
 func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64) {
