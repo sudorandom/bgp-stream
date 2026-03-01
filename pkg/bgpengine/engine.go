@@ -203,7 +203,7 @@ type Engine struct {
 	lastMetricsUpdate     time.Time
 	hubUpdatedAt          time.Time
 	impactUpdatedAt       time.Time
-	orangeCount, redCount int
+	prefixCounts          []PrefixCount
 
 	VisualHubs map[string]*VisualHub
 	ActiveHubs []*VisualHub
@@ -255,6 +255,13 @@ type VisualHub struct {
 	Alpha       float32
 	TargetAlpha float32
 	Active      bool
+}
+
+type PrefixCount struct {
+	Name     string
+	Count    int
+	Color    color.RGBA
+	Priority int
 }
 
 type VisualImpact struct {
