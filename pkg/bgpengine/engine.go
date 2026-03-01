@@ -578,6 +578,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	now := time.Now()
 	e.drawOp.GeoM.Reset()
 	e.drawOp.ColorScale.Reset()
+	e.drawOp.Filter = ebiten.FilterLinear // Use linear for smooth scaling
 	e.drawOp.Blend = ebiten.BlendLighter
 	// imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
 	// halfW := float64(imgW) / 2
@@ -592,19 +593,35 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		baseAlpha := 0.5
 
 		alpha := (1.0 - progress) * baseAlpha
+		maxRadiusMultiplier := 1.0
+
 		e.drawOp.GeoM.Reset()
 
 		imgW := float64(e.pulseImage.Bounds().Dx())
 		halfW := imgW / 2
 		imgToDraw := e.pulseImage
+
+		// Test: enable flares for all pulses
 		if p.IsFlare {
 			imgW = float64(e.flareImage.Bounds().Dx())
 			halfW = imgW / 2
 			imgToDraw = e.flareImage
+
+			// FLARES ARE SIGNIFICANT! Make them 3x larger
+			maxRadiusMultiplier = 3.0
+
+			// Flares flash INTENSELY in the middle of the animation
+			// Use sin curve: starts dim, peaks at middle, fades out
+			flareIntensity := math.Sin(progress * math.Pi)       // 0 -> 1 -> 0
+			flareIntensity = math.Pow(flareIntensity, 1.5) * 2.5 // Power curve for dramatic peak, massive boost
+			alpha = flareIntensity                               // Full dramatic pulse effect
+
+			// Make duration longer for flares
+			totalDuration = 2.0
 		}
 
-		// Use a smaller base offset (+1) and more conservative scaling
-		scale := (1 + progress*p.MaxRadius) / imgW * 2.0
+		// Flares expand much more dramatically
+		scale := (1 + progress*p.MaxRadius*maxRadiusMultiplier) / imgW * 2.0
 
 		e.drawOp.GeoM.Translate(-halfW, -halfW)
 		e.drawOp.GeoM.Scale(scale, scale)
@@ -666,73 +683,133 @@ func (e *Engine) InitPulseTexture() {
 	// Generate lens flare texture for route leaks
 	e.flareImage = ebiten.NewImage(size, size)
 	flarePixels := make([]byte, size*size*4)
+
+	// Initialize ALL pixels to BLACK and transparent (important for BlendLighter!)
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
-			dx, dy := float64(x)-center, float64(y)-center
-			dist := math.Sqrt(dx*dx + dy*dy)
+			idx := (y*size + x) * 4
+			flarePixels[idx+0] = 0 // R = 0 for transparent pixels!
+			flarePixels[idx+1] = 0 // G = 0 for transparent pixels!
+			flarePixels[idx+2] = 0 // B = 0 for transparent pixels!
+			flarePixels[idx+3] = 0 // Transparent
+		}
+	}
 
-			if dist < maxDist {
-				val := 0.0
+	// Generate realistic lens flare texture - DRAMATIC for route leaks!
+	centerX, centerY := float64(size)/2.0, float64(size)/2.0
+	rayThickness := float64(size) / 20.0    // THICKER rays for more visibility
+	rotationAngle := 15.0 * math.Pi / 180.0 // Rotate 15 degrees
 
-				// Base dot
-				if dist < maxDist*0.05 {
-					val = 1.0 - (dist / (maxDist * 0.05))
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			fx, fy := float64(x), float64(y)
+			dx, dy := fx-centerX, fy-centerY
+
+			// Apply rotation to the coordinates
+			cosA, sinA := math.Cos(rotationAngle), math.Sin(rotationAngle)
+			rdx := dx*cosA - dy*sinA
+			rdy := dx*sinA + dy*cosA
+
+			dist := math.Sqrt(rdx*rdx + rdy*rdy)
+			maxDist := centerX
+
+			brightness := 0.0
+
+			// 1. LARGE bright central core
+			if dist < maxDist*0.15 {
+				brightness = 1.0
+			}
+
+			// 2. Main horizontal ray (full width, BRIGHTER) - now rotated
+			if math.Abs(rdy) < rayThickness {
+				// Slower falloff for longer-reaching rays
+				rayIntensity := 1.0 - (math.Abs(rdx) / (maxDist * 1.2))
+				if rayIntensity > 0 {
+					edgeFalloff := 1.0 - (math.Abs(rdy) / rayThickness)
+					brightness = math.Max(brightness, rayIntensity*edgeFalloff)
 				}
+			}
 
-				// Thin horizontal/vertical lines (astigmatism flare)
-
-				// Horizontal line
-				if math.Abs(dy) < 1.0 {
-					v := 1.0 - (math.Abs(dx) / maxDist)
-					if v > 0 { val += v * 0.8 }
+			// 3. Main vertical ray (full height, BRIGHTER) - now rotated
+			if math.Abs(rdx) < rayThickness {
+				rayIntensity := 1.0 - (math.Abs(rdy) / (maxDist * 1.2))
+				if rayIntensity > 0 {
+					edgeFalloff := 1.0 - (math.Abs(rdx) / rayThickness)
+					brightness = math.Max(brightness, rayIntensity*edgeFalloff)
 				}
+			}
 
-				// Vertical line
-				if math.Abs(dx) < 1.0 {
-					v := 1.0 - (math.Abs(dy) / maxDist)
-					if v > 0 { val += v * 0.8 }
+			// 4. Diagonal rays (4 rays forming an X, BRIGHTER) - now rotated
+			diagDist1 := math.Abs(rdx-rdy) / math.Sqrt(2) // Top-left to bottom-right
+			diagDist2 := math.Abs(rdx+rdy) / math.Sqrt(2) // Top-right to bottom-left
+
+			if diagDist1 < rayThickness*0.85 {
+				diagLen := math.Abs(rdx+rdy) / math.Sqrt(2)
+				rayIntensity := 1.0 - (diagLen / (maxDist * 1.6))
+				if rayIntensity > 0 {
+					edgeFalloff := 1.0 - (diagDist1 / (rayThickness * 0.85))
+					brightness = math.Max(brightness, rayIntensity*edgeFalloff*0.9)
 				}
+			}
 
-				// Diagonal lines (fainter)
-				diagDist1 := math.Abs(dx - dy) / math.Sqrt(2)
-				diagDist2 := math.Abs(dx + dy) / math.Sqrt(2)
-
-				diagLen1 := math.Abs(dx + dy) / math.Sqrt(2)
-				diagLen2 := math.Abs(dx - dy) / math.Sqrt(2)
-
-				if diagDist1 < 1.0 {
-					v := (1.0 - (diagLen1 / (maxDist * 0.6))) * 0.4
-					if v > 0 { val += v }
+			if diagDist2 < rayThickness*0.85 {
+				diagLen := math.Abs(rdx-rdy) / math.Sqrt(2)
+				rayIntensity := 1.0 - (diagLen / (maxDist * 1.6))
+				if rayIntensity > 0 {
+					edgeFalloff := 1.0 - (diagDist2 / (rayThickness * 0.85))
+					brightness = math.Max(brightness, rayIntensity*edgeFalloff*0.9)
 				}
+			}
 
-				if diagDist2 < 1.0 {
-					v := (1.0 - (diagLen2 / (maxDist * 0.6))) * 0.4
-					if v > 0 { val += v }
-				}
-
-				if val > 1.0 {
-					val = 1.0
-				} else if val < 0.0 {
-					val = 0.0
-				}
-
-				// Make the streaks non-linear so they look longer and sharper
-				if dist > maxDist*0.05 {
-					val = math.Pow(val, 1.5)
-				}
-
-				// Second pass, make sure core is bright
-				if dist < maxDist*0.05 {
-					coreVal := 1.0 - (dist / (maxDist * 0.05))
-					val = math.Max(val, coreVal)
-				}
-
-				flarePixels[(y*size+x)*4+3] = uint8(val * 255)
-				flarePixels[(y*size+x)*4+0], flarePixels[(y*size+x)*4+1], flarePixels[(y*size+x)*4+2] = 255, 255, 255
+			// Clamp and apply
+			if brightness > 1.0 {
+				brightness = 1.0
+			}
+			if brightness > 0 {
+				idx := (y*size + x) * 4
+				flarePixels[idx+0] = uint8(brightness * 255) // R
+				flarePixels[idx+1] = uint8(brightness * 255) // G
+				flarePixels[idx+2] = uint8(brightness * 255) // B
+				flarePixels[idx+3] = uint8(brightness * 255) // A
 			}
 		}
 	}
+
+	log.Printf("Lens flare generated: %dx%d with 6-ray star pattern", size, size)
+
+	// Debug: Count opaque vs transparent pixels
+	opaqueCount := 0
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			idx := (y*size + x) * 4
+			if flarePixels[idx+3] > 0 {
+				opaqueCount++
+			}
+		}
+	}
+	log.Printf("Flare texture stats: %d opaque pixels out of %d total (%.1f%%)", opaqueCount, size*size, float64(opaqueCount)/float64(size*size)*100)
+
 	e.flareImage.WritePixels(flarePixels)
+
+	// Debug: Save flare texture to disk using Set method (no stride issues)
+	go func(sz int, pixels []byte) {
+		debugImg := image.NewRGBA(image.Rect(0, 0, sz, sz))
+		for y := 0; y < sz; y++ {
+			for x := 0; x < sz; x++ {
+				idx := (y*sz + x) * 4
+				r := pixels[idx+0]
+				g := pixels[idx+1]
+				b := pixels[idx+2]
+				a := pixels[idx+3]
+				debugImg.Set(x, y, color.RGBA{r, g, b, a})
+			}
+		}
+		if f, err := os.Create("data/cache/flare_texture_debug.png"); err == nil {
+			png.Encode(f, debugImg)
+			f.Close()
+			log.Println("Flare texture saved to data/cache/flare_texture_debug.png")
+		}
+	}(size, flarePixels)
 
 	// Create a 1x1 white image for trendlines
 	e.trendLineImg = ebiten.NewImage(1, 1)
@@ -1508,7 +1585,7 @@ func (e *Engine) getLevel2Visuals(level2Type Level2EventType) (visualColor color
 	case Level2NextHopOscillation:
 		return ColorBad, nameNextHopFlap
 	case Level2Outage:
-		return ColorCritical, nameHardOutage
+		return ColorOutage, nameHardOutage
 	case Level2RouteLeak:
 		return ColorCritical, nameRouteLeak
 	default:
