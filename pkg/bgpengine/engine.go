@@ -1487,24 +1487,16 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 		}
 	}
 
-	// 2. Buffer city activity
-	b := e.getOrCreateCityBuffer(lat, lng)
-
+	// 2. Track country activity
 	if cc != "" {
 		e.countryActivity[cc]++
-	}
-
-	if b.Counts == nil {
-		b.Counts = make(map[color.RGBA]int)
 	}
 
 	// 3. Determine color and name based on Level 2 type
 	c, name := e.getLevel2Visuals(level2Type)
 
-	// 4. Increment counts only if a Level 2 color was chosen
-	if c != (color.RGBA{}) {
-		b.Counts[c]++
-	}
+	// 4. Buffer city activity
+	e.incrementCityBuffer(lat, lng, c)
 
 	// 5. Update Visual Impact metadata
 	if prefix != "" {
@@ -1515,7 +1507,10 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 	e.updateWindowedMetrics(eventType, level2Type, prefix, asn)
 }
 
-func (e *Engine) getOrCreateCityBuffer(lat, lng float64) *BufferedCity {
+func (e *Engine) incrementCityBuffer(lat, lng float64, c color.RGBA) {
+	if c == (color.RGBA{}) {
+		return
+	}
 	key := math.Float64bits(lat) ^ (math.Float64bits(lng) << 1)
 	e.bufferMu.Lock()
 	defer e.bufferMu.Unlock()
@@ -1526,7 +1521,10 @@ func (e *Engine) getOrCreateCityBuffer(lat, lng float64) *BufferedCity {
 		b.Lng = lng
 		e.cityBuffer[key] = b
 	}
-	return b
+	if b.Counts == nil {
+		b.Counts = make(map[color.RGBA]int)
+	}
+	b.Counts[c]++
 }
 
 func (e *Engine) getLevel2Visuals(level2Type Level2EventType) (visualColor color.RGBA, classificationName string) {
@@ -1614,7 +1612,9 @@ func (e *Engine) updateWindowedMetrics(eventType EventType, level2Type Level2Eve
 	case EventNew:
 		e.windowNew++
 		if prefix != "" {
+			e.bufferMu.Lock()
 			e.seenBuffer[prefix] = asn
+			e.bufferMu.Unlock()
 		}
 	case EventUpdate:
 		e.windowUpd++
@@ -1733,7 +1733,7 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 
 func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...bool) {
 	// De-emphasize Discovery/None pulses (Blue)
-	if c == ColorDiscovery && rand.Float64() > 0.25 {
+	if c == ColorDiscovery && rand.Float64() > 0.5 {
 		return
 	}
 	flare := false
