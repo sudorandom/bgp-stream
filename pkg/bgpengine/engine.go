@@ -17,7 +17,6 @@ import (
 	"math"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
 	"runtime/debug"
 	"sort"
@@ -31,6 +30,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/oschwald/maxminddb-golang"
 	geojson "github.com/paulmach/go.geojson"
+	"github.com/sudorandom/bgp-stream/pkg/sources"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
@@ -197,15 +197,16 @@ type Engine struct {
 	trendLinesBuffer *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
-	hubChangedAt      map[string]time.Time
-	lastHubs          map[string]int
-	hubPosition       map[string]int
-	lastMetricsUpdate time.Time
-	hubUpdatedAt      time.Time
-	impactUpdatedAt   time.Time
+	hubChangedAt          map[string]time.Time
+	lastHubs              map[string]int
+	hubPosition           map[string]int
+	lastMetricsUpdate     time.Time
+	hubUpdatedAt          time.Time
+	impactUpdatedAt       time.Time
+	orangeCount, redCount int
 
-	VisualHubs  map[string]*VisualHub
-	ActiveHubs  []*VisualHub
+	VisualHubs map[string]*VisualHub
+	ActiveHubs []*VisualHub
 
 	prefixImpactHistory []map[string]int
 	prefixToASN         map[string]uint32
@@ -316,7 +317,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 		hubPosition:         make(map[string]int),
 		lastMetricsUpdate:   time.Now(),
 		VisualHubs:          make(map[string]*VisualHub),
-		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 20s = 20 mins
+		prefixImpactHistory: make([]map[string]int, 30), // 30 buckets * 20s = 10 mins
 		VisualImpact:        make(map[string]*VisualImpact),
 		lastFrameCapturedAt: time.Now(),
 		drawOp:              &ebiten.DrawImageOptions{},
@@ -361,14 +362,14 @@ func NewEngine(width, height int, scale float64) *Engine {
 		{"PATH OSCILLATION", 0, ColorPolicy, ColorUpdUI, func(s MetricSnapshot) int { return s.Oscill }},
 
 		// Column 2: Bad (Orange)
-		{"BGP BABBLING", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.Babbling }},
+		{"BABBLING", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.Babbling }},
 		{"AGGREGATOR FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.AggFlap }},
 		{"NEXT-HOP FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.NextHop }},
 		{"LINK FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.LinkFlap }},
 
 		// Column 3: Critical (Red)
 		{"ROUTE LEAK", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Leak }},
-		{"HARD OUTAGE", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Outage }},
+		{"OUTAGE", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Outage }},
 	}
 
 	e.audioPlayer = NewAudioPlayer(nil, func(song, artist, extra string) {
@@ -696,17 +697,14 @@ func (e *Engine) LoadRemainingData() error {
 	// 4. Download worldcities.csv if missing
 	citiesPath := "data/worldcities.csv"
 	if _, err := os.Stat(citiesPath); err != nil && os.IsNotExist(err) {
-		url := "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/csv/cities.csv"
-		log.Printf("Downloading world cities database from %s...", url)
-		if err := utils.DownloadFile(url, citiesPath); err != nil {
+		log.Printf("Downloading world cities database from %s...", sources.WorldCitiesURL)
+		if err := sources.DownloadWorldCities(citiesPath); err != nil {
 			log.Printf("Error downloading cities: %v", err)
 		}
 	}
 
 	// 5. Load cloud data from sources of truth
-	if err := e.loadCloudData(); err != nil {
-		log.Printf("Warning: Failed to load cloud data: %v", err)
-	}
+	e.loadCloudData()
 
 	if err := e.loadRemoteCityData(); err != nil {
 		return err
@@ -769,36 +767,8 @@ func (e *Engine) renderHistoricalData() {
 }
 
 func (e *Engine) loadRemoteCityData() error {
-	resp, err := http.Get("https://map.kmcd.dev/data/city-dominance/meta.json")
+	cities, err := sources.FetchCityDominance()
 	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Printf("Error closing response body: %v", err)
-		}
-	}()
-	var meta struct {
-		MaxYear int `json:"max_year"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		return err
-	}
-	resp, err = http.Get(fmt.Sprintf("https://map.kmcd.dev/data/city-dominance/%d.json", meta.MaxYear))
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Printf("Error closing response body: %v", err)
-		}
-	}()
-	var cities []struct {
-		Country             string
-		Coordinates         []float64
-		LogicalDominanceIPs float64 `json:"logical_dominance_ips"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&cities); err != nil {
 		return err
 	}
 	for _, c := range cities {
@@ -816,12 +786,12 @@ func (e *Engine) loadRemoteCityData() error {
 	return nil
 }
 
-func (e *Engine) loadCloudData() error {
-	var allPrefixes []utils.CloudPrefix
+func (e *Engine) loadCloudData() {
+	var allPrefixes []sources.CloudPrefix
 
 	// 1. Google Cloud (Geofeed - Source of Truth)
 	log.Println("Fetching Google Cloud Geofeed...")
-	goog, err := utils.FetchGoogleGeofeed()
+	goog, err := sources.FetchGoogleGeofeed()
 	if err == nil {
 		allPrefixes = append(allPrefixes, goog...)
 	} else {
@@ -830,27 +800,18 @@ func (e *Engine) loadCloudData() error {
 
 	// 2. AWS IP Ranges
 	log.Println("Fetching AWS IP Ranges...")
-	resp, err := http.Get("https://ip-ranges.amazonaws.com/ip-ranges.json")
+	aws, err := sources.FetchAWSRanges()
 	if err == nil {
-		defer func() {
-			if err := resp.Body.Close(); err != nil {
-				log.Printf("Error closing AWS response body: %v", err)
-			}
-		}()
-		aws, err := utils.ParseAWSRanges(resp.Body)
-		if err == nil {
-			allPrefixes = append(allPrefixes, aws...)
-		}
+		allPrefixes = append(allPrefixes, aws...)
 	} else {
 		log.Printf("Warning: Failed to fetch AWS ranges: %v", err)
 	}
 
 	if len(allPrefixes) > 0 {
-		e.geo.cloudTrie = utils.NewCloudTrie(allPrefixes)
+		e.geo.cloudTrie = sources.NewCloudTrie(allPrefixes)
 		log.Printf("Loaded %d cloud prefixes into CloudTrie", len(allPrefixes))
 	}
 
-	return nil
 }
 
 func (e *Engine) drawGrid(img *image.RGBA) {
@@ -1089,27 +1050,20 @@ func (e *Engine) fetchRIRData(geoReader *maxminddb.Reader) []ipRange {
 	var wg sync.WaitGroup
 
 	rirNames := []string{"APNIC", "RIPE", "AFRINIC", "LACNIC", "ARIN"}
-	urls := map[string]string{
-		"APNIC":   "https://ftp.apnic.net/stats/apnic/delegated-apnic-latest",
-		"RIPE":    "https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-latest",
-		"AFRINIC": "https://ftp.afrinic.net/pub/stats/afrinic/delegated-afrinic-latest",
-		"LACNIC":  "https://ftp.lacnic.net/pub/stats/lacnic/delegated-lacnic-latest",
-		"ARIN":    "https://ftp.arin.net/pub/stats/arin/delegated-arin-extended-latest",
-	}
 
 	for _, name := range rirNames {
 		wg.Add(1)
 		go func(n string) {
 			defer wg.Done()
-			e.processRIRData(n, urls[n], geoReader, &mu, &allRanges)
+			e.processRIRData(n, geoReader, &mu, &allRanges)
 		}(name)
 	}
 	wg.Wait()
 	return allRanges
 }
 
-func (e *Engine) processRIRData(name, url string, geoReader *maxminddb.Reader, mu *sync.Mutex, allRanges *[]ipRange) {
-	r, err := utils.GetCachedReader(url, true, "[RIR-"+name+"]")
+func (e *Engine) processRIRData(name string, geoReader *maxminddb.Reader, mu *sync.Mutex, allRanges *[]ipRange) {
+	r, err := sources.GetRIRReader(name)
 	if err != nil {
 		log.Printf("[RIR-%s] Error fetching data: %v", name, err)
 		return
@@ -1407,26 +1361,6 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 
 	// 6. Update windowed metrics (this drives the dashboard numbers)
 	e.updateWindowedMetrics(eventType, level2Type, prefix, asn)
-}
-
-func (e *Engine) updatePrefixImpact(prefix string, asn uint32) {
-	if len(e.prefixImpactHistory) > 0 {
-		bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
-		if bucket == nil {
-			bucket = make(map[string]int)
-			e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
-		}
-		bucket[prefix]++
-	}
-	if e.prefixToASN == nil {
-		e.prefixToASN = make(map[string]uint32)
-	}
-	if asn != 0 {
-		e.prefixToASN[prefix] = asn
-	}
-	if utils.IsBeaconPrefix(prefix) {
-		e.windowBeacon++
-	}
 }
 
 func (e *Engine) getOrCreateCityBuffer(lat, lng float64) *BufferedCity {

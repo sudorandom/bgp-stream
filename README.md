@@ -34,6 +34,26 @@ BGP updates are processed through a multi-stage classification engine:
 - **PROPAGATION (Gossip):** Redundant updates or announcements seen for the same prefix within a 15-second deduplication window.
 - **Beacon Filtering:** Known [RIPE Routing Beacons](https://ris.ripe.net/docs/routing-beacons/) are automatically excluded from "Most Active" metrics to ensure legitimate network volatility is highlighted.
 
+### Anomalies and Behaviors
+
+The classification engine also maps events into Level 2 categorizations (anomalies) based on heuristics applied over recent activity windows. These fall into three severity tiers:
+
+**Critical (Red)**
+- **Outage:** A prefix sustains at least 3 withdrawals with 0 successful announcements within the evaluation window.
+- **Route Leak:** The AS path violates the valley-free routing principle (e.g., traffic routes from a Tier-1 provider, down to a non-Tier-1/non-Cloud AS, and back up to a Tier-1 provider).
+
+**Bad (Orange)**
+- **Link Flap:** A prefix experiences a high ratio of withdrawals to announcements (more than 5 withdrawals, with an announcement-to-withdrawal ratio of less than 2.5).
+- **Babbling:** Excessive message volume from a peer for a specific prefix, particularly when the BGP attributes (Path, Community, MED, LocalPref) are completely unchanged.
+- **Next-Hop Flap:** The prefix is announced with at least 5 next-hop changes across multiple distinct next-hops, but with very little change to the actual AS path length.
+- **Aggregator Flap:** Frequent changes (more than 10) in the AGGREGATOR attribute relative to the prefix's uptime.
+
+**Normal / Policy (Purple & Blue)**
+- **Policy Churn:** Elevated changes in Community, AS Path (without path length changes), MED, or LocalPref attributes, indicating traffic engineering or policy adjustments.
+- **Path Length Oscillation:** Frequent switching between different AS path lengths for the same prefix over a short duration.
+- **Path Hunting:** A sequence of announcements with strictly increasing AS path lengths followed by a withdrawal, characteristic of BGP path exploration during convergence.
+- **Discovery (Blue):** Prolonged announcement activity with very few path or withdrawal changes, generally representing standard prefix origination or benign routing noise.
+
 ## Real-time Processing
 
 To ensure a smooth and meaningful visualization, the engine employs several techniques:

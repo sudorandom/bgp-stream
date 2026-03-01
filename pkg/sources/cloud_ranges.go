@@ -1,5 +1,5 @@
-// Package utils provides various utility functions and data structures for BGP stream processing.
-package utils
+// Package sources provides various utility functions and data structures for BGP stream processing.
+package sources
 
 import (
 	"encoding/binary"
@@ -350,7 +350,7 @@ var cloudRegionToCity = map[string]string{
 // FetchGoogleGeofeed downloads and parses the official Google Cloud geofeed.
 // Source: https://www.gstatic.com/ipranges/cloud_geofeed
 func FetchGoogleGeofeed() ([]CloudPrefix, error) {
-	const url = "https://www.gstatic.com/ipranges/cloud_geofeed"
+	const url = GoogleGeofeedURL
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -447,4 +447,17 @@ func (ct *CloudTrie) Lookup(ip net.IP) (string, bool) {
 
 	ct.cache.Store(targetInt, nil)
 	return "", false
+}
+
+func FetchAWSRanges() ([]CloudPrefix, error) {
+	resp, err := http.Get(AWSRangesURL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Error closing AWS response body: %v", err)
+		}
+	}()
+	return ParseAWSRanges(resp.Body)
 }

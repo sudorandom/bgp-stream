@@ -25,11 +25,11 @@ const (
 	nameLinkFlap        = "Link Flap"
 	nameAggFlap         = "Aggregator Flap"
 	namePathOscillation = "Path Oscillation"
-	nameBabbling        = "BGP Babbling"
+	nameBabbling        = "Babbling"
 	namePathHunting     = "Path Hunting"
 	namePolicyChurn     = "Policy Churn"
 	nameNextHopFlap     = "Next-Hop Flap"
-	nameHardOutage      = "Hard Outage"
+	nameHardOutage      = "Outage"
 	nameRouteLeak       = "Route Leak"
 	nameDiscovery       = "Discovery"
 )
@@ -258,7 +258,7 @@ func (p *BGPProcessor) startWithdrawalPacer(pendingWithdrawals map[uint32]struct
 			for ip, entry := range pendingWithdrawals {
 				if now.After(entry.Time) {
 					if lat, lng, cc := p.geo(ip); cc != "" {
-						p.onEvent(lat, lng, cc, EventWithdrawal, Level2Outage, entry.Prefix, 0)
+						p.onEvent(lat, lng, cc, EventWithdrawal, Level2None, entry.Prefix, 0)
 						p.recentlySeen[ip] = struct {
 							Time time.Time
 							Type EventType

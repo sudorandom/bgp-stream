@@ -1,5 +1,5 @@
-// Package utils provides various utility functions and data structures for BGP stream processing.
-package utils
+// Package sources provides various utility functions and data structures for BGP stream processing.
+package sources
 
 import (
 	"bufio"
