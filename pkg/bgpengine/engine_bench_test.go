@@ -14,6 +14,8 @@ func BenchmarkDrawBGPStatus(b *testing.B) {
 	width, height := 1920, 1080
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
+	e.InitFlareTexture()
+	e.InitTrendlineTexture()
 
 	// Pre-fill history to ensure we are benchmarking the actual drawing logic
 	for i := 0; i < 60; i++ {
@@ -40,6 +42,8 @@ func TestDrawBGPStatusAllocations(t *testing.T) {
 	width, height := 1920, 1080
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
+	e.InitFlareTexture()
+	e.InitTrendlineTexture()
 
 	// Fill history
 	for i := 0; i < 60; i++ {
@@ -70,6 +74,8 @@ func BenchmarkDrawMap(b *testing.B) {
 	width, height := 1920, 1080
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
+	e.InitFlareTexture()
+	e.InitTrendlineTexture()
 
 	// Fill with pulses
 	now := time.Now()
@@ -97,6 +103,8 @@ func TestDrawMapAllocations(t *testing.T) {
 	width, height := 1920, 1080
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
+	e.InitFlareTexture()
+	e.InitTrendlineTexture()
 
 	// Fill with pulses
 	now := time.Now()
@@ -121,5 +129,31 @@ func TestDrawMapAllocations(t *testing.T) {
 
 	if allocs > maxAllowedAllocs {
 		t.Errorf("Too many allocations in Draw: got %.2f, want <= %d", allocs, maxAllowedAllocs)
+	}
+}
+
+// BenchmarkDrawTrendGrid measures the performance and allocations of just the trend grid rendering.
+func BenchmarkDrawTrendGrid(b *testing.B) {
+	width, height := 1920, 1080
+	e := NewEngine(width, height, 1.0)
+
+	// Create required textures to avoid nil pointer dereferences
+	e.InitPulseTexture()
+	e.InitFlareTexture()
+	e.InitTrendlineTexture()
+
+	screen := ebiten.NewImage(width, height)
+
+	// Parameters for drawTrendGrid
+	gx, gy := 10.0, 10.0
+	chartW, chartH := 400.0, 200.0
+	titlePadding := 20.0
+	globalMaxLog := 5.0
+	fontSize := 16.0
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		e.drawTrendGrid(screen, gx, gy, chartW, chartH, titlePadding, globalMaxLog, fontSize)
 	}
 }
