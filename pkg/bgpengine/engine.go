@@ -200,6 +200,9 @@ type Engine struct {
 	trendLinesBuffer *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
+	trendGridVertices []ebiten.Vertex
+	trendGridIndices  []uint16
+
 	hubChangedAt      map[string]time.Time
 	lastHubs          map[string]int
 	hubPosition       map[string]int
