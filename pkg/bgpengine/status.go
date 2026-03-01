@@ -587,6 +587,8 @@ func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, tit
 	// Reuse slices to avoid allocations every frame
 	e.trendGridVertices = e.trendGridVertices[:0]
 	e.trendGridIndices = e.trendGridIndices[:0]
+
+	//nolint:staticcheck // deprecated in ebiten 2.9, but avoids allocations per frame in tight animation loops
 	e.trendGridVertices, e.trendGridIndices = gridPath.AppendVerticesAndIndicesForStroke(e.trendGridVertices, e.trendGridIndices, strokeOp)
 
 	r := float32(40.0 / 255.0)
