@@ -347,8 +347,6 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(screen, legendTitle, e.titleFace, e.textOp)
 
-	// imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
-	// halfW := float64(imgW) / 2
 	swatchSize := fontSize
 
 	// Shift legend content slightly for padding

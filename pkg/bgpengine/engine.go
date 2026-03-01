@@ -572,8 +572,6 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	e.drawOp.GeoM.Reset()
 	e.drawOp.ColorScale.Reset()
 	e.drawOp.Blend = ebiten.BlendLighter
-	// imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
-	// halfW := float64(imgW) / 2
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
 		totalDuration := 1.5
@@ -663,63 +661,8 @@ func (e *Engine) InitPulseTexture() {
 		for x := 0; x < size; x++ {
 			dx, dy := float64(x)-center, float64(y)-center
 			dist := math.Sqrt(dx*dx + dy*dy)
-
 			if dist < maxDist {
-				val := 0.0
-
-				// Base dot
-				if dist < maxDist*0.05 {
-					val = 1.0 - (dist / (maxDist * 0.05))
-				}
-
-				// Thin horizontal/vertical lines (astigmatism flare)
-
-				// Horizontal line
-				if math.Abs(dy) < 1.0 {
-					v := 1.0 - (math.Abs(dx) / maxDist)
-					if v > 0 { val += v * 0.8 }
-				}
-
-				// Vertical line
-				if math.Abs(dx) < 1.0 {
-					v := 1.0 - (math.Abs(dy) / maxDist)
-					if v > 0 { val += v * 0.8 }
-				}
-
-				// Diagonal lines (fainter)
-				diagDist1 := math.Abs(dx - dy) / math.Sqrt(2)
-				diagDist2 := math.Abs(dx + dy) / math.Sqrt(2)
-
-				diagLen1 := math.Abs(dx + dy) / math.Sqrt(2)
-				diagLen2 := math.Abs(dx - dy) / math.Sqrt(2)
-
-				if diagDist1 < 1.0 {
-					v := (1.0 - (diagLen1 / (maxDist * 0.6))) * 0.4
-					if v > 0 { val += v }
-				}
-
-				if diagDist2 < 1.0 {
-					v := (1.0 - (diagLen2 / (maxDist * 0.6))) * 0.4
-					if v > 0 { val += v }
-				}
-
-				if val > 1.0 {
-					val = 1.0
-				} else if val < 0.0 {
-					val = 0.0
-				}
-
-				// Make the streaks non-linear so they look longer and sharper
-				if dist > maxDist*0.05 {
-					val = math.Pow(val, 1.5)
-				}
-
-				// Second pass, make sure core is bright
-				if dist < maxDist*0.05 {
-					coreVal := 1.0 - (dist / (maxDist * 0.05))
-					val = math.Max(val, coreVal)
-				}
-
+				val := calculateFlareValue(dx, dy, dist, maxDist)
 				flarePixels[(y*size+x)*4+3] = uint8(val * 255)
 				flarePixels[(y*size+x)*4+0], flarePixels[(y*size+x)*4+1], flarePixels[(y*size+x)*4+2] = 255, 255, 255
 			}
@@ -746,6 +689,70 @@ func (e *Engine) InitPulseTexture() {
 		}
 	}
 	e.trendCircleImg.WritePixels(pixels)
+}
+
+func calculateFlareValue(dx, dy, dist, maxDist float64) float64 {
+	val := 0.0
+
+	// Base dot
+	if dist < maxDist*0.05 {
+		val = 1.0 - (dist / (maxDist * 0.05))
+	}
+
+	// Horizontal line
+	if math.Abs(dy) < 1.0 {
+		v := 1.0 - (math.Abs(dx) / maxDist)
+		if v > 0 {
+			val += v * 0.8
+		}
+	}
+
+	// Vertical line
+	if math.Abs(dx) < 1.0 {
+		v := 1.0 - (math.Abs(dy) / maxDist)
+		if v > 0 {
+			val += v * 0.8
+		}
+	}
+
+	// Diagonal lines (fainter)
+	diagDist1 := math.Abs(dx-dy) / math.Sqrt(2)
+	diagDist2 := math.Abs(dx+dy) / math.Sqrt(2)
+	diagLen1 := math.Abs(dx+dy) / math.Sqrt(2)
+	diagLen2 := math.Abs(dx-dy) / math.Sqrt(2)
+
+	if diagDist1 < 1.0 {
+		v := (1.0 - (diagLen1 / (maxDist * 0.6))) * 0.4
+		if v > 0 {
+			val += v
+		}
+	}
+
+	if diagDist2 < 1.0 {
+		v := (1.0 - (diagLen2 / (maxDist * 0.6))) * 0.4
+		if v > 0 {
+			val += v
+		}
+	}
+
+	if val > 1.0 {
+		val = 1.0
+	} else if val < 0.0 {
+		val = 0.0
+	}
+
+	// Make the streaks non-linear so they look longer and sharper
+	if dist > maxDist*0.05 {
+		val = math.Pow(val, 1.5)
+	}
+
+	// Second pass, make sure core is bright
+	if dist < maxDist*0.05 {
+		coreVal := 1.0 - (dist / (maxDist * 0.05))
+		val = math.Max(val, coreVal)
+	}
+
+	return val
 }
 
 func (e *Engine) GenerateInitialBackground() error {
