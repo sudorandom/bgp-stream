@@ -51,6 +51,8 @@ func initEngine() *bgpengine.Engine {
 	}
 
 	engine.InitPulseTexture()
+	engine.InitFlareTexture()
+	engine.InitTrendlineTexture()
 	return engine
 }
 

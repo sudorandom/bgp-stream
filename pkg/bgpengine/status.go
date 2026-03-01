@@ -56,10 +56,8 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 	if e.Width > 2000 {
 		hubsBoxH = 360.0
 	}
-	impactBoxH := 340.0
-	if e.Width > 2000 {
-		impactBoxH = 640.0
-	}
+	// Calculate dynamic height based on content
+	impactBoxH := e.calculateImpactBoxHeight(fontSize)
 	impactYBase := leftBaselineY + hubsBoxH + 20.0
 	if e.Width > 2000 {
 		impactYBase = leftBaselineY + hubsBoxH + 40.0
@@ -80,10 +78,7 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 		return
 	}
 
-	boxH := 180.0
-	if e.Width > 2000 {
-		boxH = 360.0
-	}
+	boxH := 380.0
 
 	if e.hubsBuffer == nil || e.hubsBuffer.Bounds().Dx() != int(boxW) || e.hubsBuffer.Bounds().Dy() != int(boxH) {
 		e.hubsBuffer = ebiten.NewImage(int(boxW), int(boxH))
@@ -126,6 +121,48 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 	e.drawGlitchImage(screen, e.hubsBuffer, hubX-10, hubYBase-fontSize-15, 1.0, hubIntensity, isHubUpdating)
 }
 
+func (e *Engine) calculateImpactBoxHeight(fontSize float64) float64 {
+	// Note: metricsMu is already held by caller (DrawBGPStatus)
+
+	// Title area
+	titleHeight := fontSize + 15.0
+
+	// Calculate height for impacts
+	impactSpacing := fontSize * 1.2 * 2.4
+	numImpacts := len(e.ActiveImpacts)
+	if numImpacts == 0 {
+		numImpacts = 1 // Minimum space for empty state
+	}
+	// Each impact needs: prefix line + ASN lines (up to 2 at fontSize*0.8*1.1 each)
+	impactsHeight := float64(numImpacts-1)*impactSpacing + fontSize*1.2 + 2*fontSize*0.8*1.1
+
+	// Gap before prefix counts
+	gap := fontSize * 0.5
+
+	// Calculate height for prefix counts
+	prefixCountsHeight := 0.0
+	if len(e.prefixCounts) > 0 {
+		// Header + items
+		prefixCountsHeight = fontSize*0.8 + float64(len(e.prefixCounts))*fontSize*0.8
+	}
+
+	// Bottom padding
+	bottomPadding := fontSize + 15.0
+
+	totalHeight := titleHeight + impactsHeight + gap + prefixCountsHeight + bottomPadding
+
+	// Set minimum height
+	minHeight := 340.0
+	if e.Width > 2000 {
+		minHeight = 640.0
+	}
+
+	if totalHeight < minHeight {
+		return minHeight
+	}
+	return totalHeight
+}
+
 func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, impactBoxH, fontSize float64, monoFace *text.GoTextFace) {
 	hubX := margin
 	// 1. Check if any items are actually visible
@@ -142,7 +179,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	vector.FillRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	impactTitle := "BGP ANOMALIES (last 10 mins)"
+	impactTitle := "BGP ANOMALIES (last 20 seconds)"
 	vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 	e.textOp.GeoM.Reset()
@@ -182,13 +219,31 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 
 	if len(e.prefixCounts) > 0 {
 		label := "Prefix Counts:"
-		countY := impactBoxH - fontSize - 15 - float64(len(e.prefixCounts))*fontSize*0.8
+		// Position prefix counts below the last impact item
+		impactSpacing := fontSize * 1.2 * 2.4
+		lastImpactY := localY + float64(len(e.ActiveImpacts))*impactSpacing
+		if len(e.ActiveImpacts) > 0 {
+			lastImpactY = localY + float64(len(e.ActiveImpacts)-1)*impactSpacing
+		}
+		// Add space for ASN lines (up to 2 lines at fontSize*0.8*1.1 each) and a gap
+		countY := lastImpactY + fontSize*1.2 + 2*fontSize*0.8*1.1 + fontSize*0.5
+
+		// Center the header
+		labelWidth, _ := text.Measure(label, e.subMonoFace, 0)
+		labelX := localX + (boxW-20.0)/2.0 - labelWidth/2.0
 
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, countY)
+		e.textOp.GeoM.Translate(labelX, countY)
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 		text.Draw(e.impactBuffer, label, e.subMonoFace, e.textOp)
+
+		// Calculate content width for centering the items
+		contentWidth := 180.0
+		if e.Width > 2000 {
+			contentWidth = 360.0
+		}
+		itemStartX := localX + (boxW-20.0)/2.0 - contentWidth/2.0
 
 		for i, pc := range e.prefixCounts {
 			rowY := countY + float64(i+1)*fontSize*0.8
@@ -196,18 +251,15 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 			// Draw classification name
 			nameStr := pc.Name + ":"
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX, rowY)
+			e.textOp.GeoM.Translate(itemStartX, rowY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 			text.Draw(e.impactBuffer, nameStr, e.subMonoFace, e.textOp)
 
-			// Draw count right justified
+			// Draw count right justified within the content area
 			countStr := fmt.Sprintf("%d", pc.Count)
 			cw, _ := text.Measure(countStr, e.subMonoFace, 0)
-			rightX := localX + 180.0
-			if e.Width > 2000 {
-				rightX = localX + 360.0
-			}
+			rightX := itemStartX + contentWidth
 
 			e.textOp.GeoM.Reset()
 			e.textOp.GeoM.Translate(rightX-cw, rowY)
@@ -341,8 +393,6 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(screen, legendTitle, e.titleFace, e.textOp)
 
-	// imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
-	// halfW := float64(imgW) / 2
 	swatchSize := fontSize
 
 	// Shift legend content slightly for padding
@@ -684,7 +734,7 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 
 func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 	current := e.getSortedHubs(uiInterval)
-	maxItems := 7
+	maxItems := 8
 	if len(current) < maxItems {
 		maxItems = len(current)
 	}

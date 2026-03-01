@@ -580,8 +580,6 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	e.drawOp.ColorScale.Reset()
 	e.drawOp.Filter = ebiten.FilterLinear // Use linear for smooth scaling
 	e.drawOp.Blend = ebiten.BlendLighter
-	// imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
-	// halfW := float64(imgW) / 2
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
 		totalDuration := 1.5
@@ -607,17 +605,12 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 			halfW = imgW / 2
 			imgToDraw = e.flareImage
 
-			// FLARES ARE SIGNIFICANT! Make them 3x larger
 			maxRadiusMultiplier = 3.0
 
-			// Flares flash INTENSELY in the middle of the animation
 			// Use sin curve: starts dim, peaks at middle, fades out
 			flareIntensity := math.Sin(progress * math.Pi)       // 0 -> 1 -> 0
 			flareIntensity = math.Pow(flareIntensity, 1.5) * 2.5 // Power curve for dramatic peak, massive boost
 			alpha = flareIntensity                               // Full dramatic pulse effect
-
-			// Make duration longer for flares
-			totalDuration = 2.0
 		}
 
 		// Flares expand much more dramatically
@@ -652,10 +645,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 func (e *Engine) Layout(w, h int) (width, height int) { return e.Width, e.Height }
 
 func (e *Engine) InitPulseTexture() {
-	size := 128
-	if e.Width > 2000 {
-		size = 256
-	}
+	size := 256
 	e.pulseImage = ebiten.NewImage(size, size)
 	pixels := make([]byte, size*size*4)
 	center, maxDist := float64(size)/2.0, float64(size)/2.0
@@ -679,8 +669,12 @@ func (e *Engine) InitPulseTexture() {
 		}
 	}
 	e.pulseImage.WritePixels(pixels)
+}
 
+//nolint:gocognit // not important to clean up right now
+func (e *Engine) InitFlareTexture() {
 	// Generate lens flare texture for route leaks
+	size := 256
 	e.flareImage = ebiten.NewImage(size, size)
 	flarePixels := make([]byte, size*size*4)
 
@@ -777,49 +771,19 @@ func (e *Engine) InitPulseTexture() {
 
 	log.Printf("Lens flare generated: %dx%d with 6-ray star pattern", size, size)
 
-	// Debug: Count opaque vs transparent pixels
-	opaqueCount := 0
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			idx := (y*size + x) * 4
-			if flarePixels[idx+3] > 0 {
-				opaqueCount++
-			}
-		}
-	}
-	log.Printf("Flare texture stats: %d opaque pixels out of %d total (%.1f%%)", opaqueCount, size*size, float64(opaqueCount)/float64(size*size)*100)
-
 	e.flareImage.WritePixels(flarePixels)
+}
 
-	// Debug: Save flare texture to disk using Set method (no stride issues)
-	go func(sz int, pixels []byte) {
-		debugImg := image.NewRGBA(image.Rect(0, 0, sz, sz))
-		for y := 0; y < sz; y++ {
-			for x := 0; x < sz; x++ {
-				idx := (y*sz + x) * 4
-				r := pixels[idx+0]
-				g := pixels[idx+1]
-				b := pixels[idx+2]
-				a := pixels[idx+3]
-				debugImg.Set(x, y, color.RGBA{r, g, b, a})
-			}
-		}
-		if f, err := os.Create("data/cache/flare_texture_debug.png"); err == nil {
-			png.Encode(f, debugImg)
-			f.Close()
-			log.Println("Flare texture saved to data/cache/flare_texture_debug.png")
-		}
-	}(size, flarePixels)
-
+func (e *Engine) InitTrendlineTexture() {
 	// Create a 1x1 white image for trendlines
 	e.trendLineImg = ebiten.NewImage(1, 1)
 	e.trendLineImg.Fill(color.White)
 
 	// Create a simple circular texture for trendline joints
-	size = 64
+	size := 64
 	e.trendCircleImg = ebiten.NewImage(size, size)
-	pixels = make([]byte, size*size*4)
-	center, maxDist = float64(size)/2.0, float64(size)/2.0
+	pixels := make([]byte, size*size*4)
+	center, maxDist := float64(size)/2.0, float64(size)/2.0
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			dx, dy := float64(x)-center, float64(y)-center
