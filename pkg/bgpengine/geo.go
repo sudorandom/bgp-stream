@@ -3,7 +3,6 @@ package bgpengine
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 	"math/rand"
 	"net"
@@ -20,8 +19,13 @@ type GeoService struct {
 	prefixToCityCache map[uint32]cacheEntry
 	cacheMu           sync.Mutex
 	prefixData        PrefixData
-	cityCoords        map[string][2]float32
+	cityCoords        map[cityKey][2]float32
 	cloudTrie         *sources.CloudTrie
+}
+
+type cityKey struct {
+	city string
+	cc   string
 }
 
 func NewGeoService(width, height int, scale float64) *GeoService {
@@ -31,7 +35,7 @@ func NewGeoService(width, height int, scale float64) *GeoService {
 		scale:             scale,
 		countryHubs:       make(map[string][]CityHub),
 		prefixToCityCache: make(map[uint32]cacheEntry),
-		cityCoords:        make(map[string][2]float32),
+		cityCoords:        make(map[cityKey][2]float32),
 	}
 }
 
@@ -118,7 +122,7 @@ func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc string) {
 }
 
 func (g *GeoService) ResolveCityToCoords(city, cc string) (lat, lng float64, countryCode string) {
-	if c, ok := g.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(city), strings.ToUpper(cc))]; ok {
+	if c, ok := g.cityCoords[cityKey{city: strings.ToLower(city), cc: strings.ToUpper(cc)}]; ok {
 		return float64(c[0]), float64(c[1]), cc
 	}
 	return 0, 0, cc

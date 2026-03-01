@@ -1096,15 +1096,16 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 	})
 
 	e.ActiveASNImpacts = e.ActiveASNImpacts[:0]
-	maxASNs := 4
+	maxASNs := 5
 	for i := 0; i < len(e.asnSortedGroups) && i < maxASNs; i++ {
 		g := e.asnSortedGroups[i]
 		// Limit prefixes per ASN
 		displayPrefixes := g.prefixes
 		moreCount := 0
-		if len(displayPrefixes) > 3 {
-			moreCount = len(displayPrefixes) - 3
-			displayPrefixes = displayPrefixes[:3]
+		const maxDisplayPrefixes = 1
+		if len(displayPrefixes) > maxDisplayPrefixes {
+			moreCount = len(displayPrefixes) - maxDisplayPrefixes
+			displayPrefixes = displayPrefixes[:maxDisplayPrefixes]
 		}
 
 		moreStr := ""

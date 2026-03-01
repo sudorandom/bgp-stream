@@ -241,6 +241,8 @@ type Engine struct {
 	MinimalUI           bool
 	minimalUIKeyPressed bool
 
+	lastPerfLog time.Time
+
 	FrameCaptureInterval time.Duration
 	FrameCaptureDir      string
 	lastFrameCapturedAt  time.Time
@@ -458,7 +460,24 @@ func (e *Engine) StartMemoryWatcher() {
 	}()
 }
 
+func (e *Engine) UpdatePerformanceMetrics() {
+	now := time.Now()
+	if now.Sub(e.lastPerfLog) < 10*time.Second {
+		return
+	}
+	e.lastPerfLog = now
+
+	tps := ebiten.ActualTPS()
+	fps := ebiten.ActualFPS()
+
+	// If we're dropping below 90% of target (assuming 60)
+	if tps < 28 || fps < 28 {
+		log.Printf("[PERF] TPS: %.2f, FPS: %.2f (Lag detected)", tps, fps)
+	}
+}
+
 func (e *Engine) Update() error {
+	e.UpdatePerformanceMetrics()
 	now := time.Now()
 	e.queueMu.Lock()
 	added := 0
@@ -1182,12 +1201,12 @@ func (e *Engine) loadWorldCities() {
 			if len(rec) >= 6 && (strings.Contains(rec[2], ".") || strings.Contains(rec[2], ",")) {
 				lat, _ := strconv.ParseFloat(rec[2], 64)
 				lng, _ := strconv.ParseFloat(rec[3], 64)
-				e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[5]))] = [2]float32{float32(lat), float32(lng)}
+				e.geo.cityCoords[cityKey{city: strings.ToLower(rec[1]), cc: strings.ToUpper(rec[5])}] = [2]float32{float32(lat), float32(lng)}
 			} else if len(rec) >= 10 {
 				// Supported Format 2 (dr5hn): id, name, state_id, state_code, state_name, country_id, country_code, country_name, latitude, longitude, wikiDataId
 				lat, _ := strconv.ParseFloat(rec[8], 64)
 				lng, _ := strconv.ParseFloat(rec[9], 64)
-				e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(rec[1]), strings.ToUpper(rec[6]))] = [2]float32{float32(lat), float32(lng)}
+				e.geo.cityCoords[cityKey{city: strings.ToLower(rec[1]), cc: strings.ToUpper(rec[6])}] = [2]float32{float32(lat), float32(lng)}
 			}
 		}
 	} else {
@@ -1278,7 +1297,7 @@ func (e *Engine) handleRIRRange(start, end uint32, cc string, priority int, geoR
 	binary.BigEndian.PutUint32(ip, start)
 	if err := geoReader.Lookup(ip, &record); err == nil {
 		cityName := record.City.Names["en"]
-		if c, ok := e.geo.cityCoords[fmt.Sprintf("%s|%s", strings.ToLower(cityName), strings.ToUpper(cc))]; ok {
+		if c, ok := e.geo.cityCoords[cityKey{city: strings.ToLower(cityName), cc: strings.ToUpper(cc)}]; ok {
 			lat, lng = c[0], c[1]
 			city = cityName
 		}

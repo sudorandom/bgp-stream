@@ -871,7 +871,9 @@ func (p *BGPProcessor) isTier1(asn uint32) bool {
 	switch asn {
 	case 209, 701, 1239, 1299, 2828, 2914, 3257, 3320, 3356, 3491, 3549, 3561, 5511, 6453, 6461, 6762, 6830, 7018, 12956: // global Tier-1s
 		return true
-	case 4134, 4809, 4837, 7473, 174, 6939, 9002, 1273, 4637, 7922: // regional Tier-1s
+	case 702, 4134, 4809, 4837, 7473, 174, 6939, 9002, 1273, 4637, 7922: // regional Tier-1s
+		return true
+	case 23764:
 		return true
 	default:
 		return false
