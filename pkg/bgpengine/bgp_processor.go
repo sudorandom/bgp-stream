@@ -339,23 +339,6 @@ func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) {
 	}
 }
 
-func (p *BGPProcessor) saveState(prefix string, state *bgpproto.PrefixState) {
-	if p.stateDB == nil || p.isStopping() {
-		return
-	}
-	data, err := proto.Marshal(state)
-	if err != nil {
-		log.Printf("Error marshaling prefix state: %v", err)
-		return
-	}
-
-	select {
-	case p.stateWriteQueue <- map[string][]byte{prefix: data}:
-	default:
-		// Queue full, drop write to avoid blocking processing
-	}
-}
-
 func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals map[uint32]struct {
 	Time   time.Time
 	Prefix string
@@ -420,7 +403,7 @@ func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals
 				case string:
 					sb.WriteString(v)
 				default:
-					sb.WriteString(fmt.Sprint(val))
+					fmt.Fprint(&sb, val)
 				}
 			}
 			sb.WriteString("]")

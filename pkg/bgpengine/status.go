@@ -513,17 +513,9 @@ func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, tit
 
 	op := &vector.StrokeOptions{}
 	op.Width = 2.0
-	vs, is := path.AppendVerticesAndIndicesForStroke(nil, nil, op)
-	for i := range vs {
-		vs[i].SrcX = 0
-		vs[i].SrcY = 0
-		vs[i].ColorR = 40.0 / 255.0
-		vs[i].ColorG = 40.0 / 255.0
-		vs[i].ColorB = 40.0 / 255.0
-		vs[i].ColorA = 1.0
-	}
-	opDraw := &ebiten.DrawTrianglesOptions{}
-	screen.DrawTriangles(vs, is, e.whitePixel, opDraw)
+	e.vectorDrawPathOp.ColorScale.Reset()
+	e.vectorDrawPathOp.ColorScale.ScaleWithColor(color.RGBA{40, 40, 40, 255})
+	vector.StrokePath(screen, &path, op, &e.vectorDrawPathOp)
 
 	for _, val := range []int{1, 10, 100, 1000, 10000, 100000} {
 		lVal := e.logVal(val)
@@ -533,11 +525,12 @@ func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, tit
 		y := math.Round(titlePadding + chartH - (lVal/globalMaxLog)*chartH)
 
 		var labelStr string
-		if val >= 1000000 {
+		switch {
+		case val >= 1000000:
 			labelStr = strconv.Itoa(val/1000000) + "m"
-		} else if val >= 1000 {
+		case val >= 1000:
 			labelStr = strconv.Itoa(val/1000) + "k"
-		} else {
+		default:
 			labelStr = strconv.Itoa(val)
 		}
 		e.textOp.GeoM.Reset()
