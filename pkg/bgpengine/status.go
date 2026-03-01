@@ -179,40 +179,46 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 		}
 	}
 
-	if len(e.prefixCounts) > 0 {
-		label := "Prefix Counts:"
-		countY := impactBoxH - fontSize - 15 - float64(len(e.prefixCounts))*fontSize*0.8
-
+	if e.orangeCount > 0 || e.redCount > 0 {
+		label := "Prefix Counts: "
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, countY)
+		e.textOp.GeoM.Translate(localX, impactBoxH-fontSize-15)
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 		text.Draw(e.impactBuffer, label, e.subMonoFace, e.textOp)
+		lw, _ := text.Measure(label, e.subMonoFace, 0)
 
-		for i, pc := range e.prefixCounts {
-			rowY := countY + float64(i+1)*fontSize*0.8
-
-			// Draw classification name
-			nameStr := pc.Name + ":"
+		currentX := localX + lw
+		hasBad := e.orangeCount > 0
+		if hasBad {
+			badStr := strconv.Itoa(e.orangeCount) + " bad"
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX, rowY)
+			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
 			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
-			text.Draw(e.impactBuffer, nameStr, e.subMonoFace, e.textOp)
+			e.textOp.ColorScale.ScaleWithColor(ColorBad)
+			text.Draw(e.impactBuffer, badStr, e.subMonoFace, e.textOp)
+			bw, _ := text.Measure(badStr, e.subMonoFace, 0)
+			currentX += bw
+		}
 
-			// Draw count right justified
-			countStr := fmt.Sprintf("%d", pc.Count)
-			cw, _ := text.Measure(countStr, e.subMonoFace, 0)
-			rightX := localX + 180.0
-			if e.Width > 2000 {
-				rightX = localX + 360.0
+		if e.redCount > 0 {
+			if hasBad {
+				comma := ", "
+				e.textOp.GeoM.Reset()
+				e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
+				e.textOp.ColorScale.Reset()
+				e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
+				text.Draw(e.impactBuffer, comma, e.subMonoFace, e.textOp)
+				cw, _ := text.Measure(comma, e.subMonoFace, 0)
+				currentX += cw
 			}
 
+			critStr := strconv.Itoa(e.redCount) + " critical"
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(rightX-cw, rowY)
+			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
 			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.ScaleWithColor(pc.Color)
-			text.Draw(e.impactBuffer, countStr, e.subMonoFace, e.textOp)
+			e.textOp.ColorScale.ScaleWithColor(ColorCritical)
+			text.Draw(e.impactBuffer, critStr, e.subMonoFace, e.textOp)
 		}
 	}
 
@@ -856,37 +862,19 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 }
 
 func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
-	countMap := make(map[string]*PrefixCount)
+	var orangeCount, redCount int
 	for _, vi := range allImpact {
 		prio := e.GetPriority(vi.ClassificationName)
-		if prio >= 2 {
-			if pc, ok := countMap[vi.ClassificationName]; ok {
-				pc.Count++
-			} else {
-				countMap[vi.ClassificationName] = &PrefixCount{
-					Name:     vi.ClassificationName,
-					Count:    1,
-					Color:    vi.ClassificationColor,
-					Priority: prio,
-				}
-			}
+		switch prio {
+		case 2:
+			orangeCount++
+		case 3:
+			redCount++
 		}
 	}
 
-	e.prefixCounts = nil
-	for _, pc := range countMap {
-		e.prefixCounts = append(e.prefixCounts, *pc)
-	}
-
-	sort.Slice(e.prefixCounts, func(i, j int) bool {
-		if e.prefixCounts[i].Priority != e.prefixCounts[j].Priority {
-			return e.prefixCounts[i].Priority > e.prefixCounts[j].Priority
-		}
-		if e.prefixCounts[i].Count != e.prefixCounts[j].Count {
-			return e.prefixCounts[i].Count > e.prefixCounts[j].Count
-		}
-		return e.prefixCounts[i].Name < e.prefixCounts[j].Name
-	})
+	e.orangeCount = orangeCount
+	e.redCount = redCount
 
 	fontSize := 18.0
 	hubsBoxH, boxW := 180.0, 280.0

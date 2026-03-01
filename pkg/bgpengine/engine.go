@@ -197,13 +197,13 @@ type Engine struct {
 	trendLinesBuffer *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
-	hubChangedAt      map[string]time.Time
-	lastHubs          map[string]int
-	hubPosition       map[string]int
-	lastMetricsUpdate time.Time
-	hubUpdatedAt      time.Time
-	impactUpdatedAt   time.Time
-	prefixCounts      []PrefixCount
+	hubChangedAt          map[string]time.Time
+	lastHubs              map[string]int
+	hubPosition           map[string]int
+	lastMetricsUpdate     time.Time
+	hubUpdatedAt          time.Time
+	impactUpdatedAt       time.Time
+	orangeCount, redCount int
 
 	VisualHubs map[string]*VisualHub
 	ActiveHubs []*VisualHub
@@ -255,13 +255,6 @@ type VisualHub struct {
 	Alpha       float32
 	TargetAlpha float32
 	Active      bool
-}
-
-type PrefixCount struct {
-	Name     string
-	Count    int
-	Color    color.RGBA
-	Priority int
 }
 
 type VisualImpact struct {
