@@ -689,7 +689,7 @@ func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixS
 	perPeerRate := float64(s.totalMsgs) / numPeers
 
 	// 1. Critical
-	if et, ok := p.findCriticalAnomaly(prefix, state, s, ctx); ok {
+	if et, ok := p.findCriticalAnomaly(prefix, s, ctx); ok {
 		return et, true
 	}
 
@@ -706,7 +706,7 @@ func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixS
 	return Level2None, false
 }
 
-func (p *BGPProcessor) findCriticalAnomaly(prefix string, state *bgpproto.PrefixState, s prefixStats, ctx *MessageContext) (Level2EventType, bool) {
+func (p *BGPProcessor) findCriticalAnomaly(prefix string, s prefixStats, ctx *MessageContext) (Level2EventType, bool) {
 	if s.totalWith >= 3 && s.totalAnn == 0 {
 		return Level2Outage, true
 	}
