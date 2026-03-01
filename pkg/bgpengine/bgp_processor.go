@@ -513,13 +513,19 @@ func (p *BGPProcessor) classifyEvent(prefix string, ctx *MessageContext) {
 
 	// If already classified, emit the classification pulse immediately for this peer
 	if state.ClassifiedType != 0 {
-		if lat, lng, cc := p.geo(p.prefixToIP(prefix)); cc != "" {
-			p.onEvent(lat, lng, cc, ctx.EventType(), Level2EventType(state.ClassifiedType), prefix, ctx.OriginASN)
+		if ctx.Now.Unix()-state.ClassifiedTimeTs > 600 {
+			state.ClassifiedType = 0
+			state.ClassifiedTimeTs = 0
+			state.UncategorizedCounted = false
+		} else {
+			if lat, lng, cc := p.geo(p.prefixToIP(prefix)); cc != "" {
+				p.onEvent(lat, lng, cc, ctx.EventType(), Level2EventType(state.ClassifiedType), prefix, ctx.OriginASN)
+			}
+			return
 		}
-		return
 	}
 
-	p.evaluatePrefixState(prefix, state, ctx.Now)
+	p.evaluatePrefixState(prefix, state, ctx)
 }
 
 func (p *BGPProcessor) getOrCreateBucket(state *bgpproto.PrefixState, now time.Time) *bgpproto.StatsBucket {
@@ -581,14 +587,15 @@ func (p *BGPProcessor) updateAnnouncementStats(state *bgpproto.PrefixState, buck
 	}
 
 	state.PeerLastAttrs[peer] = &bgpproto.LastAttrs{
-		Path:        ctx.PathStr,
-		Communities: ctx.CommStr,
-		NextHop:     ctx.NextHop,
-		Aggregator:  ctx.Aggregator,
-		LastPathLen: int32(ctx.PathLen),
-		OriginAsn:   ctx.OriginASN,
-		Med:         ctx.Med,
-		LocalPref:   ctx.LocalPref,
+		Path:         ctx.PathStr,
+		Communities:  ctx.CommStr,
+		NextHop:      ctx.NextHop,
+		Aggregator:   ctx.Aggregator,
+		LastPathLen:  int32(ctx.PathLen),
+		OriginAsn:    ctx.OriginASN,
+		Med:          ctx.Med,
+		LocalPref:    ctx.LocalPref,
+		LastUpdateTs: ctx.Now.Unix(),
 	}
 }
 
@@ -602,12 +609,12 @@ type prefixStats struct {
 	uniqueASNs                               map[uint32]bool
 }
 
-func (p *BGPProcessor) evaluatePrefixState(prefix string, state *bgpproto.PrefixState, now time.Time) {
-	stats := p.aggregateRecentBuckets(state, now)
+func (p *BGPProcessor) evaluatePrefixState(prefix string, state *bgpproto.PrefixState, ctx *MessageContext) {
+	stats := p.aggregateRecentBuckets(state, ctx.Now)
 
-	elapsed := float64(now.Unix() - stats.earliestTS)
+	elapsed := float64(ctx.Now.Unix() - stats.earliestTS)
 	if elapsed < 60 {
-		elapsed = float64(now.Unix() - state.StartTimeTs)
+		elapsed = float64(ctx.Now.Unix() - state.StartTimeTs)
 	}
 	if elapsed <= 0 {
 		elapsed = 1
@@ -618,18 +625,24 @@ func (p *BGPProcessor) evaluatePrefixState(prefix string, state *bgpproto.Prefix
 		return
 	}
 
-	eventType, classified := p.findClassification(prefix, state, stats, elapsed)
+	eventType, classified := p.findClassification(prefix, state, stats, elapsed, ctx)
 
 	if classified {
-		p.recordClassification(prefix, state, eventType)
+		p.recordClassification(prefix, state, eventType, ctx.Now.Unix())
 	} else if stats.totalMsgs > 50 && !state.UncategorizedCounted {
 		// If it has significant messages but hasn't matched a rule, count as Discovery
-		p.recordClassification(prefix, state, Level2Discovery)
+		p.recordClassification(prefix, state, Level2Discovery, ctx.Now.Unix())
 		state.UncategorizedCounted = true
 	}
 }
 
 func (p *BGPProcessor) aggregateRecentBuckets(state *bgpproto.PrefixState, now time.Time) prefixStats {
+	for peer, attr := range state.PeerLastAttrs {
+		if now.Unix()-attr.LastUpdateTs > 3600 {
+			delete(state.PeerLastAttrs, peer)
+		}
+	}
+
 	cutoff := now.Add(-5 * time.Minute).Unix()
 	s := prefixStats{
 		earliestTS: now.Unix(),
@@ -668,7 +681,7 @@ func (p *BGPProcessor) aggregateRecentBuckets(state *bgpproto.PrefixState, now t
 	return s
 }
 
-func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixState, s prefixStats, elapsed float64) (Level2EventType, bool) {
+func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixState, s prefixStats, elapsed float64, ctx *MessageContext) (Level2EventType, bool) {
 	numPeers := float64(len(state.PeerLastAttrs))
 	if numPeers == 0 {
 		numPeers = 1
@@ -676,7 +689,7 @@ func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixS
 	perPeerRate := float64(s.totalMsgs) / numPeers
 
 	// 1. Critical
-	if et, ok := p.findCriticalAnomaly(prefix, state, s); ok {
+	if et, ok := p.findCriticalAnomaly(prefix, state, s, ctx); ok {
 		return et, true
 	}
 
@@ -693,11 +706,11 @@ func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixS
 	return Level2None, false
 }
 
-func (p *BGPProcessor) findCriticalAnomaly(prefix string, state *bgpproto.PrefixState, s prefixStats) (Level2EventType, bool) {
+func (p *BGPProcessor) findCriticalAnomaly(prefix string, state *bgpproto.PrefixState, s prefixStats, ctx *MessageContext) (Level2EventType, bool) {
 	if s.totalWith >= 3 && s.totalAnn == 0 {
 		return Level2Outage, true
 	}
-	if p.hasRouteLeak(prefix, state) {
+	if p.hasRouteLeak(prefix, ctx) {
 		return Level2RouteLeak, true
 	}
 	return Level2None, false
@@ -735,7 +748,7 @@ func (p *BGPProcessor) findNormalAnomaly(s prefixStats, elapsed float64) (Level2
 	return Level2None, false
 }
 
-func (p *BGPProcessor) recordClassification(prefix string, state *bgpproto.PrefixState, eventType Level2EventType) {
+func (p *BGPProcessor) recordClassification(prefix string, state *bgpproto.PrefixState, eventType Level2EventType, now int64) {
 	p.level2Stats[eventType]++
 	if p.level2UniquePrefixes[eventType] == nil {
 		p.level2UniquePrefixes[eventType] = make(map[string]struct{})
@@ -759,6 +772,7 @@ func (p *BGPProcessor) recordClassification(prefix string, state *bgpproto.Prefi
 
 	// Record that this prefix is now classified
 	state.ClassifiedType = int32(eventType)
+	state.ClassifiedTimeTs = now
 
 	if p.stateDB != nil {
 		go p.deleteState(prefix)
@@ -774,33 +788,32 @@ func (p *BGPProcessor) deleteState(prefix string) {
 	}
 }
 
-func (p *BGPProcessor) hasRouteLeak(prefix string, state *bgpproto.PrefixState) bool {
-	for _, attr := range state.PeerLastAttrs {
-		if attr.Path == "" {
-			continue
-		}
-		// Basic path parser (path is stored as string "[1 2 3]")
-		fields := strings.Fields(strings.Trim(attr.Path, "[]"))
-		if len(fields) < 3 {
-			continue
-		}
+func (p *BGPProcessor) hasRouteLeak(prefix string, ctx *MessageContext) bool {
+	if ctx.PathStr == "" {
+		return false
+	}
+	// Basic path parser (path is stored as string "[1 2 3]")
+	fields := strings.Fields(strings.Trim(ctx.PathStr, "[]"))
+	if len(fields) < 3 {
+		return false
+	}
 
-		path := make([]uint32, 0, len(fields))
-		for _, f := range fields {
-			var asn uint32
-			if _, err := fmt.Sscanf(f, "%d", &asn); err == nil {
-				path = append(path, asn)
-			}
-		}
-
-		// Valley-free violation: Tier-1 -> Non-Tier-1/Non-Cloud -> Tier-1
-		for i := 0; i < len(path)-2; i++ {
-			if p.isTier1(path[i]) && !p.isTier1(path[i+1]) && !p.isCloud(path[i+1]) && p.isTier1(path[i+2]) {
-				p.logRouteLeak(prefix, path)
-				return true
-			}
+	path := make([]uint32, 0, len(fields))
+	for _, f := range fields {
+		var asn uint32
+		if _, err := fmt.Sscanf(f, "%d", &asn); err == nil {
+			path = append(path, asn)
 		}
 	}
+
+	// Valley-free violation: Tier-1 -> Non-Tier-1/Non-Cloud -> Tier-1
+	for i := 0; i < len(path)-2; i++ {
+		if p.isTier1(path[i]) && !p.isTier1(path[i+1]) && !p.isCloud(path[i+1]) && p.isTier1(path[i+2]) {
+			p.logRouteLeak(prefix, path)
+			return true
+		}
+	}
+
 	return false
 }
 

@@ -25,6 +25,7 @@ message LastAttrs {
     uint32 origin_asn = 6;
     int32 med = 7;
     int32 local_pref = 8;
+    int64 last_update_ts = 9;
 }
 
 message PrefixState {
@@ -34,4 +35,5 @@ message PrefixState {
     int64 start_time_ts = 4;
     bool uncategorized_counted = 5;
     int32 classified_type = 6;
+    int64 classified_time_ts = 7;
 }
