@@ -197,13 +197,13 @@ type Engine struct {
 	trendLinesBuffer *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
-	hubChangedAt          map[string]time.Time
-	lastHubs              map[string]int
-	hubPosition           map[string]int
-	lastMetricsUpdate     time.Time
-	hubUpdatedAt          time.Time
-	impactUpdatedAt       time.Time
-	prefixCounts          []PrefixCount
+	hubChangedAt      map[string]time.Time
+	lastHubs          map[string]int
+	hubPosition       map[string]int
+	lastMetricsUpdate time.Time
+	hubUpdatedAt      time.Time
+	impactUpdatedAt   time.Time
+	prefixCounts      []PrefixCount
 
 	VisualHubs map[string]*VisualHub
 	ActiveHubs []*VisualHub
