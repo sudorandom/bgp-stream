@@ -132,7 +132,7 @@ func (e *Engine) calculateImpactBoxHeight(fontSize float64) float64 {
 
 	// ASN Groups
 	for _, v := range e.ActiveASNImpacts {
-		totalHeight += fontSize * 0.9                 // ASN Header
+		totalHeight += fontSize * 0.9                            // ASN Header
 		totalHeight += float64(len(v.Prefixes)) * fontSize * 0.9 // Prefixes
 		if v.Count > len(v.Prefixes) {
 			totalHeight += fontSize * 0.9 // "(X more)"
@@ -142,8 +142,8 @@ func (e *Engine) calculateImpactBoxHeight(fontSize float64) float64 {
 
 	// Prefix Counts Summary
 	if len(e.prefixCounts) > 0 {
-		totalHeight += 20.0                          // Top gap
-		totalHeight += fontSize * 0.9                // Column Headers
+		totalHeight += 20.0                                          // Top gap
+		totalHeight += fontSize * 0.9                                // Column Headers
 		totalHeight += float64(len(e.prefixCounts)) * fontSize * 0.8 // Rows
 	}
 
@@ -640,7 +640,7 @@ func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64) {
 	goodCol := ColorDiscovery // Blue (Normal)
 	polyCol := ColorPolicy    // Purple (Policy)
 	badCol := ColorBad        // Orange (Bad)
-	critCol := ColorWithUI     // Light Red (Critical)
+	critCol := ColorWithUI    // Light Red (Critical)
 
 	e.drawOp.Blend = ebiten.BlendLighter
 
@@ -952,24 +952,7 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 
 func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 	e.updatePrefixCounts(allImpact)
-
-	fontSize := 18.0
-	hubsBoxH, boxW := 130.0, 280.0
-	if e.Width > 2000 {
-		fontSize = 36.0
-		hubsBoxH, boxW = 260.0, 560.0
-	}
-	spacing := fontSize * 1.2
-	hubYBase := float64(e.Height) * 0.48
-	if e.Width > 2000 {
-		hubYBase = float64(e.Height) * 0.42
-	}
-	impactYBase := hubYBase + hubsBoxH + 20.0
-	if e.Width > 2000 {
-		impactYBase = hubYBase + hubsBoxH + 40.0
-	}
-
-	e.activateVisualAnomalies(allImpact, impactYBase, boxW, spacing)
+	e.activateVisualAnomalies(allImpact)
 }
 
 func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
@@ -1019,7 +1002,7 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 	})
 }
 
-func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact, impactYBase, boxW, spacing float64) {
+func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 	// Group significant anomalies (priority >= 1) by ASN
 	type asnGroup struct {
 		asnStr   string
@@ -1215,58 +1198,4 @@ func (e *Engine) drawMarquee(dst *ebiten.Image, content string, face *text.GoTex
 		e.drawOp.ColorScale.Scale(0, 1, 1, float32(alpha*0.5*intensity))
 		dst.DrawImage(*buffer, e.drawOp)
 	}
-}
-
-func wrapString(s string, maxChars, maxLines int) []string {
-	if s == "" || maxChars <= 0 {
-		return nil
-	}
-	words := strings.Fields(s)
-	if len(words) == 0 {
-		return []string{s}
-	}
-
-	var lines []string
-	currentLine := ""
-
-	for i := 0; i < len(words); i++ {
-		if len(lines) >= maxLines-1 && maxLines > 0 {
-			// Last allowed line, append remaining and truncate
-			if currentLine != "" {
-				remaining := strings.Join(words[i:], " ")
-				currentLine += " " + remaining
-			} else {
-				currentLine = strings.Join(words[i:], " ")
-			}
-			if len(currentLine) > maxChars {
-				currentLine = currentLine[:maxChars-3] + "..."
-			}
-			lines = append(lines, currentLine)
-			return lines
-		}
-
-		testLine := currentLine
-		if testLine != "" {
-			testLine += " "
-		}
-		testLine += words[i]
-
-		if len(testLine) > maxChars {
-			if currentLine != "" {
-				lines = append(lines, currentLine)
-				currentLine = words[i]
-			} else {
-				// Single word is too long
-				lines = append(lines, words[i][:maxChars-3]+"...")
-				currentLine = ""
-			}
-		} else {
-			currentLine = testLine
-		}
-	}
-
-	if currentLine != "" {
-		lines = append(lines, currentLine)
-	}
-	return lines
 }

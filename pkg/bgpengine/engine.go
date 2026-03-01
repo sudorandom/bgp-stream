@@ -289,8 +289,6 @@ type VisualImpact struct {
 	ClassificationColor        color.RGBA
 	DisplayClassificationName  string
 	DisplayClassificationColor color.RGBA
-	asnStr                     string
-	asnLines                   []string
 	Count                      float64
 	RateStr                    string
 	RateWidth                  float64
