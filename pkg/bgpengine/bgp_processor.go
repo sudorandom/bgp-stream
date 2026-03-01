@@ -128,7 +128,7 @@ type BGPProcessor struct {
 	totalLevel2Events    int
 	prefixStates         map[string]*bgpproto.PrefixState
 
-	stateWriteQueue chan map[string]*bgpproto.PrefixState
+	stateWriteQueue  chan map[string]*bgpproto.PrefixState
 	stateDeleteQueue chan string
 
 	mu       sync.Mutex
