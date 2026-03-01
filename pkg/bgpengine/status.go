@@ -203,9 +203,8 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 			e.textOp.ColorScale.Scale(1, 1, 1, 0.6)
 			text.Draw(e.impactBuffer, p, monoFace, e.textOp)
 
-			tw, _ := text.Measure(v.Anom, e.subMonoFace, 0)
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+boxW-tw-15, currentY)
+			e.textOp.GeoM.Translate(localX+boxW-v.AnomWidth-15, currentY)
 			e.textOp.ColorScale.Reset()
 			cr, cg, cb := float32(v.Color.R)/255.0, float32(v.Color.G)/255.0, float32(v.Color.B)/255.0
 			e.textOp.ColorScale.Scale(cr, cg, cb, 0.9)
@@ -214,13 +213,12 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 			currentY += fontSize * 0.9
 		}
 
-		if v.Count > len(v.Prefixes) {
-			moreStr := fmt.Sprintf("(%d more)", v.Count-len(v.Prefixes))
+		if v.MoreStr != "" {
 			e.textOp.GeoM.Reset()
 			e.textOp.GeoM.Translate(localX+15, currentY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.Scale(1, 1, 1, 0.4)
-			text.Draw(e.impactBuffer, moreStr, e.subMonoFace, e.textOp)
+			text.Draw(e.impactBuffer, v.MoreStr, e.subMonoFace, e.textOp)
 			currentY += fontSize * 0.9
 		}
 		currentY += 5.0 // Spacer between ASNs
@@ -264,22 +262,20 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 			text.Draw(e.impactBuffer, pc.Name, e.subMonoFace, e.textOp)
 
 			// ASN Count
-			asnStr := fmt.Sprintf("%d", pc.ASNCount)
-			aw, _ := text.Measure(asnStr, e.subMonoFace, 0)
+			aw, _ := text.Measure(pc.ASNStr, e.subMonoFace, 0)
 			e.textOp.GeoM.Reset()
 			e.textOp.GeoM.Translate(col2X-aw/2, currentY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.ScaleWithColor(pc.Color)
-			text.Draw(e.impactBuffer, asnStr, e.subMonoFace, e.textOp)
+			text.Draw(e.impactBuffer, pc.ASNStr, e.subMonoFace, e.textOp)
 
 			// Prefix Count
-			pfxStr := fmt.Sprintf("%d", pc.Count)
-			pw, _ := text.Measure(pfxStr, e.subMonoFace, 0)
+			pw, _ := text.Measure(pc.CountStr, e.subMonoFace, 0)
 			e.textOp.GeoM.Reset()
 			e.textOp.GeoM.Translate(col3X-pw/2, currentY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.ScaleWithColor(pc.Color)
-			text.Draw(e.impactBuffer, pfxStr, e.subMonoFace, e.textOp)
+			text.Draw(e.impactBuffer, pc.CountStr, e.subMonoFace, e.textOp)
 
 			currentY += fontSize * 0.8
 		}
@@ -717,9 +713,25 @@ func (e *Engine) StartMetricsLoop() {
 			e.updateVisualHubs(uiInterval, firstRun)
 			e.updateVisualImpacts(uiInterval)
 
-			e.prefixImpactHistory = append(e.prefixImpactHistory[1:], make(map[string]int))
-			e.currentAnomalies = make(map[Level2EventType]map[string]int)
-			e.countryActivity = make(map[string]int)
+			// Rotate prefix impact history and clear for reuse
+			first := e.prefixImpactHistory[0]
+			for k := range first {
+				delete(first, k)
+			}
+			e.prefixImpactHistory = append(e.prefixImpactHistory[1:], first)
+
+			// Clear anomalies map for reuse
+			for et, prefixes := range e.currentAnomalies {
+				for p := range prefixes {
+					delete(prefixes, p)
+				}
+				delete(e.currentAnomalies, et)
+			}
+
+			// Clear country activity map
+			for cc := range e.countryActivity {
+				delete(e.countryActivity, cc)
+			}
 		}
 	}
 
@@ -758,13 +770,15 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 	e.rateNew, e.rateUpd, e.rateWith, e.rateGossip = float64(snap.New)/interval, float64(snap.Upd)/interval, float64(snap.With)/interval, float64(snap.Gossip)/interval
 	e.rateNote, e.ratePeer, e.rateOpen = float64(snap.Note)/interval, float64(snap.Peer)/interval, float64(snap.Open)/interval
 	e.rateBeacon = float64(snap.Beacon) / interval
-	e.history = append(e.history, snap)
-	if len(e.history) > 60 {
-		e.history = e.history[1:]
+
+	// Shift history and add new snapshot (avoiding prepend allocations)
+	if len(e.history) > 0 {
+		copy(e.history, e.history[1:])
+		e.history[len(e.history)-1] = snap
+	} else {
+		e.history = append(e.history, snap)
 	}
-	for len(e.history) < 60 {
-		e.history = append([]MetricSnapshot{{}}, e.history...)
-	}
+
 	e.windowNew, e.windowUpd, e.windowWith, e.windowGossip = 0, 0, 0, 0
 	e.windowNote, e.windowPeer, e.windowOpen = 0, 0, 0
 	e.windowBeacon = 0
@@ -794,7 +808,7 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		vh.TargetAlpha = 0.0
 	}
 
-	e.ActiveHubs = nil
+	e.ActiveHubs = e.ActiveHubs[:0]
 	for i := 0; i < maxItems; i++ {
 		if current[i].rate < 0.1 && !firstRun {
 			continue
@@ -827,12 +841,12 @@ type hub struct {
 }
 
 func (e *Engine) getSortedHubs(uiInterval float64) []hub {
-	var current []hub
+	e.hubCurrent = e.hubCurrent[:0]
 	for cc, val := range e.countryActivity {
-		current = append(current, hub{cc, float64(val) / uiInterval})
+		e.hubCurrent = append(e.hubCurrent, hub{cc, float64(val) / uiInterval})
 	}
-	sort.Slice(current, func(i, j int) bool { return current[i].rate > current[j].rate })
-	return current
+	sort.Slice(e.hubCurrent, func(i, j int) bool { return e.hubCurrent[i].rate > e.hubCurrent[j].rate })
+	return e.hubCurrent
 }
 
 func (e *Engine) getOrCreateVisualHub(cc string, targetY float64) *VisualHub {
@@ -914,13 +928,17 @@ func getMaskLen(prefix string) int {
 }
 
 func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
-	impactMap := make(map[string]*VisualImpact)
+	// Clear reusable map
+	for k := range e.impactMap {
+		delete(e.impactMap, k)
+	}
+
 	for et, prefixes := range e.currentAnomalies {
 		_, name := e.getLevel2Visuals(et)
 		prio := e.GetPriority(name)
 
 		for p, count := range prefixes {
-			v, ok := impactMap[p]
+			v, ok := e.impactMap[p]
 			if !ok {
 				v, ok = e.VisualImpact[p]
 				if !ok {
@@ -929,7 +947,7 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 				}
 				v.ClassificationName = "" // Reset for this cycle
 				v.Count = 0               // Reset for this cycle
-				impactMap[p] = v
+				e.impactMap[p] = v
 			}
 
 			// Only upgrade the classification if it's higher priority
@@ -943,11 +961,11 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 		}
 	}
 
-	allImpact := make([]*VisualImpact, 0, len(impactMap))
-	for _, v := range impactMap {
-		allImpact = append(allImpact, v)
+	e.allImpact = e.allImpact[:0]
+	for _, v := range e.impactMap {
+		e.allImpact = append(e.allImpact, v)
 	}
-	return allImpact
+	return e.allImpact
 }
 
 func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
@@ -956,8 +974,16 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 }
 
 func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
-	countMap := make(map[string]*PrefixCount)
-	asnsPerClass := make(map[string]map[uint32]struct{})
+	// Clear reusable structures
+	for k := range e.countMap {
+		delete(e.countMap, k)
+	}
+	for k, m := range e.asnsPerClass {
+		for i := range m {
+			delete(m, i)
+		}
+		delete(e.asnsPerClass, k)
+	}
 
 	for _, vi := range allImpact {
 		if vi.ClassificationName == "" {
@@ -966,10 +992,10 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 		prio := e.GetPriority(vi.ClassificationName)
 		asn := e.prefixToASN[vi.Prefix]
 
-		if pc, ok := countMap[vi.ClassificationName]; ok {
+		if pc, ok := e.countMap[vi.ClassificationName]; ok {
 			pc.Count++
 		} else {
-			countMap[vi.ClassificationName] = &PrefixCount{
+			e.countMap[vi.ClassificationName] = &PrefixCount{
 				Name:     vi.ClassificationName,
 				Count:    1,
 				Color:    e.getClassificationUIColor(vi.ClassificationName),
@@ -978,16 +1004,21 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 		}
 
 		if asn != 0 {
-			if _, ok := asnsPerClass[vi.ClassificationName]; !ok {
-				asnsPerClass[vi.ClassificationName] = make(map[uint32]struct{})
+			m, ok := e.asnsPerClass[vi.ClassificationName]
+			if !ok {
+				m = make(map[uint32]struct{})
+				e.asnsPerClass[vi.ClassificationName] = m
 			}
-			asnsPerClass[vi.ClassificationName][asn] = struct{}{}
+			m[asn] = struct{}{}
 		}
 	}
 
-	e.prefixCounts = nil
-	for name, pc := range countMap {
-		pc.ASNCount = len(asnsPerClass[name])
+	e.prefixCounts = e.prefixCounts[:0]
+	for name, pc := range e.countMap {
+		pc.ASNCount = len(e.asnsPerClass[name])
+		// Pre-format strings here once every 20s
+		pc.ASNStr = strconv.Itoa(pc.ASNCount)
+		pc.CountStr = strconv.Itoa(pc.Count)
 		e.prefixCounts = append(e.prefixCounts, *pc)
 	}
 
@@ -1003,16 +1034,10 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 }
 
 func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
-	// Group significant anomalies (priority >= 1) by ASN
-	type asnGroup struct {
-		asnStr   string
-		prefixes []string
-		anom     string
-		color    color.RGBA
-		priority int
-		maxCount float64
+	// Clear reusable structures
+	for k := range e.asnGroups {
+		delete(e.asnGroups, k)
 	}
-	groups := make(map[uint32]*asnGroup)
 
 	for _, vi := range allImpact {
 		prio := e.GetPriority(vi.ClassificationName)
@@ -1025,7 +1050,7 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 			continue
 		}
 
-		g, ok := groups[asn]
+		g, ok := e.asnGroups[asn]
 		if !ok {
 			networkName := ""
 			if e.asnMapping != nil {
@@ -1042,8 +1067,9 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 				color:    e.getClassificationUIColor(vi.ClassificationName),
 				priority: prio,
 				maxCount: vi.Count,
+				prefixes: make([]string, 0, 4), // Small initial capacity
 			}
-			groups[asn] = g
+			e.asnGroups[asn] = g
 		}
 
 		// Keep track of the most severe anomaly for this ASN
@@ -1058,33 +1084,44 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 	}
 
 	// Sort ASNs by priority and then by prefix count
-	var sortedGroups []*asnGroup
-	for _, g := range groups {
-		sortedGroups = append(sortedGroups, g)
+	e.asnSortedGroups = e.asnSortedGroups[:0]
+	for _, g := range e.asnGroups {
+		e.asnSortedGroups = append(e.asnSortedGroups, g)
 	}
-	sort.Slice(sortedGroups, func(i, j int) bool {
-		if sortedGroups[i].priority != sortedGroups[j].priority {
-			return sortedGroups[i].priority > sortedGroups[j].priority
+	sort.Slice(e.asnSortedGroups, func(i, j int) bool {
+		if e.asnSortedGroups[i].priority != e.asnSortedGroups[j].priority {
+			return e.asnSortedGroups[i].priority > e.asnSortedGroups[j].priority
 		}
-		return len(sortedGroups[i].prefixes) > len(sortedGroups[j].prefixes)
+		return len(e.asnSortedGroups[i].prefixes) > len(e.asnSortedGroups[j].prefixes)
 	})
 
-	e.ActiveASNImpacts = nil
+	e.ActiveASNImpacts = e.ActiveASNImpacts[:0]
 	maxASNs := 4
-	for i := 0; i < len(sortedGroups) && i < maxASNs; i++ {
-		g := sortedGroups[i]
+	for i := 0; i < len(e.asnSortedGroups) && i < maxASNs; i++ {
+		g := e.asnSortedGroups[i]
 		// Limit prefixes per ASN
 		displayPrefixes := g.prefixes
+		moreCount := 0
 		if len(displayPrefixes) > 3 {
+			moreCount = len(displayPrefixes) - 3
 			displayPrefixes = displayPrefixes[:3]
 		}
 
+		moreStr := ""
+		if moreCount > 0 {
+			moreStr = fmt.Sprintf("(%d more)", moreCount)
+		}
+
+		anomWidth, _ := text.Measure(g.anom, e.subMonoFace, 0)
+
 		e.ActiveASNImpacts = append(e.ActiveASNImpacts, &ASNImpact{
-			ASNStr:   g.asnStr,
-			Prefixes: displayPrefixes,
-			Anom:     g.anom,
-			Color:    g.color,
-			Count:    len(g.prefixes),
+			ASNStr:    g.asnStr,
+			Prefixes:  displayPrefixes,
+			MoreStr:   moreStr,
+			Anom:      g.anom,
+			AnomWidth: anomWidth,
+			Color:     g.color,
+			Count:     len(g.prefixes),
 		})
 	}
 }

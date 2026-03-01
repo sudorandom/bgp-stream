@@ -225,11 +225,18 @@ type Engine struct {
 	SeenDB  *utils.DiskTrie
 	StateDB *utils.DiskTrie
 
+	// Reusable structures for updates (to reduce allocations)
+	impactMap       map[string]*VisualImpact
+	allImpact       []*VisualImpact
+	countMap        map[string]*PrefixCount
+	asnsPerClass    map[string]map[uint32]struct{}
+	asnGroups       map[uint32]*asnGroup
+	asnSortedGroups []*asnGroup
+	hubCurrent      []hub
+
 	audioPlayer *AudioPlayer
-
-	processor *BGPProcessor
-
-	asnMapping *utils.ASNMapping
+	processor   *BGPProcessor
+	asnMapping  *utils.ASNMapping
 
 	MinimalUI           bool
 	minimalUIKeyPressed bool
@@ -267,17 +274,21 @@ type VisualHub struct {
 type PrefixCount struct {
 	Name     string
 	Count    int
+	CountStr string
 	ASNCount int
+	ASNStr   string
 	Color    color.RGBA
 	Priority int
 }
 
 type ASNImpact struct {
-	ASNStr   string
-	Prefixes []string
-	Anom     string
-	Color    color.RGBA
-	Count    int
+	ASNStr    string
+	Prefixes  []string
+	MoreStr   string
+	Anom      string
+	AnomWidth float64
+	Color     color.RGBA
+	Count     int
 }
 
 type VisualImpact struct {
@@ -306,6 +317,15 @@ type MetricSnapshot struct {
 	LinkFlap, AggFlap, Oscill, Babbling int
 	Hunting, TE, NextHop, Outage        int
 	Leak, Attr, Global, Dedupe, Uncat   int
+}
+
+type asnGroup struct {
+	asnStr   string
+	prefixes []string
+	anom     string
+	color    color.RGBA
+	priority int
+	maxCount float64
 }
 
 func NewEngine(width, height int, scale float64) *Engine {
@@ -345,6 +365,10 @@ func NewEngine(width, height int, scale float64) *Engine {
 		prefixToLevel2:      make(map[string]Level2EventType),
 		currentAnomalies:    make(map[Level2EventType]map[string]int),
 		VisualImpact:        make(map[string]*VisualImpact),
+		impactMap:           make(map[string]*VisualImpact),
+		countMap:            make(map[string]*PrefixCount),
+		asnsPerClass:        make(map[string]map[uint32]struct{}),
+		asnGroups:           make(map[uint32]*asnGroup),
 		lastFrameCapturedAt: time.Now(),
 		drawOp:              &ebiten.DrawImageOptions{},
 		textOp:              &text.DrawOptions{},
