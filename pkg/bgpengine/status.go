@@ -347,8 +347,8 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(screen, legendTitle, e.titleFace, e.textOp)
 
-	imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
-	halfW := float64(imgW) / 2
+	// imgW, _ := e.pulseImage.Bounds().Dx(), e.pulseImage.Bounds().Dy()
+	// halfW := float64(imgW) / 2
 	swatchSize := fontSize
 
 	// Shift legend content slightly for padding
@@ -397,15 +397,25 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 			baseAlpha = 0.4
 		}
 
+		imgToDraw := e.pulseImage
+		imgWidth := float64(e.pulseImage.Bounds().Dx())
+		halfWidth := imgWidth / 2
+		if r.label == "ROUTE LEAK" {
+			imgToDraw = e.flareImage
+			imgWidth = float64(e.flareImage.Bounds().Dx())
+			halfWidth = imgWidth / 2
+			baseAlpha = 1.0 // Make it fully visible in legend
+		}
+
 		e.drawOp.GeoM.Reset()
 		e.drawOp.Blend = ebiten.BlendLighter
-		scale := swatchSize / float64(imgW) * 1
-		e.drawOp.GeoM.Translate(-halfW, -halfW)
+		scale := swatchSize / imgWidth * 1
+		e.drawOp.GeoM.Translate(-halfWidth, -halfWidth)
 		e.drawOp.GeoM.Scale(scale, scale)
 		e.drawOp.GeoM.Translate(x+(swatchSize/2), y+(fontSize/2))
 		e.drawOp.ColorScale.Reset()
 		e.drawOp.ColorScale.Scale(cr*baseAlpha, cg*baseAlpha, cb*baseAlpha, baseAlpha)
-		screen.DrawImage(e.pulseImage, e.drawOp)
+		screen.DrawImage(imgToDraw, e.drawOp)
 
 		// Draw the text label in the legend box
 		tr, tg, tb := float32(r.uiCol.R)/255.0, float32(r.uiCol.G)/255.0, float32(r.uiCol.B)/255.0
