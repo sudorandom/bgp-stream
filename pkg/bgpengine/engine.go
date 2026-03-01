@@ -1389,7 +1389,7 @@ func (e *Engine) drainCityBuffer() []*QueuedPulse {
 	defer e.bufferMu.Unlock()
 	var nextBatch []*QueuedPulse
 	// 2. Convert buffered city activity into discrete pulse events for each color
-	for key, d := range e.cityBuffer {
+	for _, d := range e.cityBuffer {
 		for c, count := range d.Counts {
 			if count > 0 {
 				isFlare := (c == ColorLeak)
@@ -1400,8 +1400,9 @@ func (e *Engine) drainCityBuffer() []*QueuedPulse {
 		d.Counts = nil
 		*d = BufferedCity{}
 		e.cityBufferPool.Put(d)
-		delete(e.cityBuffer, key)
 	}
+	// Clear the map after iteration to avoid concurrent modification
+	e.cityBuffer = make(map[uint64]*BufferedCity)
 	return nextBatch
 }
 
