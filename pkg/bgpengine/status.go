@@ -127,34 +127,28 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 func (e *Engine) calculateImpactBoxHeight(fontSize float64) float64 {
 	// Note: metricsMu is already held by caller (DrawBGPStatus)
 
-	// Title area
-	titleHeight := fontSize + 15.0
+	// Header height
+	totalHeight := fontSize + 30.0
 
-	// Calculate height for impacts
-	impactSpacing := fontSize * 1.2 * 2.4
-	numImpacts := len(e.ActiveImpacts)
-	if numImpacts == 0 {
-		numImpacts = 1 // Minimum space for empty state
+	// ASN Groups
+	for _, v := range e.ActiveASNImpacts {
+		totalHeight += fontSize * 0.9                 // ASN Header
+		totalHeight += float64(len(v.Prefixes)) * fontSize * 0.9 // Prefixes
+		if v.Count > len(v.Prefixes) {
+			totalHeight += fontSize * 0.9 // "(X more)"
+		}
+		totalHeight += 5.0 // Spacer
 	}
-	// Each impact needs: prefix line + ASN lines (up to 2 at fontSize*0.8*1.1 each)
-	impactsHeight := float64(numImpacts-1)*impactSpacing + fontSize*1.2 + 2*fontSize*0.8*1.1
 
-	// Gap before prefix counts
-	gap := fontSize * 0.5
-
-	// Calculate height for prefix counts
-	prefixCountsHeight := 0.0
+	// Prefix Counts Summary
 	if len(e.prefixCounts) > 0 {
-		// Header + items
-		prefixCountsHeight = fontSize*0.8 + float64(len(e.prefixCounts))*fontSize*0.8
+		totalHeight += 20.0                          // Top gap
+		totalHeight += fontSize * 0.9                // Column Headers
+		totalHeight += float64(len(e.prefixCounts)) * fontSize * 0.8 // Rows
 	}
 
-	// Bottom padding
-	bottomPadding := fontSize + 15.0
+	totalHeight += 20.0 // Bottom padding
 
-	totalHeight := titleHeight + impactsHeight + gap + prefixCountsHeight + bottomPadding
-
-	// Set minimum height
 	minHeight := 340.0
 	if e.Width > 2000 {
 		minHeight = 640.0
@@ -169,7 +163,7 @@ func (e *Engine) calculateImpactBoxHeight(fontSize float64) float64 {
 func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, impactBoxH, fontSize float64, monoFace *text.GoTextFace) {
 	hubX := margin
 	// 1. Check if any items are actually visible
-	if len(e.ActiveImpacts) == 0 {
+	if len(e.ActiveASNImpacts) == 0 {
 		return
 	}
 
@@ -191,84 +185,103 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(e.impactBuffer, impactTitle, e.titleFace, e.textOp)
 
-	for _, v := range e.ActiveImpacts {
+	currentY := localY + 5.0
+	for _, v := range e.ActiveASNImpacts {
+		// Draw ASN header
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY)+8)
+		e.textOp.GeoM.Translate(localX, currentY)
 		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, float32(v.Alpha*0.8))
-		text.Draw(e.impactBuffer, v.Prefix, monoFace, e.textOp)
+		e.textOp.ColorScale.Scale(1, 1, 1, 0.8)
+		text.Draw(e.impactBuffer, v.ASNStr, e.subMonoFace, e.textOp)
+		currentY += fontSize * 0.9
 
-		// Draw classification name on the right in its specific color
-		if v.DisplayClassificationName != "" {
-			tw, _ := text.Measure(v.DisplayClassificationName, e.subMonoFace, 0)
+		// Draw prefixes indented
+		for _, p := range v.Prefixes {
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+boxW-tw-25, v.DisplayY-(impactYBase-localY)+8+fontSize*0.1)
+			e.textOp.GeoM.Translate(localX+15, currentY)
 			e.textOp.ColorScale.Reset()
-			cr, cg, cb := float32(v.DisplayClassificationColor.R)/255.0, float32(v.DisplayClassificationColor.G)/255.0, float32(v.DisplayClassificationColor.B)/255.0
-			e.textOp.ColorScale.Scale(cr, cg, cb, float32(v.Alpha*0.9))
-			text.Draw(e.impactBuffer, v.DisplayClassificationName, e.subMonoFace, e.textOp)
+			e.textOp.ColorScale.Scale(1, 1, 1, 0.6)
+			text.Draw(e.impactBuffer, p, monoFace, e.textOp)
+
+			tw, _ := text.Measure(v.Anom, e.subMonoFace, 0)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(localX+boxW-tw-15, currentY)
+			e.textOp.ColorScale.Reset()
+			cr, cg, cb := float32(v.Color.R)/255.0, float32(v.Color.G)/255.0, float32(v.Color.B)/255.0
+			e.textOp.ColorScale.Scale(cr, cg, cb, 0.9)
+			text.Draw(e.impactBuffer, v.Anom, e.subMonoFace, e.textOp)
+
+			currentY += fontSize * 0.9
 		}
 
-		if v.asnStr != "" {
-			for j, line := range v.asnLines {
-				e.textOp.GeoM.Reset()
-				e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY)+8+fontSize*1.2+float64(j)*e.subMonoFace.Size*1.1)
-				e.textOp.ColorScale.Reset()
-				e.textOp.ColorScale.Scale(1, 1, 1, float32(v.Alpha*0.4))
-				text.Draw(e.impactBuffer, line, e.subMonoFace, e.textOp)
-			}
+		if v.Count > len(v.Prefixes) {
+			moreStr := fmt.Sprintf("(%d more)", v.Count-len(v.Prefixes))
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(localX+15, currentY)
+			e.textOp.ColorScale.Reset()
+			e.textOp.ColorScale.Scale(1, 1, 1, 0.4)
+			text.Draw(e.impactBuffer, moreStr, e.subMonoFace, e.textOp)
+			currentY += fontSize * 0.9
 		}
+		currentY += 5.0 // Spacer between ASNs
 	}
 
 	if len(e.prefixCounts) > 0 {
-		label := "Prefix Counts:"
-		// Position prefix counts below the last impact item
-		impactSpacing := fontSize * 1.2 * 2.4
-		lastImpactY := localY + float64(len(e.ActiveImpacts))*impactSpacing
-		if len(e.ActiveImpacts) > 0 {
-			lastImpactY = localY + float64(len(e.ActiveImpacts)-1)*impactSpacing
+		// Draw headers for the columns
+		currentY += 10.0
+		col1X, col2X, col3X := localX+5.0, localX+boxW-100.0, localX+boxW-40.0
+		if e.Width > 2000 {
+			col1X, col2X, col3X = localX+10.0, localX+boxW-200.0, localX+boxW-80.0
 		}
-		// Add space for ASN lines (up to 2 lines at fontSize*0.8*1.1 each) and a gap
-		countY := lastImpactY + fontSize*1.2 + 2*fontSize*0.8*1.1 + fontSize*0.5
 
-		// Center the header
-		labelWidth, _ := text.Measure(label, e.subMonoFace, 0)
-		labelX := localX + (boxW-20.0)/2.0 - labelWidth/2.0
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.Scale(1, 1, 1, 0.4)
 
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(labelX, countY)
-		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
-		text.Draw(e.impactBuffer, label, e.subMonoFace, e.textOp)
+		e.textOp.GeoM.Translate(col1X, currentY)
+		text.Draw(e.impactBuffer, "ANOMALY", e.subMonoFace, e.textOp)
 
-		// Calculate content width for centering the items
-		contentWidth := 180.0
-		if e.Width > 2000 {
-			contentWidth = 360.0
-		}
-		itemStartX := localX + (boxW-20.0)/2.0 - contentWidth/2.0
+		h1 := "ASNS"
+		hw1, _ := text.Measure(h1, e.subMonoFace, 0)
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(col2X-hw1/2, currentY)
+		text.Draw(e.impactBuffer, h1, e.subMonoFace, e.textOp)
 
-		for i, pc := range e.prefixCounts {
-			rowY := countY + float64(i+1)*fontSize*0.8
+		h2 := "PFXS"
+		hw2, _ := text.Measure(h2, e.subMonoFace, 0)
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(col3X-hw2/2, currentY)
+		text.Draw(e.impactBuffer, h2, e.subMonoFace, e.textOp)
 
-			// Draw classification name
-			nameStr := pc.Name + ":"
+		currentY += fontSize * 0.9
+
+		for _, pc := range e.prefixCounts {
+			// Anomaly Name
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(itemStartX, rowY)
-			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
-			text.Draw(e.impactBuffer, nameStr, e.subMonoFace, e.textOp)
-
-			// Draw count right justified within the content area
-			countStr := fmt.Sprintf("%d", pc.Count)
-			cw, _ := text.Measure(countStr, e.subMonoFace, 0)
-			rightX := itemStartX + contentWidth
-
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(rightX-cw, rowY)
+			e.textOp.GeoM.Translate(localX+5, currentY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.ScaleWithColor(pc.Color)
-			text.Draw(e.impactBuffer, countStr, e.subMonoFace, e.textOp)
+			text.Draw(e.impactBuffer, pc.Name, e.subMonoFace, e.textOp)
+
+			// ASN Count
+			asnStr := fmt.Sprintf("%d", pc.ASNCount)
+			aw, _ := text.Measure(asnStr, e.subMonoFace, 0)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(col2X-aw/2, currentY)
+			e.textOp.ColorScale.Reset()
+			e.textOp.ColorScale.ScaleWithColor(pc.Color)
+			text.Draw(e.impactBuffer, asnStr, e.subMonoFace, e.textOp)
+
+			// Prefix Count
+			pfxStr := fmt.Sprintf("%d", pc.Count)
+			pw, _ := text.Measure(pfxStr, e.subMonoFace, 0)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(col3X-pw/2, currentY)
+			e.textOp.ColorScale.Reset()
+			e.textOp.ColorScale.ScaleWithColor(pc.Color)
+			text.Draw(e.impactBuffer, pfxStr, e.subMonoFace, e.textOp)
+
+			currentY += fontSize * 0.8
 		}
 	}
 
@@ -627,7 +640,7 @@ func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64) {
 	goodCol := ColorDiscovery // Blue (Normal)
 	polyCol := ColorPolicy    // Purple (Policy)
 	badCol := ColorBad        // Orange (Bad)
-	critCol := ColorCritical  // Red (Critical)
+	critCol := ColorWithUI     // Light Red (Critical)
 
 	e.drawOp.Blend = ebiten.BlendLighter
 
@@ -961,25 +974,37 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 
 func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 	countMap := make(map[string]*PrefixCount)
+	asnsPerClass := make(map[string]map[uint32]struct{})
+
 	for _, vi := range allImpact {
 		if vi.ClassificationName == "" {
 			continue
 		}
 		prio := e.GetPriority(vi.ClassificationName)
+		asn := e.prefixToASN[vi.Prefix]
+
 		if pc, ok := countMap[vi.ClassificationName]; ok {
 			pc.Count++
 		} else {
 			countMap[vi.ClassificationName] = &PrefixCount{
 				Name:     vi.ClassificationName,
 				Count:    1,
-				Color:    vi.ClassificationColor,
+				Color:    e.getClassificationUIColor(vi.ClassificationName),
 				Priority: prio,
 			}
+		}
+
+		if asn != 0 {
+			if _, ok := asnsPerClass[vi.ClassificationName]; !ok {
+				asnsPerClass[vi.ClassificationName] = make(map[uint32]struct{})
+			}
+			asnsPerClass[vi.ClassificationName][asn] = struct{}{}
 		}
 	}
 
 	e.prefixCounts = nil
-	for _, pc := range countMap {
+	for name, pc := range countMap {
+		pc.ASNCount = len(asnsPerClass[name])
 		e.prefixCounts = append(e.prefixCounts, *pc)
 	}
 
@@ -995,58 +1020,89 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 }
 
 func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact, impactYBase, boxW, spacing float64) {
-	// Filter to only show significant anomalies (priority >= 1) in the visual list
-	var filteredImpact []*VisualImpact
+	// Group significant anomalies (priority >= 1) by ASN
+	type asnGroup struct {
+		asnStr   string
+		prefixes []string
+		anom     string
+		color    color.RGBA
+		priority int
+		maxCount float64
+	}
+	groups := make(map[uint32]*asnGroup)
+
 	for _, vi := range allImpact {
-		if e.GetPriority(vi.ClassificationName) >= 1 {
-			filteredImpact = append(filteredImpact, vi)
-		}
-	}
-
-	maxImpact := 5
-	if len(filteredImpact) < maxImpact {
-		maxImpact = len(filteredImpact)
-	}
-	impactSpacing := spacing * 2.4
-	e.ActiveImpacts = nil
-	for i := 0; i < maxImpact; i++ {
-		v := filteredImpact[i]
-		v.DisplayClassificationName = v.ClassificationName
-		v.DisplayClassificationColor = v.ClassificationColor
-
-		asn := e.prefixToASN[v.Prefix]
-		var networkName string
-		if asn != 0 && e.asnMapping != nil {
-			networkName = e.asnMapping.GetName(asn)
+		prio := e.GetPriority(vi.ClassificationName)
+		if prio < 1 {
+			continue
 		}
 
-		asnStr := ""
-		if asn != 0 {
-			asnStr = fmt.Sprintf("AS%d", asn)
+		asn := e.prefixToASN[vi.Prefix]
+		if asn == 0 {
+			continue
+		}
+
+		g, ok := groups[asn]
+		if !ok {
+			networkName := ""
+			if e.asnMapping != nil {
+				networkName = e.asnMapping.GetName(asn)
+			}
+			asnStr := fmt.Sprintf("AS%d", asn)
 			if networkName != "" {
 				asnStr = fmt.Sprintf("AS%d - %s", asn, networkName)
 			}
+
+			g = &asnGroup{
+				asnStr:   asnStr,
+				anom:     vi.ClassificationName,
+				color:    e.getClassificationUIColor(vi.ClassificationName),
+				priority: prio,
+				maxCount: vi.Count,
+			}
+			groups[asn] = g
 		}
 
-		charW, _ := text.Measure("A", e.subMonoFace, 0)
-		maxChars := int((boxW - 100) / charW)
-		if maxChars < 10 {
-			maxChars = 10
+		// Keep track of the most severe anomaly for this ASN
+		if prio > g.priority || (prio == g.priority && vi.Count > g.maxCount) {
+			g.anom = vi.ClassificationName
+			g.color = e.getClassificationUIColor(vi.ClassificationName)
+			g.priority = prio
+			g.maxCount = vi.Count
 		}
 
-		v.Active = true
-		v.TargetY = impactYBase + float64(i)*impactSpacing
-		if v.Alpha < 0.01 {
-			v.DisplayY = v.TargetY
+		g.prefixes = append(g.prefixes, vi.Prefix)
+	}
+
+	// Sort ASNs by priority and then by prefix count
+	var sortedGroups []*asnGroup
+	for _, g := range groups {
+		sortedGroups = append(sortedGroups, g)
+	}
+	sort.Slice(sortedGroups, func(i, j int) bool {
+		if sortedGroups[i].priority != sortedGroups[j].priority {
+			return sortedGroups[i].priority > sortedGroups[j].priority
 		}
-		v.TargetAlpha = 1.0
-		v.ASN = asn
-		v.NetworkName = networkName
-		v.asnStr = asnStr
-		v.asnLines = wrapString(asnStr, maxChars, 2)
-		v.RateStr = fmt.Sprintf("%.1f", v.Count)
-		v.RateWidth, _ = text.Measure(v.RateStr, e.titleMonoFace, 0)
-		e.ActiveImpacts = append(e.ActiveImpacts, v)
+		return len(sortedGroups[i].prefixes) > len(sortedGroups[j].prefixes)
+	})
+
+	e.ActiveASNImpacts = nil
+	maxASNs := 4
+	for i := 0; i < len(sortedGroups) && i < maxASNs; i++ {
+		g := sortedGroups[i]
+		// Limit prefixes per ASN
+		displayPrefixes := g.prefixes
+		if len(displayPrefixes) > 3 {
+			displayPrefixes = displayPrefixes[:3]
+		}
+
+		e.ActiveASNImpacts = append(e.ActiveASNImpacts, &ASNImpact{
+			ASNStr:   g.asnStr,
+			Prefixes: displayPrefixes,
+			Anom:     g.anom,
+			Color:    g.color,
+			Count:    len(g.prefixes),
+		})
 	}
 }
 

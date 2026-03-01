@@ -220,6 +220,7 @@ type Engine struct {
 	currentAnomalies    map[Level2EventType]map[string]int
 	VisualImpact        map[string]*VisualImpact
 	ActiveImpacts       []*VisualImpact
+	ActiveASNImpacts    []*ASNImpact
 
 	SeenDB  *utils.DiskTrie
 	StateDB *utils.DiskTrie
@@ -266,8 +267,17 @@ type VisualHub struct {
 type PrefixCount struct {
 	Name     string
 	Count    int
+	ASNCount int
 	Color    color.RGBA
 	Priority int
+}
+
+type ASNImpact struct {
+	ASNStr   string
+	Prefixes []string
+	Anom     string
+	Color    color.RGBA
+	Count    int
 }
 
 type VisualImpact struct {
@@ -386,8 +396,8 @@ func NewEngine(width, height int, scale float64) *Engine {
 		{"LINK FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.LinkFlap }},
 
 		// Column 3: Critical (Red)
-		{"ROUTE LEAK", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Leak }},
-		{"OUTAGE", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Outage }},
+		{"ROUTE LEAK", 0, ColorLeak, ColorWithUI, func(s MetricSnapshot) int { return s.Leak }},
+		{"OUTAGE", 0, ColorOutage, ColorWithUI, func(s MetricSnapshot) int { return s.Outage }},
 	}
 
 	e.audioPlayer = NewAudioPlayer(nil, func(song, artist, extra string) {
@@ -1566,6 +1576,19 @@ func (e *Engine) GetPriority(name string) int {
 		return 1 // Normalish (Purple)
 	default:
 		return 0 // Discovery (Blue)
+	}
+}
+
+func (e *Engine) getClassificationUIColor(name string) color.RGBA {
+	switch name {
+	case nameRouteLeak, nameHardOutage:
+		return ColorWithUI
+	case nameLinkFlap, nameBabbling, nameNextHopFlap, nameAggFlap:
+		return ColorBad // Already pretty bright
+	case namePolicyChurn, namePathOscillation, namePathHunting:
+		return ColorUpdUI
+	default:
+		return ColorGossipUI
 	}
 }
 
