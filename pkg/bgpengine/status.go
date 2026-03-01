@@ -80,9 +80,9 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 		return
 	}
 
-	boxH := 180.0
+	boxH := 130.0
 	if e.Width > 2000 {
-		boxH = 360.0
+		boxH = 260.0
 	}
 
 	if e.hubsBuffer == nil || e.hubsBuffer.Bounds().Dx() != int(boxW) || e.hubsBuffer.Bounds().Dy() != int(boxH) {
@@ -142,7 +142,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	vector.FillRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	impactTitle := "BGP ANOMALIES"
+	impactTitle := "BGP ANOMALIES (last 20s)"
 	vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 	e.textOp.GeoM.Reset()
@@ -151,33 +151,46 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(e.impactBuffer, impactTitle, e.titleFace, e.textOp)
 
-	for _, vi := range e.ActiveImpacts {
+	for _, v := range e.ActiveImpacts {
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, vi.DisplayY-(impactYBase-localY))
+		e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY))
 		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.8))
-		text.Draw(e.impactBuffer, vi.Prefix, monoFace, e.textOp)
+		e.textOp.ColorScale.Scale(1, 1, 1, float32(v.Alpha*0.8))
+		text.Draw(e.impactBuffer, v.Prefix, monoFace, e.textOp)
 
 		// Draw classification name on the right in its specific color
-		if vi.DisplayClassificationName != "" {
-			tw, _ := text.Measure(vi.DisplayClassificationName, e.subMonoFace, 0)
+		if v.DisplayClassificationName != "" {
+			tw, _ := text.Measure(v.DisplayClassificationName, e.subMonoFace, 0)
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+boxW-tw-25, vi.DisplayY-(impactYBase-localY)+fontSize*0.1)
+			e.textOp.GeoM.Translate(localX+boxW-tw-25, v.DisplayY-(impactYBase-localY)+fontSize*0.1)
 			e.textOp.ColorScale.Reset()
-			cr, cg, cb := float32(vi.DisplayClassificationColor.R)/255.0, float32(vi.DisplayClassificationColor.G)/255.0, float32(vi.DisplayClassificationColor.B)/255.0
-			e.textOp.ColorScale.Scale(cr, cg, cb, float32(vi.Alpha*0.9))
-			text.Draw(e.impactBuffer, vi.DisplayClassificationName, e.subMonoFace, e.textOp)
+			cr, cg, cb := float32(v.DisplayClassificationColor.R)/255.0, float32(v.DisplayClassificationColor.G)/255.0, float32(v.DisplayClassificationColor.B)/255.0
+			e.textOp.ColorScale.Scale(cr, cg, cb, float32(v.Alpha*0.9))
+			text.Draw(e.impactBuffer, v.DisplayClassificationName, e.subMonoFace, e.textOp)
 		}
 
-		if vi.asnStr != "" {
-			for j, line := range vi.asnLines {
+		if v.asnStr != "" {
+			for j, line := range v.asnLines {
 				e.textOp.GeoM.Reset()
-				e.textOp.GeoM.Translate(localX, vi.DisplayY-(impactYBase-localY)+fontSize*1.2+float64(j)*e.subMonoFace.Size*1.1)
+				e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY)+fontSize*1.2+float64(j)*e.subMonoFace.Size*1.1)
 				e.textOp.ColorScale.Reset()
-				e.textOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.4))
+				e.textOp.ColorScale.Scale(1, 1, 1, float32(v.Alpha*0.4))
 				text.Draw(e.impactBuffer, line, e.subMonoFace, e.textOp)
 			}
 		}
+	}
+
+	if e.orangeCount > 0 || e.redCount > 0 {
+		statusStr := fmt.Sprintf("%d prefixes with Bad anomalies, %d Critical", e.orangeCount, e.redCount)
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(localX, impactBoxH-fontSize-5)
+		e.textOp.ColorScale.Reset()
+		if e.redCount > 0 {
+			e.textOp.ColorScale.ScaleWithColor(ColorCritical)
+		} else {
+			e.textOp.ColorScale.ScaleWithColor(ColorBad)
+		}
+		text.Draw(e.impactBuffer, statusStr, e.subMonoFace, e.textOp)
 	}
 
 	now := time.Now()
@@ -635,31 +648,19 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 }
 
 func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
-	type hub struct {
-		cc   string
-		rate float64
-	}
-	var current []hub
-	for cc, val := range e.countryActivity {
-		current = append(current, hub{cc, float64(val) / uiInterval})
-	}
-	sort.Slice(current, func(i, j int) bool { return current[i].rate > current[j].rate })
-
-	maxItems := 8
+	current := e.getSortedHubs(uiInterval)
+	maxItems := 5
 	if len(current) < maxItems {
 		maxItems = len(current)
 	}
 
 	fontSize := 18.0
-	if e.Width > 2000 {
-		fontSize = 36.0
-	}
-	spacing := fontSize * 1.2
-
 	hubYBase := float64(e.Height) * 0.48
 	if e.Width > 2000 {
+		fontSize = 36.0
 		hubYBase = float64(e.Height) * 0.42
 	}
+	spacing := fontSize * 1.2
 
 	for _, vh := range e.VisualHubs {
 		vh.Active = false
@@ -671,42 +672,8 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		if current[i].rate < 0.1 && !firstRun {
 			continue
 		}
-
 		targetY := hubYBase + float64(i)*spacing
-		rateStr := fmt.Sprintf("%.0f", current[i].rate)
-		tw, _ := text.Measure(rateStr, e.monoFace, 0)
-		vh, ok := e.VisualHubs[current[i].cc]
-		if !ok {
-			countryName := countries.ByName(current[i].cc).String()
-			if countryName == "Unknown" {
-				countryName = current[i].cc
-			}
-			if idx := strings.Index(countryName, " ("); idx != -1 {
-				countryName = countryName[:idx]
-			}
-			if strings.Contains(countryName, "Hong Kong") {
-				countryName = "Hong Kong"
-			}
-			if strings.Contains(countryName, "Macao") {
-				countryName = "Macao"
-			}
-			if strings.Contains(countryName, "Taiwan") {
-				countryName = "Taiwan"
-			}
-
-			const maxLen = 18
-			if len(countryName) > maxLen {
-				countryName = countryName[:maxLen-3] + "..."
-			}
-
-			vh = &VisualHub{
-				CC:         current[i].cc,
-				CountryStr: countryName,
-				DisplayY:   targetY,
-				Alpha:      0,
-			}
-			e.VisualHubs[current[i].cc] = vh
-		}
+		vh := e.getOrCreateVisualHub(current[i].cc, targetY)
 
 		vh.Active = true
 		vh.TargetY = targetY
@@ -715,8 +682,8 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		}
 		vh.TargetAlpha = 1.0
 		vh.Rate = current[i].rate
-		vh.RateStr = rateStr
-		vh.RateWidth = tw
+		vh.RateStr = fmt.Sprintf("%.0f", current[i].rate)
+		vh.RateWidth, _ = text.Measure(vh.RateStr, e.monoFace, 0)
 		e.ActiveHubs = append(e.ActiveHubs, vh)
 	}
 
@@ -727,11 +694,84 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 	}
 }
 
+type hub struct {
+	cc   string
+	rate float64
+}
+
+func (e *Engine) getSortedHubs(uiInterval float64) []hub {
+	var current []hub
+	for cc, val := range e.countryActivity {
+		current = append(current, hub{cc, float64(val) / uiInterval})
+	}
+	sort.Slice(current, func(i, j int) bool { return current[i].rate > current[j].rate })
+	return current
+}
+
+func (e *Engine) getOrCreateVisualHub(cc string, targetY float64) *VisualHub {
+	vh, ok := e.VisualHubs[cc]
+	if !ok {
+		countryName := countries.ByName(cc).String()
+		if countryName == "Unknown" {
+			countryName = cc
+		}
+		if idx := strings.Index(countryName, " ("); idx != -1 {
+			countryName = countryName[:idx]
+		}
+		if strings.Contains(countryName, "Hong Kong") {
+			countryName = "Hong Kong"
+		}
+		if strings.Contains(countryName, "Macao") {
+			countryName = "Macao"
+		}
+		if strings.Contains(countryName, "Taiwan") {
+			countryName = "Taiwan"
+		}
+
+		const maxLen = 18
+		if len(countryName) > maxLen {
+			countryName = countryName[:maxLen-3] + "..."
+		}
+
+		vh = &VisualHub{
+			CC:         cc,
+			CountryStr: countryName,
+			DisplayY:   targetY,
+			Alpha:      0,
+		}
+		e.VisualHubs[cc] = vh
+	}
+	return vh
+}
+
 func (e *Engine) updateVisualImpacts(uiInterval float64) {
-	// 1. Gather all prefixes seen in the last 3 buckets (60s)
-	// This matches the 1-minute activity trend.
+	allImpact := e.gatherActiveImpacts(uiInterval)
+
+	sort.SliceStable(allImpact, func(i, j int) bool {
+		p1, p2 := e.GetPriority(allImpact[i].ClassificationName), e.GetPriority(allImpact[j].ClassificationName)
+		if p1 != p2 {
+			return p1 > p2
+		}
+		return allImpact[i].Count > allImpact[j].Count
+	})
+
+	for _, v := range e.VisualImpact {
+		v.Active = false
+		v.TargetAlpha = 0.0
+	}
+
+	e.activateTopImpacts(allImpact)
+
+	for p, v := range e.VisualImpact {
+		if !v.Active && v.Alpha < 0.01 {
+			delete(e.VisualImpact, p)
+		}
+	}
+}
+
+func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 	combinedBucket := make(map[string]int)
-	numBuckets := 3
+	numBuckets := 20
 	if len(e.prefixImpactHistory) < numBuckets {
 		numBuckets = len(e.prefixImpactHistory)
 	}
@@ -747,38 +787,36 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 		if utils.IsBeaconPrefix(p) {
 			continue
 		}
-		vi, ok := e.VisualImpact[p]
+		v, ok := e.VisualImpact[p]
 		if !ok {
-			vi = &VisualImpact{Prefix: p}
-			e.VisualImpact[p] = vi
+			v = &VisualImpact{Prefix: p}
+			e.VisualImpact[p] = v
 		}
 
-		// Only include actual anomalies in this list (Red, Orange, or Purple).
-		// Any prefix that hasn't been classified or is just "Discovery" is skipped.
-		if e.GetPriority(vi.ClassificationName) == 0 {
+		if e.GetPriority(v.ClassificationName) == 0 {
 			continue
 		}
 
-		vi.Count = float64(count) / (uiInterval * float64(numBuckets))
-		allImpact = append(allImpact, vi)
+		v.Count = float64(count) / (uiInterval * float64(numBuckets))
+		allImpact = append(allImpact, v)
 	}
+	return allImpact
+}
 
-	// 2. Hierarchical sorting based on priority then rate
-	sort.SliceStable(allImpact, func(i, j int) bool {
-		p1, p2 := e.GetPriority(allImpact[i].ClassificationName), e.GetPriority(allImpact[j].ClassificationName)
-		if p1 != p2 {
-			return p1 > p2
+func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
+	var orangeCount, redCount int
+	for _, vi := range allImpact {
+		prio := e.GetPriority(vi.ClassificationName)
+		if prio == 2 {
+			orangeCount++
+		} else if prio == 3 {
+			redCount++
 		}
-		return allImpact[i].Count > allImpact[j].Count
-	})
-
-	// 3. Mark all as inactive (they will be reactivated if in top 5)
-	for _, vi := range e.VisualImpact {
-		vi.Active = false
-		vi.TargetAlpha = 0.0
 	}
 
-	// 4. Dimensions
+	e.orangeCount = orangeCount
+	e.redCount = redCount
+
 	fontSize := 18.0
 	hubsBoxH, boxW := 120.0, 280.0
 	if e.Width > 2000 {
@@ -795,7 +833,6 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 		impactYBase = hubYBase + hubsBoxH + 40.0
 	}
 
-	// 5. Activate Top 5
 	maxImpact := 5
 	if len(allImpact) < maxImpact {
 		maxImpact = len(allImpact)
@@ -803,13 +840,11 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 	impactSpacing := spacing * 2.4
 	e.ActiveImpacts = nil
 	for i := 0; i < maxImpact; i++ {
-		vi := allImpact[i]
+		v := allImpact[i]
+		v.DisplayClassificationName = v.ClassificationName
+		v.DisplayClassificationColor = v.ClassificationColor
 
-		// Snapshot classification for this 20s interval
-		vi.DisplayClassificationName = vi.ClassificationName
-		vi.DisplayClassificationColor = vi.ClassificationColor
-
-		asn := e.prefixToASN[vi.Prefix]
+		asn := e.prefixToASN[v.Prefix]
 		var networkName string
 		if asn != 0 && e.asnMapping != nil {
 			networkName = e.asnMapping.GetName(asn)
@@ -829,26 +864,19 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 			maxChars = 10
 		}
 
-		vi.Active = true
-		vi.TargetY = impactYBase + float64(i)*impactSpacing
-		if vi.Alpha < 0.01 {
-			vi.DisplayY = vi.TargetY
+		v.Active = true
+		v.TargetY = impactYBase + float64(i)*impactSpacing
+		if v.Alpha < 0.01 {
+			v.DisplayY = v.TargetY
 		}
-		vi.TargetAlpha = 1.0
-		vi.ASN = asn
-		vi.NetworkName = networkName
-		vi.asnStr = asnStr
-		vi.asnLines = wrapString(asnStr, maxChars, 2)
-		vi.RateStr = fmt.Sprintf("%.1f", vi.Count)
-		vi.RateWidth, _ = text.Measure(vi.RateStr, e.monoFace, 0)
-		e.ActiveImpacts = append(e.ActiveImpacts, vi)
-	}
-
-	// 6. Cleanup invisible items
-	for p, vi := range e.VisualImpact {
-		if !vi.Active && vi.Alpha < 0.01 {
-			delete(e.VisualImpact, p)
-		}
+		v.TargetAlpha = 1.0
+		v.ASN = asn
+		v.NetworkName = networkName
+		v.asnStr = asnStr
+		v.asnLines = wrapString(asnStr, maxChars, 2)
+		v.RateStr = fmt.Sprintf("%.1f", v.Count)
+		v.RateWidth, _ = text.Measure(v.RateStr, e.monoFace, 0)
+		e.ActiveImpacts = append(e.ActiveImpacts, v)
 	}
 }
 

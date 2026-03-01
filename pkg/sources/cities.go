@@ -23,7 +23,9 @@ func FetchCityDominance() ([]CityDominance, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	var meta struct {
 		MaxYear int `json:"max_year"`
@@ -36,7 +38,9 @@ func FetchCityDominance() ([]CityDominance, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp2.Body.Close()
+	defer func() {
+		_ = resp2.Body.Close()
+	}()
 
 	var cities []CityDominance
 	if err := json.NewDecoder(resp2.Body).Decode(&cities); err != nil {

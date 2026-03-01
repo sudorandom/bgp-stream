@@ -203,9 +203,10 @@ type Engine struct {
 	lastMetricsUpdate time.Time
 	hubUpdatedAt      time.Time
 	impactUpdatedAt   time.Time
+	orangeCount, redCount int
 
-	VisualHubs  map[string]*VisualHub
-	ActiveHubs  []*VisualHub
+	VisualHubs map[string]*VisualHub
+	ActiveHubs []*VisualHub
 
 	prefixImpactHistory []map[string]int
 	prefixToASN         map[string]uint32
@@ -703,9 +704,7 @@ func (e *Engine) LoadRemainingData() error {
 	}
 
 	// 5. Load cloud data from sources of truth
-	if err := e.loadCloudData(); err != nil {
-		log.Printf("Warning: Failed to load cloud data: %v", err)
-	}
+	e.loadCloudData()
 
 	if err := e.loadRemoteCityData(); err != nil {
 		return err
@@ -787,7 +786,7 @@ func (e *Engine) loadRemoteCityData() error {
 	return nil
 }
 
-func (e *Engine) loadCloudData() error {
+func (e *Engine) loadCloudData() {
 	var allPrefixes []sources.CloudPrefix
 
 	// 1. Google Cloud (Geofeed - Source of Truth)
@@ -813,7 +812,6 @@ func (e *Engine) loadCloudData() error {
 		log.Printf("Loaded %d cloud prefixes into CloudTrie", len(allPrefixes))
 	}
 
-	return nil
 }
 
 func (e *Engine) drawGrid(img *image.RGBA) {
@@ -1363,26 +1361,6 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 
 	// 6. Update windowed metrics (this drives the dashboard numbers)
 	e.updateWindowedMetrics(eventType, level2Type, prefix, asn)
-}
-
-func (e *Engine) updatePrefixImpact(prefix string, asn uint32) {
-	if len(e.prefixImpactHistory) > 0 {
-		bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
-		if bucket == nil {
-			bucket = make(map[string]int)
-			e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
-		}
-		bucket[prefix]++
-	}
-	if e.prefixToASN == nil {
-		e.prefixToASN = make(map[string]uint32)
-	}
-	if asn != 0 {
-		e.prefixToASN[prefix] = asn
-	}
-	if utils.IsBeaconPrefix(prefix) {
-		e.windowBeacon++
-	}
 }
 
 func (e *Engine) getOrCreateCityBuffer(lat, lng float64) *BufferedCity {
