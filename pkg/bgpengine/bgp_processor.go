@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -127,6 +128,7 @@ type BGPProcessor struct {
 	level2UniquePrefixes map[Level2EventType]map[string]struct{}
 	totalLevel2Events    int
 	prefixStates         map[string]*bgpproto.PrefixState
+	stateWriteQueue      chan map[string][]byte
 
 	mu       sync.Mutex
 	url      string
@@ -134,7 +136,7 @@ type BGPProcessor struct {
 }
 
 func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnMapping *utils.ASNMapping, prefixToIP PrefixToIPConverter, onEvent BGPEventCallback) *BGPProcessor {
-	return &BGPProcessor{
+	p := &BGPProcessor{
 		geo:        geo,
 		seenDB:     seenDB,
 		stateDB:    stateDB,
@@ -148,12 +150,40 @@ func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnM
 		level2Stats:          make(map[Level2EventType]int),
 		level2UniquePrefixes: make(map[Level2EventType]map[string]struct{}),
 		prefixStates:         make(map[string]*bgpproto.PrefixState),
+		stateWriteQueue:      make(chan map[string][]byte, 5000), // Increase queue size
 		url:                  "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream",
+	}
+
+	go p.runStateWriter()
+	return p
+}
+
+func (p *BGPProcessor) runStateWriter() {
+	for {
+		if p.isStopping() {
+			return
+		}
+
+		// Use a short timeout to prevent permanent blocking
+		select {
+		case batch, ok := <-p.stateWriteQueue:
+			if !ok {
+				return
+			}
+			if len(batch) > 0 && p.stateDB != nil {
+				if err := p.stateDB.BatchInsertRaw(batch); err != nil {
+					log.Printf("Error saving prefix states: %v", err)
+				}
+			}
+		case <-time.After(100 * time.Millisecond):
+			// periodically check if stopping
+		}
 	}
 }
 
 func (p *BGPProcessor) Close() {
 	p.stopping.Store(true)
+	close(p.stateWriteQueue)
 }
 
 func (p *BGPProcessor) isStopping() bool {
@@ -301,11 +331,11 @@ func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) {
 	}
 
 	if len(batch) > 0 && p.stateDB != nil && !p.isStopping() {
-		go func(b map[string][]byte) {
-			if err := p.stateDB.BatchInsertRaw(b); err != nil {
-				log.Printf("Error saving prefix states: %v", err)
-			}
-		}(batch)
+		select {
+		case p.stateWriteQueue <- batch:
+		default:
+			log.Printf("State write queue full, dropping batch of size %d", len(batch))
+		}
 	}
 }
 
@@ -319,12 +349,11 @@ func (p *BGPProcessor) saveState(prefix string, state *bgpproto.PrefixState) {
 		return
 	}
 
-	// Fast clone of prefix/data to write asynchronously
-	go func(key string, val []byte) {
-		if err := p.stateDB.BatchInsertRaw(map[string][]byte{key: val}); err != nil {
-			log.Printf("Error saving prefix state: %v", err)
-		}
-	}(prefix, data)
+	select {
+	case p.stateWriteQueue <- map[string][]byte{prefix: data}:
+	default:
+		// Queue full, drop write to avoid blocking processing
+	}
 }
 
 func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals map[uint32]struct {
@@ -364,7 +393,40 @@ func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals
 		ctx.PathStr = "[" + strings.Join(pathParts, " ") + "]"
 	}
 	if len(data.Community) > 0 {
-		ctx.CommStr = fmt.Sprintf("%v", data.Community)
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i, cGroup := range data.Community {
+			if i > 0 {
+				sb.WriteString(" ")
+			}
+			sb.WriteString("[")
+			for j, val := range cGroup {
+				if j > 0 {
+					sb.WriteString(" ")
+				}
+				switch v := val.(type) {
+				case float64:
+					sb.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+				case float32:
+					sb.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
+				case int:
+					sb.WriteString(strconv.Itoa(v))
+				case int64:
+					sb.WriteString(strconv.FormatInt(v, 10))
+				case uint:
+					sb.WriteString(strconv.FormatUint(uint64(v), 10))
+				case uint64:
+					sb.WriteString(strconv.FormatUint(v, 10))
+				case string:
+					sb.WriteString(v)
+				default:
+					sb.WriteString(fmt.Sprint(val))
+				}
+			}
+			sb.WriteString("]")
+		}
+		sb.WriteString("]")
+		ctx.CommStr = sb.String()
 	}
 
 	if len(data.Withdrawals) > 0 {
@@ -829,7 +891,7 @@ func (p *BGPProcessor) logRouteLeak(prefix string, path []uint32) {
 		if p.asnMapping != nil {
 			name = p.asnMapping.GetName(asn)
 		}
-		pathStrs = append(pathStrs, fmt.Sprintf("AS%d (%s)", asn, name))
+		pathStrs = append(pathStrs, "AS"+strconv.FormatUint(uint64(asn), 10)+" ("+name+")")
 	}
 	log.Printf("[!!! ROUTE LEAK !!!] Prefix: %s, Path: %s", prefix, strings.Join(pathStrs, " -> "))
 }

@@ -1,7 +1,6 @@
 package bgpengine
 
 import (
-	"fmt"
 	"image/color"
 	"math"
 	"math/rand"
@@ -192,7 +191,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 		currentX := localX + lw
 		hasBad := e.orangeCount > 0
 		if hasBad {
-			badStr := fmt.Sprintf("%d bad", e.orangeCount)
+			badStr := strconv.Itoa(e.orangeCount) + " bad"
 			e.textOp.GeoM.Reset()
 			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
 			e.textOp.ColorScale.Reset()
@@ -214,7 +213,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 				currentX += cw
 			}
 
-			critStr := fmt.Sprintf("%d critical", e.redCount)
+			critStr := strconv.Itoa(e.redCount) + " critical"
 			e.textOp.GeoM.Reset()
 			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
 			e.textOp.ColorScale.Reset()
@@ -501,19 +500,45 @@ func (e *Engine) logVal(v int) float64 {
 }
 
 func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, titlePadding, globalMaxLog, fontSize float64) {
+	var path vector.Path
 	for _, val := range []int{1, 10, 100, 1000, 10000, 100000} {
 		lVal := e.logVal(val)
 		if lVal > globalMaxLog+0.1 {
 			break
 		}
 		y := math.Round(titlePadding + chartH - (lVal/globalMaxLog)*chartH)
-		vector.StrokeLine(screen, float32(gx), float32(gy+y), float32(gx+chartW), float32(gy+y), 2.0, color.RGBA{40, 40, 40, 255}, true)
+		path.MoveTo(float32(gx), float32(gy+y))
+		path.LineTo(float32(gx+chartW), float32(gy+y))
+	}
 
-		labelStr := fmt.Sprintf("%d", val)
+	op := &vector.StrokeOptions{}
+	op.Width = 2.0
+	vs, is := path.AppendVerticesAndIndicesForStroke(nil, nil, op)
+	for i := range vs {
+		vs[i].SrcX = 0
+		vs[i].SrcY = 0
+		vs[i].ColorR = 40.0 / 255.0
+		vs[i].ColorG = 40.0 / 255.0
+		vs[i].ColorB = 40.0 / 255.0
+		vs[i].ColorA = 1.0
+	}
+	opDraw := &ebiten.DrawTrianglesOptions{}
+	screen.DrawTriangles(vs, is, e.whitePixel, opDraw)
+
+	for _, val := range []int{1, 10, 100, 1000, 10000, 100000} {
+		lVal := e.logVal(val)
+		if lVal > globalMaxLog+0.1 {
+			break
+		}
+		y := math.Round(titlePadding + chartH - (lVal/globalMaxLog)*chartH)
+
+		var labelStr string
 		if val >= 1000000 {
-			labelStr = fmt.Sprintf("%dm", val/1000000)
+			labelStr = strconv.Itoa(val/1000000) + "m"
 		} else if val >= 1000 {
-			labelStr = fmt.Sprintf("%dk", val/1000)
+			labelStr = strconv.Itoa(val/1000) + "k"
+		} else {
+			labelStr = strconv.Itoa(val)
 		}
 		e.textOp.GeoM.Reset()
 		labelX := gx + chartW + 8
@@ -713,7 +738,7 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		}
 		vh.TargetAlpha = 1.0
 		vh.Rate = current[i].rate
-		vh.RateStr = fmt.Sprintf("%.0f", current[i].rate)
+		vh.RateStr = strconv.FormatFloat(current[i].rate, 'f', 0, 64)
 		vh.RateWidth, _ = text.Measure(vh.RateStr, e.subMonoFace, 0)
 		e.ActiveHubs = append(e.ActiveHubs, vh)
 	}
@@ -893,9 +918,9 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 
 		asnStr := ""
 		if asn != 0 {
-			asnStr = fmt.Sprintf("AS%d", asn)
+			asnStr = "AS" + strconv.FormatUint(uint64(asn), 10)
 			if networkName != "" {
-				asnStr = fmt.Sprintf("AS%d - %s", asn, networkName)
+				asnStr = asnStr + " - " + networkName
 			}
 		}
 
@@ -915,7 +940,7 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 		v.NetworkName = networkName
 		v.asnStr = asnStr
 		v.asnLines = wrapString(asnStr, maxChars, 2)
-		v.RateStr = fmt.Sprintf("%.1f", v.Count)
+		v.RateStr = strconv.FormatFloat(v.Count, 'f', 1, 64)
 		v.RateWidth, _ = text.Measure(v.RateStr, e.titleMonoFace, 0)
 		e.ActiveImpacts = append(e.ActiveImpacts, v)
 	}
@@ -970,7 +995,7 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 	// 4. Text Label in Center
 	e.textOp.ColorScale.Reset()
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.8)
-	label := fmt.Sprintf("%.0f%%", e.displayBeaconPercent)
+	label := strconv.FormatFloat(e.displayBeaconPercent, 'f', 0, 64) + "%"
 	tw, th := text.Measure(label, e.titleMonoFace, 0)
 	e.textOp.GeoM.Reset()
 	e.textOp.GeoM.Translate(centerX-(tw/2), centerY-(th/2))
