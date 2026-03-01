@@ -197,12 +197,12 @@ type Engine struct {
 	trendLinesBuffer *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
-	hubChangedAt      map[string]time.Time
-	lastHubs          map[string]int
-	hubPosition       map[string]int
-	lastMetricsUpdate time.Time
-	hubUpdatedAt      time.Time
-	impactUpdatedAt   time.Time
+	hubChangedAt          map[string]time.Time
+	lastHubs              map[string]int
+	hubPosition           map[string]int
+	lastMetricsUpdate     time.Time
+	hubUpdatedAt          time.Time
+	impactUpdatedAt       time.Time
 	orangeCount, redCount int
 
 	VisualHubs map[string]*VisualHub
@@ -317,7 +317,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 		hubPosition:         make(map[string]int),
 		lastMetricsUpdate:   time.Now(),
 		VisualHubs:          make(map[string]*VisualHub),
-		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 20s = 20 mins
+		prefixImpactHistory: make([]map[string]int, 30), // 30 buckets * 20s = 10 mins
 		VisualImpact:        make(map[string]*VisualImpact),
 		lastFrameCapturedAt: time.Now(),
 		drawOp:              &ebiten.DrawImageOptions{},
@@ -362,14 +362,14 @@ func NewEngine(width, height int, scale float64) *Engine {
 		{"PATH OSCILLATION", 0, ColorPolicy, ColorUpdUI, func(s MetricSnapshot) int { return s.Oscill }},
 
 		// Column 2: Bad (Orange)
-		{"BGP BABBLING", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.Babbling }},
+		{"BABBLING", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.Babbling }},
 		{"AGGREGATOR FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.AggFlap }},
 		{"NEXT-HOP FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.NextHop }},
 		{"LINK FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.LinkFlap }},
 
 		// Column 3: Critical (Red)
 		{"ROUTE LEAK", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Leak }},
-		{"HARD OUTAGE", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Outage }},
+		{"OUTAGE", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Outage }},
 	}
 
 	e.audioPlayer = NewAudioPlayer(nil, func(song, artist, extra string) {

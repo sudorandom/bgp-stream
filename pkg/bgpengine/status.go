@@ -56,15 +56,15 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 	if e.Width > 2000 {
 		hubsBoxH = 360.0
 	}
-	impactBoxH := 300.0
+	impactBoxH := 340.0
 	if e.Width > 2000 {
-		impactBoxH = 600.0
+		impactBoxH = 640.0
 	}
 	impactYBase := leftBaselineY + hubsBoxH + 20.0
 	if e.Width > 2000 {
 		impactYBase = leftBaselineY + hubsBoxH + 40.0
 	}
-	e.drawImpacts(screen, margin, impactYBase, boxW, impactBoxH, fontSize, e.monoFace)
+	e.drawImpacts(screen, margin, impactYBase, boxW, impactBoxH, fontSize, e.titleMonoFace)
 
 	// 3. Bottom Center: Now Playing
 	e.drawNowPlaying(screen, margin, boxW, fontSize, e.face)
@@ -80,9 +80,9 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 		return
 	}
 
-	boxH := 130.0
+	boxH := 180.0
 	if e.Width > 2000 {
-		boxH = 260.0
+		boxH = 360.0
 	}
 
 	if e.hubsBuffer == nil || e.hubsBuffer.Bounds().Dx() != int(boxW) || e.hubsBuffer.Bounds().Dy() != int(boxH) {
@@ -105,16 +105,16 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 
 	for _, vh := range e.ActiveHubs {
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, vh.DisplayY-(hubYBase-localY))
+		e.textOp.GeoM.Translate(localX, vh.DisplayY-(hubYBase-localY)+5)
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
-		text.Draw(e.hubsBuffer, vh.CountryStr, e.monoFace, e.textOp)
+		text.Draw(e.hubsBuffer, vh.CountryStr, e.subMonoFace, e.textOp)
 
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX+boxW-vh.RateWidth-25, vh.DisplayY-(hubYBase-localY))
+		e.textOp.GeoM.Translate(localX+boxW-vh.RateWidth-25, vh.DisplayY-(hubYBase-localY)+5)
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.6))
-		text.Draw(e.hubsBuffer, vh.RateStr, e.monoFace, e.textOp)
+		text.Draw(e.hubsBuffer, vh.RateStr, e.subMonoFace, e.textOp)
 	}
 
 	now := time.Now()
@@ -142,7 +142,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	vector.FillRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	impactTitle := "BGP ANOMALIES (last 20s)"
+	impactTitle := "BGP ANOMALIES (last 10 mins)"
 	vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 	e.textOp.GeoM.Reset()
@@ -153,7 +153,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 
 	for _, v := range e.ActiveImpacts {
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY))
+		e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY)+8)
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, float32(v.Alpha*0.8))
 		text.Draw(e.impactBuffer, v.Prefix, monoFace, e.textOp)
@@ -162,7 +162,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 		if v.DisplayClassificationName != "" {
 			tw, _ := text.Measure(v.DisplayClassificationName, e.subMonoFace, 0)
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+boxW-tw-25, v.DisplayY-(impactYBase-localY)+fontSize*0.1)
+			e.textOp.GeoM.Translate(localX+boxW-tw-25, v.DisplayY-(impactYBase-localY)+8+fontSize*0.1)
 			e.textOp.ColorScale.Reset()
 			cr, cg, cb := float32(v.DisplayClassificationColor.R)/255.0, float32(v.DisplayClassificationColor.G)/255.0, float32(v.DisplayClassificationColor.B)/255.0
 			e.textOp.ColorScale.Scale(cr, cg, cb, float32(v.Alpha*0.9))
@@ -172,7 +172,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 		if v.asnStr != "" {
 			for j, line := range v.asnLines {
 				e.textOp.GeoM.Reset()
-				e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY)+fontSize*1.2+float64(j)*e.subMonoFace.Size*1.1)
+				e.textOp.GeoM.Translate(localX, v.DisplayY-(impactYBase-localY)+8+fontSize*1.2+float64(j)*e.subMonoFace.Size*1.1)
 				e.textOp.ColorScale.Reset()
 				e.textOp.ColorScale.Scale(1, 1, 1, float32(v.Alpha*0.4))
 				text.Draw(e.impactBuffer, line, e.subMonoFace, e.textOp)
@@ -181,16 +181,46 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	}
 
 	if e.orangeCount > 0 || e.redCount > 0 {
-		statusStr := fmt.Sprintf("%d prefixes with Bad anomalies, %d Critical", e.orangeCount, e.redCount)
+		label := "Prefix Counts: "
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, impactBoxH-fontSize-5)
+		e.textOp.GeoM.Translate(localX, impactBoxH-fontSize-15)
 		e.textOp.ColorScale.Reset()
-		if e.redCount > 0 {
-			e.textOp.ColorScale.ScaleWithColor(ColorCritical)
-		} else {
+		e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
+		text.Draw(e.impactBuffer, label, e.subMonoFace, e.textOp)
+		lw, _ := text.Measure(label, e.subMonoFace, 0)
+
+		currentX := localX + lw
+		hasBad := e.orangeCount > 0
+		if hasBad {
+			badStr := fmt.Sprintf("%d bad", e.orangeCount)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
+			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.ScaleWithColor(ColorBad)
+			text.Draw(e.impactBuffer, badStr, e.subMonoFace, e.textOp)
+			bw, _ := text.Measure(badStr, e.subMonoFace, 0)
+			currentX += bw
 		}
-		text.Draw(e.impactBuffer, statusStr, e.subMonoFace, e.textOp)
+
+		if e.redCount > 0 {
+			if hasBad {
+				comma := ", "
+				e.textOp.GeoM.Reset()
+				e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize-15)
+				e.textOp.ColorScale.Reset()
+				e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
+				text.Draw(e.impactBuffer, comma, e.subMonoFace, e.textOp)
+				cw, _ := text.Measure(comma, e.subMonoFace, 0)
+				currentX += cw
+			}
+
+			critStr := fmt.Sprintf("%d critical", e.redCount)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(currentX, impactBoxH-fontSize)
+			e.textOp.ColorScale.Reset()
+			e.textOp.ColorScale.ScaleWithColor(ColorCritical)
+			text.Draw(e.impactBuffer, critStr, e.subMonoFace, e.textOp)
+		}
 	}
 
 	now := time.Now()
@@ -649,7 +679,7 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 
 func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 	current := e.getSortedHubs(uiInterval)
-	maxItems := 5
+	maxItems := 7
 	if len(current) < maxItems {
 		maxItems = len(current)
 	}
@@ -660,7 +690,7 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		fontSize = 36.0
 		hubYBase = float64(e.Height) * 0.42
 	}
-	spacing := fontSize * 1.2
+	spacing := fontSize * 1.0
 
 	for _, vh := range e.VisualHubs {
 		vh.Active = false
@@ -683,7 +713,7 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		vh.TargetAlpha = 1.0
 		vh.Rate = current[i].rate
 		vh.RateStr = fmt.Sprintf("%.0f", current[i].rate)
-		vh.RateWidth, _ = text.Measure(vh.RateStr, e.monoFace, 0)
+		vh.RateWidth, _ = text.Measure(vh.RateStr, e.subMonoFace, 0)
 		e.ActiveHubs = append(e.ActiveHubs, vh)
 	}
 
@@ -771,7 +801,7 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 
 func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 	combinedBucket := make(map[string]int)
-	numBuckets := 20
+	numBuckets := 30
 	if len(e.prefixImpactHistory) < numBuckets {
 		numBuckets = len(e.prefixImpactHistory)
 	}
@@ -807,9 +837,10 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 	var orangeCount, redCount int
 	for _, vi := range allImpact {
 		prio := e.GetPriority(vi.ClassificationName)
-		if prio == 2 {
+		switch prio {
+		case 2:
 			orangeCount++
-		} else if prio == 3 {
+		case 3:
 			redCount++
 		}
 	}
@@ -818,15 +849,15 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 	e.redCount = redCount
 
 	fontSize := 18.0
-	hubsBoxH, boxW := 120.0, 280.0
+	hubsBoxH, boxW := 180.0, 280.0
 	if e.Width > 2000 {
 		fontSize = 36.0
-		hubsBoxH, boxW = 240.0, 560.0
+		hubsBoxH, boxW = 360.0, 560.0
 	}
 	spacing := fontSize * 1.2
-	hubYBase := float64(e.Height) * 0.55
+	hubYBase := float64(e.Height) * 0.48
 	if e.Width > 2000 {
-		hubYBase = float64(e.Height) * 0.5
+		hubYBase = float64(e.Height) * 0.42
 	}
 	impactYBase := hubYBase + hubsBoxH + 20.0
 	if e.Width > 2000 {
@@ -875,7 +906,7 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 		v.asnStr = asnStr
 		v.asnLines = wrapString(asnStr, maxChars, 2)
 		v.RateStr = fmt.Sprintf("%.1f", v.Count)
-		v.RateWidth, _ = text.Measure(v.RateStr, e.monoFace, 0)
+		v.RateWidth, _ = text.Measure(v.RateStr, e.titleMonoFace, 0)
 		e.ActiveImpacts = append(e.ActiveImpacts, v)
 	}
 }

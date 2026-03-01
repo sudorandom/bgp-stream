@@ -39,12 +39,12 @@ BGP updates are processed through a multi-stage classification engine:
 The classification engine also maps events into Level 2 categorizations (anomalies) based on heuristics applied over recent activity windows. These fall into three severity tiers:
 
 **Critical (Red)**
-- **Hard Outage:** A prefix sustains at least 3 withdrawals with 0 successful announcements within the evaluation window.
+- **Outage:** A prefix sustains at least 3 withdrawals with 0 successful announcements within the evaluation window.
 - **Route Leak:** The AS path violates the valley-free routing principle (e.g., traffic routes from a Tier-1 provider, down to a non-Tier-1/non-Cloud AS, and back up to a Tier-1 provider).
 
 **Bad (Orange)**
 - **Link Flap:** A prefix experiences a high ratio of withdrawals to announcements (more than 5 withdrawals, with an announcement-to-withdrawal ratio of less than 2.5).
-- **BGP Babbling:** Excessive message volume from a peer for a specific prefix, particularly when the BGP attributes (Path, Community, MED, LocalPref) are completely unchanged.
+- **Babbling:** Excessive message volume from a peer for a specific prefix, particularly when the BGP attributes (Path, Community, MED, LocalPref) are completely unchanged.
 - **Next-Hop Flap:** The prefix is announced with at least 5 next-hop changes across multiple distinct next-hops, but with very little change to the actual AS path length.
 - **Aggregator Flap:** Frequent changes (more than 10) in the AGGREGATOR attribute relative to the prefix's uptime.
 

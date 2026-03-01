@@ -25,11 +25,11 @@ const (
 	nameLinkFlap        = "Link Flap"
 	nameAggFlap         = "Aggregator Flap"
 	namePathOscillation = "Path Oscillation"
-	nameBabbling        = "BGP Babbling"
+	nameBabbling        = "Babbling"
 	namePathHunting     = "Path Hunting"
 	namePolicyChurn     = "Policy Churn"
 	nameNextHopFlap     = "Next-Hop Flap"
-	nameHardOutage      = "Hard Outage"
+	nameHardOutage      = "Outage"
 	nameRouteLeak       = "Route Leak"
 	nameDiscovery       = "Discovery"
 )
