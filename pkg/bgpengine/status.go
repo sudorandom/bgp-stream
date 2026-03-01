@@ -785,7 +785,7 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 		}
 
 		// Prioritize by network size (less specific/smaller mask first, e.g. /16 > /24)
-		m1, m2 := getMaskLen(allImpact[i].Prefix), getMaskLen(allImpact[j].Prefix)
+		m1, m2 := allImpact[i].MaskLen, allImpact[j].MaskLen
 		if m1 != m2 {
 			return m1 < m2
 		}
@@ -809,11 +809,11 @@ func (e *Engine) updateVisualImpacts(uiInterval float64) {
 }
 
 func getMaskLen(prefix string) int {
-	parts := strings.Split(prefix, "/")
-	if len(parts) != 2 {
+	idx := strings.IndexByte(prefix, '/')
+	if idx == -1 {
 		return 0
 	}
-	mask, _ := strconv.Atoi(parts[1])
+	mask, _ := strconv.Atoi(prefix[idx+1:])
 	return mask
 }
 
@@ -828,7 +828,7 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 		for p, count := range prefixes {
 			v, ok := e.VisualImpact[p]
 			if !ok {
-				v = &VisualImpact{Prefix: p}
+				v = &VisualImpact{Prefix: p, MaskLen: getMaskLen(p)}
 				e.VisualImpact[p] = v
 			}
 

@@ -286,11 +286,26 @@ func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) {
 			}
 		}
 	}
+
+	batch := make(map[string][]byte)
 	for prefix, state := range p.prefixStates {
 		if now.Sub(time.Unix(state.LastUpdateTs, 0)) > 5*time.Minute {
-			p.saveState(prefix, state)
+			if p.stateDB != nil && !p.isStopping() {
+				data, err := proto.Marshal(state)
+				if err == nil {
+					batch[prefix] = data
+				}
+			}
 			delete(p.prefixStates, prefix)
 		}
+	}
+
+	if len(batch) > 0 && p.stateDB != nil && !p.isStopping() {
+		go func(b map[string][]byte) {
+			if err := p.stateDB.BatchInsertRaw(b); err != nil {
+				log.Printf("Error saving prefix states: %v", err)
+			}
+		}(batch)
 	}
 }
 
@@ -303,10 +318,13 @@ func (p *BGPProcessor) saveState(prefix string, state *bgpproto.PrefixState) {
 		log.Printf("Error marshaling prefix state: %v", err)
 		return
 	}
-	// We use the prefix string as a raw key here
-	if err := p.stateDB.BatchInsertRaw(map[string][]byte{prefix: data}); err != nil {
-		log.Printf("Error saving prefix state: %v", err)
-	}
+
+	// Fast clone of prefix/data to write asynchronously
+	go func(key string, val []byte) {
+		if err := p.stateDB.BatchInsertRaw(map[string][]byte{key: val}); err != nil {
+			log.Printf("Error saving prefix state: %v", err)
+		}
+	}(prefix, data)
 }
 
 func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals map[uint32]struct {
@@ -761,7 +779,7 @@ func (p *BGPProcessor) recordClassification(prefix string, state *bgpproto.Prefi
 	state.ClassifiedType = int32(eventType)
 
 	if p.stateDB != nil {
-		p.deleteState(prefix)
+		go p.deleteState(prefix)
 	}
 }
 
