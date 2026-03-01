@@ -495,7 +495,7 @@ func (p *BGPProcessor) handleNewOrUpdate(prefix string, ip, originASN uint32, no
 
 	if isNew {
 		if lat, lng, cc := p.geo(ip); cc != "" {
-			p.onEvent(lat, lng, cc, EventNew, Level2Discovery, prefix, originASN)
+			p.onEvent(lat, lng, cc, EventNew, Level2None, prefix, originASN)
 			p.recentlySeen[ip] = struct {
 				Time time.Time
 				Type EventType
@@ -503,7 +503,7 @@ func (p *BGPProcessor) handleNewOrUpdate(prefix string, ip, originASN uint32, no
 		}
 	} else {
 		if lat, lng, cc := p.geo(ip); cc != "" {
-			p.onEvent(lat, lng, cc, EventUpdate, Level2PolicyChurn, prefix, originASN)
+			p.onEvent(lat, lng, cc, EventUpdate, Level2None, prefix, originASN)
 			p.recentlySeen[ip] = struct {
 				Time time.Time
 				Type EventType
@@ -668,10 +668,6 @@ func (p *BGPProcessor) evaluatePrefixState(prefix string, state *bgpproto.Prefix
 
 	if classified {
 		p.recordClassification(prefix, state, eventType, ctx.Now.Unix())
-	} else if stats.totalMsgs > 50 && !state.UncategorizedCounted {
-		// If it has significant messages but hasn't matched a rule, count as Discovery
-		p.recordClassification(prefix, state, Level2Discovery, ctx.Now.Unix())
-		state.UncategorizedCounted = true
 	}
 }
 
@@ -728,7 +724,7 @@ func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixS
 	perPeerRate := float64(s.totalMsgs) / numPeers
 
 	// 1. Critical
-	if et, ok := p.findCriticalAnomaly(prefix, s, ctx); ok {
+	if et, ok := p.findCriticalAnomaly(prefix, s, elapsed, ctx); ok {
 		return et, true
 	}
 
@@ -745,8 +741,8 @@ func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixS
 	return Level2None, false
 }
 
-func (p *BGPProcessor) findCriticalAnomaly(prefix string, s prefixStats, ctx *MessageContext) (Level2EventType, bool) {
-	if s.totalWith >= 3 && s.totalAnn == 0 {
+func (p *BGPProcessor) findCriticalAnomaly(prefix string, s prefixStats, elapsed float64, ctx *MessageContext) (Level2EventType, bool) {
+	if s.totalWith >= 3 && s.totalAnn == 0 && elapsed > 60 {
 		return Level2Outage, true
 	}
 	if p.hasRouteLeak(prefix, ctx) {
@@ -762,11 +758,11 @@ func (p *BGPProcessor) findBadAnomaly(s prefixStats, elapsed, perPeerRate float6
 	if len(s.uniqueHops) > 1 && s.totalHop >= 5 && s.totalPath <= 1 {
 		return Level2NextHopOscillation, true
 	}
-	if perPeerRate > 5.0 && s.totalMsgs > 10 || (s.totalMsgs > 15 && s.totalPath == 0 && s.totalComm == 0 && s.totalMed == 0 && s.totalLP == 0) {
-		return Level2Babbling, true
-	}
 	if s.totalWith > 5 && float64(s.totalAnn)/float64(s.totalWith) < 2.5 {
 		return Level2LinkFlap, true
+	}
+	if (perPeerRate >= 5.0 && s.totalMsgs >= 10) || (perPeerRate >= 2.0 && s.totalMsgs >= 20 && s.totalPath == 0 && s.totalComm == 0 && s.totalMed == 0 && s.totalLP == 0) {
+		return Level2Babbling, true
 	}
 	return Level2None, false
 }
@@ -778,11 +774,13 @@ func (p *BGPProcessor) findNormalAnomaly(s prefixStats, elapsed float64) (Level2
 	if s.totalComm >= 5 || (s.totalPath >= 5 && s.totalIncreases+s.totalDecreases <= 1) || (s.totalMed+s.totalLP >= 3 && s.totalPath <= 2) {
 		return Level2PolicyChurn, true
 	}
-	if s.totalAnn > 15 && s.totalPath <= 5 && s.totalWith <= 2 {
-		return Level2Discovery, true
-	}
 	if (s.totalIncreases+s.totalDecreases) >= 3 && float64(s.totalIncreases+s.totalDecreases)/elapsed > 0.01 {
 		return Level2PathLengthOscillation, true
+	}
+	// Discovery as the catch-all for high volume activity (>= 30 messages)
+	// that didn't match any "Bad" anomaly or specific "Normal" pattern.
+	if s.totalMsgs >= 30 {
+		return Level2Discovery, true
 	}
 	return Level2None, false
 }

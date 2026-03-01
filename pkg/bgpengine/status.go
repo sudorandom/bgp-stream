@@ -52,9 +52,9 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 	e.drawHubs(screen, margin, leftBaselineY, boxW, fontSize)
 
 	// BGP Anomalies (Below)
-	hubsBoxH := 180.0
+	hubsBoxH := 130.0
 	if e.Width > 2000 {
-		hubsBoxH = 360.0
+		hubsBoxH = 260.0
 	}
 	// Calculate dynamic height based on content
 	impactBoxH := e.calculateImpactBoxHeight(fontSize)
@@ -78,7 +78,10 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 		return
 	}
 
-	boxH := 380.0
+	boxH := 130.0
+	if e.Width > 2000 {
+		boxH = 260.0
+	}
 
 	if e.hubsBuffer == nil || e.hubsBuffer.Bounds().Dx() != int(boxW) || e.hubsBuffer.Bounds().Dy() != int(boxH) {
 		e.hubsBuffer = ebiten.NewImage(int(boxW), int(boxH))
@@ -760,7 +763,7 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 
 func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 	current := e.getSortedHubs(uiInterval)
-	maxItems := 8
+	maxItems := 5
 	if len(current) < maxItems {
 		maxItems = len(current)
 	}
@@ -898,27 +901,38 @@ func getMaskLen(prefix string) int {
 }
 
 func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
-	allImpact := make([]*VisualImpact, 0)
+	impactMap := make(map[string]*VisualImpact)
 	for et, prefixes := range e.currentAnomalies {
-		prio := e.GetPriority(et.String())
-		if prio < 2 {
-			continue
-		}
+		_, name := e.getLevel2Visuals(et)
+		prio := e.GetPriority(name)
 
 		for p, count := range prefixes {
-			v, ok := e.VisualImpact[p]
+			v, ok := impactMap[p]
 			if !ok {
-				v = &VisualImpact{Prefix: p, MaskLen: getMaskLen(p)}
-				e.VisualImpact[p] = v
+				v, ok = e.VisualImpact[p]
+				if !ok {
+					v = &VisualImpact{Prefix: p, MaskLen: getMaskLen(p)}
+					e.VisualImpact[p] = v
+				}
+				v.ClassificationName = "" // Reset for this cycle
+				v.Count = 0               // Reset for this cycle
+				impactMap[p] = v
 			}
 
-			// Store the anomaly categorization
-			v.ClassificationName = et.String()
-			v.ClassificationColor, _ = e.getLevel2Visuals(et)
+			// Only upgrade the classification if it's higher priority
+			if name != "" && (v.ClassificationName == "" || prio > e.GetPriority(v.ClassificationName)) {
+				v.ClassificationName = name
+				v.ClassificationColor, _ = e.getLevel2Visuals(et)
+			}
 
-			v.Count = float64(count) / uiInterval
-			allImpact = append(allImpact, v)
+			// Aggregate counts across categories for this prefix
+			v.Count += float64(count) / uiInterval
 		}
+	}
+
+	allImpact := make([]*VisualImpact, 0, len(impactMap))
+	for _, v := range impactMap {
+		allImpact = append(allImpact, v)
 	}
 	return allImpact
 }
@@ -926,17 +940,18 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 	countMap := make(map[string]*PrefixCount)
 	for _, vi := range allImpact {
+		if vi.ClassificationName == "" {
+			continue
+		}
 		prio := e.GetPriority(vi.ClassificationName)
-		if prio >= 2 {
-			if pc, ok := countMap[vi.ClassificationName]; ok {
-				pc.Count++
-			} else {
-				countMap[vi.ClassificationName] = &PrefixCount{
-					Name:     vi.ClassificationName,
-					Count:    1,
-					Color:    vi.ClassificationColor,
-					Priority: prio,
-				}
+		if pc, ok := countMap[vi.ClassificationName]; ok {
+			pc.Count++
+		} else {
+			countMap[vi.ClassificationName] = &PrefixCount{
+				Name:     vi.ClassificationName,
+				Count:    1,
+				Color:    vi.ClassificationColor,
+				Priority: prio,
 			}
 		}
 	}
@@ -957,10 +972,10 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 	})
 
 	fontSize := 18.0
-	hubsBoxH, boxW := 180.0, 280.0
+	hubsBoxH, boxW := 130.0, 280.0
 	if e.Width > 2000 {
 		fontSize = 36.0
-		hubsBoxH, boxW = 360.0, 560.0
+		hubsBoxH, boxW = 260.0, 560.0
 	}
 	spacing := fontSize * 1.2
 	hubYBase := float64(e.Height) * 0.48
@@ -972,14 +987,22 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 		impactYBase = hubYBase + hubsBoxH + 40.0
 	}
 
+	// Filter to only show anomalies (priority >= 1) in the visual list
+	var filteredImpact []*VisualImpact
+	for _, vi := range allImpact {
+		if e.GetPriority(vi.ClassificationName) >= 1 {
+			filteredImpact = append(filteredImpact, vi)
+		}
+	}
+
 	maxImpact := 5
-	if len(allImpact) < maxImpact {
-		maxImpact = len(allImpact)
+	if len(filteredImpact) < maxImpact {
+		maxImpact = len(filteredImpact)
 	}
 	impactSpacing := spacing * 2.4
 	e.ActiveImpacts = nil
 	for i := 0; i < maxImpact; i++ {
-		v := allImpact[i]
+		v := filteredImpact[i]
 		v.DisplayClassificationName = v.ClassificationName
 		v.DisplayClassificationColor = v.ClassificationColor
 

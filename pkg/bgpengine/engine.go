@@ -1476,19 +1476,14 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 			e.windowBeacon++
 		}
 
-		// Track bad/critical anomalies specifically
-		prio := e.GetPriority(level2Type.String())
-		if prio >= 2 {
-			e.prefixToLevel2[prefix] = level2Type
-		}
+		// Track all anomalies and patterns
+		e.prefixToLevel2[prefix] = level2Type
 
 		if actualType, ok := e.prefixToLevel2[prefix]; ok {
-			if e.GetPriority(actualType.String()) >= 2 {
-				if e.currentAnomalies[actualType] == nil {
-					e.currentAnomalies[actualType] = make(map[string]int)
-				}
-				e.currentAnomalies[actualType][prefix]++
+			if e.currentAnomalies[actualType] == nil {
+				e.currentAnomalies[actualType] = make(map[string]int)
 			}
+			e.currentAnomalies[actualType][prefix]++
 		}
 	}
 
@@ -1536,6 +1531,8 @@ func (e *Engine) getOrCreateCityBuffer(lat, lng float64) *BufferedCity {
 
 func (e *Engine) getLevel2Visuals(level2Type Level2EventType) (visualColor color.RGBA, classificationName string) {
 	switch level2Type {
+	case Level2None:
+		return ColorDiscovery, nameDiscovery
 	case Level2Discovery:
 		return ColorDiscovery, nameDiscovery
 	case Level2PolicyChurn:
@@ -1609,7 +1606,7 @@ func (e *Engine) updateWindowedMetrics(eventType EventType, level2Type Level2Eve
 		e.windowOutage++
 	case Level2RouteLeak:
 		e.windowLeak++
-	case Level2Discovery:
+	case Level2None, Level2Discovery:
 		e.windowGlobal++
 	}
 
@@ -1752,6 +1749,11 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...
 		if e.Width > 2000 {
 			baseRad = 12.0
 		}
+		// Discovery pulses are much smaller
+		if c == ColorDiscovery {
+			baseRad *= 0.75
+		}
+
 		// Use natural log (ln) for slower growth at high counts
 		growth := baseRad * 1.2
 		radius := baseRad + math.Log(float64(count))*growth
