@@ -1,4 +1,4 @@
-package utils
+package sources
 
 import (
 	"bytes"

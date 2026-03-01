@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sudorandom/bgp-stream/pkg/utils"
+	"github.com/sudorandom/bgp-stream/pkg/sources"
 )
 
 type GeoService struct {
@@ -21,7 +21,7 @@ type GeoService struct {
 	cacheMu           sync.Mutex
 	prefixData        PrefixData
 	cityCoords        map[string][2]float32
-	cloudTrie         *utils.CloudTrie
+	cloudTrie         *sources.CloudTrie
 }
 
 func NewGeoService(width, height int, scale float64) *GeoService {
