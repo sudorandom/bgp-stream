@@ -2,3 +2,5 @@
 go = "1.26.0"
 just = "latest"
 golangci-lint = "2.10.1"
+buf = "latest"
+"go:google.golang.org/protobuf/cmd/protoc-gen-go" = "latest"

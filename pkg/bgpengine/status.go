@@ -1,10 +1,10 @@
-// Package bgpengine provides the core logic for the BGP stream engine, including status visualization.
 package bgpengine
 
 import (
 	"fmt"
 	"image/color"
 	"math"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -16,27 +16,6 @@ import (
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
-var (
-	trendLineImg   *ebiten.Image
-	trendCircleImg *ebiten.Image
-)
-
-func init() {
-	trendLineImg = ebiten.NewImage(1, 1)
-	trendLineImg.Fill(color.White)
-
-	const radius = 3
-	const diameter = radius * 2
-	trendCircleImg = ebiten.NewImage(diameter, diameter)
-	var path vector.Path
-	path.Arc(float32(radius), float32(radius), float32(radius), 0, 2*math.Pi, vector.Clockwise)
-
-	var drawOp vector.DrawPathOptions
-	var fillOp vector.FillOptions
-	drawOp.ColorScale.ScaleWithColor(color.White)
-	vector.FillPath(trendCircleImg, &path, &fillOp, &drawOp)
-}
-
 type legendRow struct {
 	label    string
 	val      float64
@@ -45,60 +24,7 @@ type legendRow struct {
 	accessor func(s MetricSnapshot) int
 }
 
-func (e *Engine) drawMarquee(screen *ebiten.Image, label string, f *text.GoTextFace, tx, ty, songBoxW, alpha float64, isGlitching bool, intensity float64, buffer **ebiten.Image) {
-	tw, _ := text.Measure(label, f, 0)
-	availW := songBoxW - 40
-
-	if tw > availW {
-		// Marquee effect
-		speed := 30.0
-		padding := 60.0
-		totalW := tw + padding
-		offset := math.Mod(time.Since(e.songChangedAt).Seconds()*speed, totalW)
-
-		bh := int(f.Size * 1.5)
-		bw := int(availW)
-		if *buffer == nil || (*buffer).Bounds().Dx() != bw || (*buffer).Bounds().Dy() != bh {
-			*buffer = ebiten.NewImage(bw, bh)
-		}
-		(*buffer).Clear()
-
-		// Draw text with offset
-		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(-offset, 0)
-		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, float32(alpha))
-		text.Draw(*buffer, label, f, e.textOp)
-
-		// Draw second copy for seamless loop
-		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(totalW-offset, 0)
-		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, float32(alpha))
-		text.Draw(*buffer, label, f, e.textOp)
-
-		// Draw clipped result to buffer
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Translate(tx, ty)
-		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(1, 1, 1, 1)
-		e.drawOp.Blend = ebiten.BlendSourceOver
-		screen.DrawImage(*buffer, e.drawOp)
-	} else {
-		if isGlitching {
-			// Draw glitched text into buffer
-			e.drawGlitchTextSubtle(screen, label, f, tx, ty, float32(alpha), intensity, true)
-		} else {
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(tx, ty)
-			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.Scale(1, 1, 1, float32(alpha))
-			text.Draw(screen, label, f, e.textOp)
-		}
-	}
-}
-
-func (e *Engine) drawMetrics(screen *ebiten.Image) {
+func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 	if e.fontSource == nil {
 		return
 	}
@@ -106,43 +32,59 @@ func (e *Engine) drawMetrics(screen *ebiten.Image) {
 	if e.Width > 2000 {
 		margin, fontSize = 80.0, 36.0
 	}
-	e.metricsMu.Lock()
 
-	boxW, _, _ := e.getMetricBoxDimensions()
-	if e.MinimalUI {
-		e.drawNowPlaying(screen, margin, boxW, fontSize, e.face)
-		e.metricsMu.Unlock()
-		return
+	e.metricsMu.Lock()
+	defer e.metricsMu.Unlock()
+
+	boxW := 280.0
+	if e.Width > 2000 {
+		boxW = 560.0
 	}
 
-	hubYBase := float64(e.Height) / 2.0
-	_, boxH, impactBoxH := e.getMetricBoxDimensions()
-
-	e.drawHubs(screen, margin, hubYBase, boxW, boxH, fontSize, e.monoFace)
-	impactYBase := hubYBase + boxH + 40.0
+	// 1. Left Column: Active Countries & BGP Anomalies
+	// Shift down to avoid covering map features
+	leftBaselineY := float64(e.Height) * 0.48
 	if e.Width > 2000 {
-		impactYBase = hubYBase + boxH + 80.0
+		leftBaselineY = float64(e.Height) * 0.42
+	}
+
+	// Active Countries (Top)
+	e.drawHubs(screen, margin, leftBaselineY, boxW, fontSize)
+
+	// BGP Anomalies (Below)
+	hubsBoxH := 180.0
+	if e.Width > 2000 {
+		hubsBoxH = 360.0
+	}
+	impactBoxH := 300.0
+	if e.Width > 2000 {
+		impactBoxH = 600.0
+	}
+	impactYBase := leftBaselineY + hubsBoxH + 20.0
+	if e.Width > 2000 {
+		impactYBase = leftBaselineY + hubsBoxH + 40.0
 	}
 	e.drawImpacts(screen, margin, impactYBase, boxW, impactBoxH, fontSize, e.monoFace)
+
+	// 3. Bottom Center: Now Playing
 	e.drawNowPlaying(screen, margin, boxW, fontSize, e.face)
 
-	e.metricsMu.Unlock()
-	e.DrawBGPStatus(screen)
+	// 4. Bottom Right: Legend & Trendlines
+	e.drawLegendAndTrends(screen)
 }
 
-func (e *Engine) getMetricBoxDimensions() (boxW, boxH, impactBoxH float64) {
-	boxW, boxH, impactBoxH = 280.0, 180.0, 320.0
-	if e.Width > 2000 {
-		boxW, boxH, impactBoxH = 560.0, 360.0, 640.0
-	}
-	return boxW, boxH, impactBoxH
-}
-
-func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, boxH, fontSize float64, monoFace *text.GoTextFace) {
+func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize float64) {
 	hubX := margin
-	if len(e.VisualHubs) == 0 {
+	// 1. Check if any items are actually visible
+	if len(e.ActiveHubs) == 0 {
 		return
 	}
+
+	boxH := 180.0
+	if e.Width > 2000 {
+		boxH = 360.0
+	}
+
 	if e.hubsBuffer == nil || e.hubsBuffer.Bounds().Dx() != int(boxW) || e.hubsBuffer.Bounds().Dy() != int(boxH) {
 		e.hubsBuffer = ebiten.NewImage(int(boxW), int(boxH))
 	}
@@ -152,27 +94,27 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, boxH, fo
 	vector.FillRect(e.hubsBuffer, 0, 0, float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(e.hubsBuffer, 0, 0, float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	titleLabel := "TOP ACTIVITY HUBS (ops/s)"
+	hubTitle := "ACTIVE COUNTRIES (ops/s)"
 	vector.FillRect(e.hubsBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 	e.textOp.GeoM.Reset()
 	e.textOp.GeoM.Translate(localX+5, localY-fontSize-5)
 	e.textOp.ColorScale.Reset()
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
-	text.Draw(e.hubsBuffer, titleLabel, e.titleFace, e.textOp)
+	text.Draw(e.hubsBuffer, hubTitle, e.titleFace, e.textOp)
 
-	for _, vh := range e.VisualHubs {
+	for _, vh := range e.ActiveHubs {
 		e.textOp.GeoM.Reset()
 		e.textOp.GeoM.Translate(localX, vh.DisplayY-(hubYBase-localY))
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.8))
-		text.Draw(e.hubsBuffer, vh.CountryStr, monoFace, e.textOp)
+		text.Draw(e.hubsBuffer, vh.CountryStr, e.monoFace, e.textOp)
 
 		e.textOp.GeoM.Reset()
 		e.textOp.GeoM.Translate(localX+boxW-vh.RateWidth-25, vh.DisplayY-(hubYBase-localY))
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, float32(vh.Alpha*0.6))
-		text.Draw(e.hubsBuffer, vh.RateStr, monoFace, e.textOp)
+		text.Draw(e.hubsBuffer, vh.RateStr, e.monoFace, e.textOp)
 	}
 
 	now := time.Now()
@@ -186,9 +128,11 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, boxH, fo
 
 func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, impactBoxH, fontSize float64, monoFace *text.GoTextFace) {
 	hubX := margin
-	if len(e.VisualImpact) == 0 {
+	// 1. Check if any items are actually visible
+	if len(e.ActiveImpacts) == 0 {
 		return
 	}
+
 	if e.impactBuffer == nil || e.impactBuffer.Bounds().Dx() != int(boxW) || e.impactBuffer.Bounds().Dy() != int(impactBoxH) {
 		e.impactBuffer = ebiten.NewImage(int(boxW), int(impactBoxH))
 	}
@@ -198,7 +142,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	vector.FillRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	impactTitle := "MOST ACTIVE PREFIXES (ops/s)"
+	impactTitle := "BGP ANOMALIES"
 	vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 	e.textOp.GeoM.Reset()
@@ -207,18 +151,23 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(e.impactBuffer, impactTitle, e.titleFace, e.textOp)
 
-	for _, vi := range e.VisualImpact {
+	for _, vi := range e.ActiveImpacts {
 		e.textOp.GeoM.Reset()
 		e.textOp.GeoM.Translate(localX, vi.DisplayY-(impactYBase-localY))
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.8))
 		text.Draw(e.impactBuffer, vi.Prefix, monoFace, e.textOp)
 
-		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX+boxW-vi.RateWidth-25, vi.DisplayY-(impactYBase-localY))
-		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, float32(vi.Alpha*0.6))
-		text.Draw(e.impactBuffer, vi.RateStr, monoFace, e.textOp)
+		// Draw classification name on the right in its specific color
+		if vi.DisplayClassificationName != "" {
+			tw, _ := text.Measure(vi.DisplayClassificationName, e.subMonoFace, 0)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(localX+boxW-tw-25, vi.DisplayY-(impactYBase-localY)+fontSize*0.1)
+			e.textOp.ColorScale.Reset()
+			cr, cg, cb := float32(vi.DisplayClassificationColor.R)/255.0, float32(vi.DisplayClassificationColor.G)/255.0, float32(vi.DisplayClassificationColor.B)/255.0
+			e.textOp.ColorScale.Scale(cr, cg, cb, float32(vi.Alpha*0.9))
+			text.Draw(e.impactBuffer, vi.DisplayClassificationName, e.subMonoFace, e.textOp)
+		}
 
 		if vi.asnStr != "" {
 			for j, line := range vi.asnLines {
@@ -241,6 +190,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 }
 
 func (e *Engine) drawNowPlaying(screen *ebiten.Image, margin, boxW, fontSize float64, face *text.GoTextFace) {
+	now := time.Now()
 	if e.CurrentSong == "" {
 		return
 	}
@@ -268,53 +218,46 @@ func (e *Engine) drawNowPlaying(screen *ebiten.Image, margin, boxW, fontSize flo
 	vector.FillRect(e.nowPlayingBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 	e.textOp.GeoM.Reset()
-	e.textOp.GeoM.Translate(localX, localY-fontSize-5)
+	e.textOp.GeoM.Translate(localX+5, localY-fontSize-5)
 	e.textOp.ColorScale.Reset()
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(e.nowPlayingBuffer, songTitle, e.titleFace, e.textOp)
 
-	now := time.Now()
-	glitchDuration := 2 * time.Second
-	isGlitching := now.Sub(e.songChangedAt) < glitchDuration
+	isGlitching := now.Sub(e.songChangedAt) < 2*time.Second
 	intensity := 0.0
 	if isGlitching {
-		intensity = 1.0 - (now.Sub(e.songChangedAt).Seconds() / glitchDuration.Seconds())
+		intensity = 1.0 - (now.Sub(e.songChangedAt).Seconds() / 2.0)
 	}
 
-	e.drawMarquee(e.nowPlayingBuffer, e.CurrentSong, face, localX, localY+fontSize*0.2, songBoxW, 0.8, isGlitching, intensity, &e.songBuffer)
+	e.drawMarquee(e.nowPlayingBuffer, e.CurrentSong, face, localX, localY+fontSize*0.2, 0.8, isGlitching, intensity, &e.songBuffer)
 
 	yOffset := fontSize * 1.1
 	if e.CurrentArtist != "" {
-		e.drawMarquee(e.nowPlayingBuffer, e.CurrentArtist, e.artistFace, localX, localY+yOffset, songBoxW, 0.5, isGlitching, intensity, &e.artistBuffer)
+		e.drawMarquee(e.nowPlayingBuffer, e.CurrentArtist, e.artistFace, localX, localY+yOffset, 0.5, isGlitching, intensity, &e.artistBuffer)
 		yOffset += fontSize * 1.1
 	}
 
 	if e.CurrentExtra != "" {
-		e.drawMarquee(e.nowPlayingBuffer, e.CurrentExtra, e.extraFace, localX, localY+yOffset, songBoxW, 0.4, isGlitching, intensity, &e.extraBuffer)
+		e.drawMarquee(e.nowPlayingBuffer, e.CurrentExtra, e.extraFace, localX, localY+yOffset, 0.4, isGlitching, intensity, &e.extraBuffer)
 	}
 
 	e.drawGlitchImage(screen, e.nowPlayingBuffer, songX-10, songYBase-fontSize-15, 1.0, intensity, isGlitching)
 }
 
-func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
-	if e.fontSource == nil {
-		return
-	}
+func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 	margin, fontSize := 40.0, 18.0
 	if e.Width > 2000 {
 		margin, fontSize = 80.0, 36.0
 	}
-	e.metricsMu.Lock()
-	defer e.metricsMu.Unlock()
 
 	// 3. Bottom Right: Legend & Trendlines
 	var graphW, legendW, legendH float64
 	if e.Width > 2000 {
 		graphW = 600.0
-		legendW, legendH = 520.0, 300.0
+		legendW, legendH = 1300.0, 300.0
 	} else {
 		graphW = 300.0
-		legendW, legendH = 260.0, 150.0
+		legendW, legendH = 900.0, 150.0
 	}
 
 	// Match heights
@@ -384,14 +327,30 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		// to prevent the numbers from spinning/flickering.
 		e.legendRows[i].val = getRate(hLen-2, e.legendRows[i].accessor)
 	}
-	sort.Slice(e.legendRows, func(i, j int) bool { return e.legendRows[i].val > e.legendRows[j].val })
 
+	// Draw Legend columns
+	colWidth := (legendW - 60) / 3
 	for i, r := range e.legendRows {
-		y := firehoseY + float64(i)*(fontSize+10)
+		var col, row int
+		switch {
+		case i < 4: // Normal (Discovery, Churn, Hunting, Oscill)
+			col = 0
+			row = i
+		case i < 8: // Bad (Flaps, Babbling, NH, Agg)
+			col = 1
+			row = i - 4
+		default: // Critical (Leak, Outage)
+			col = 2
+			row = i - 8
+		}
+
+		x := firehoseX + float64(col)*colWidth
+		y := firehoseY + float64(row)*(fontSize+10)
+
 		// Draw the pulse circle (swatch) - using the map color (col)
 		cr, cg, cb := float32(r.col.R)/255.0, float32(r.col.G)/255.0, float32(r.col.B)/255.0
 		baseAlpha := float32(0.6)
-		if r.col == ColorGossip {
+		if r.col == ColorDiscovery {
 			baseAlpha = 0.4
 		}
 
@@ -400,7 +359,7 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		scale := swatchSize / float64(imgW) * 1
 		e.drawOp.GeoM.Translate(-halfW, -halfW)
 		e.drawOp.GeoM.Scale(scale, scale)
-		e.drawOp.GeoM.Translate(firehoseX+(swatchSize/2), y+(fontSize/2))
+		e.drawOp.GeoM.Translate(x+(swatchSize/2), y+(fontSize/2))
 		e.drawOp.ColorScale.Reset()
 		e.drawOp.ColorScale.Scale(cr*baseAlpha, cg*baseAlpha, cb*baseAlpha, baseAlpha)
 		screen.DrawImage(e.pulseImage, e.drawOp)
@@ -408,17 +367,17 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		// Draw the text label in the legend box
 		tr, tg, tb := float32(r.uiCol.R)/255.0, float32(r.uiCol.G)/255.0, float32(r.uiCol.B)/255.0
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(firehoseX+swatchSize+15, y)
+		e.textOp.GeoM.Translate(x+swatchSize+15, y)
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(tr, tg, tb, 0.9)
 		text.Draw(screen, r.label, e.face, e.textOp)
 	}
 
 	// Draw Trendlines Box
-	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH, e.legendRows)
+	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH)
 }
 
-func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64, rows []legendRow) {
+func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64) {
 	vector.FillRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
@@ -456,27 +415,39 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 	}
 	e.trendLinesBuffer.Clear()
 
-	e.drawTrendLayers(chartW, chartH, globalMaxLog, rows)
+	e.drawTrendLayers(chartW, chartH, globalMaxLog)
 
 	// Draw the clipped trend image back to the screen
 	e.drawOp.GeoM.Reset()
 	e.drawOp.GeoM.Translate(gx, gy+titlePadding)
 	e.drawOp.ColorScale.Reset()
 	e.drawOp.ColorScale.Scale(1, 1, 1, 0.8) // Apply transparency globally
-	e.drawOp.Blend = ebiten.BlendSourceOver
 	screen.DrawImage(e.trendLinesBuffer, e.drawOp)
 }
 
 func (e *Engine) calculateGlobalMaxLog() float64 {
 	globalMaxLog := 1.0
-	for _, s := range e.history {
-		for _, val := range []int{s.New, s.Upd, s.With, s.Gossip} {
-			if l := e.logVal(val); l > globalMaxLog {
+	for i := range e.history {
+		good, poly, bad, crit := e.aggregateMetrics(&e.history[i])
+		for _, v := range []int{good, poly, bad, crit} {
+			if l := e.logVal(v); l > globalMaxLog {
 				globalMaxLog = l
 			}
 		}
 	}
 	return globalMaxLog
+}
+
+func (e *Engine) aggregateMetrics(s *MetricSnapshot) (good, poly, bad, crit int) {
+	// Normal (Blue)
+	good = s.Global
+	// Policy (Purple)
+	poly = s.Hunting + s.TE + s.Oscill
+	// Bad (Orange)
+	bad = s.LinkFlap + s.AggFlap + s.Babbling + s.NextHop
+	// Critical (Red)
+	crit = s.Outage + s.Leak
+	return
 }
 
 func (e *Engine) logVal(v int) float64 {
@@ -513,7 +484,7 @@ func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, tit
 	}
 }
 
-func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64, rows []legendRow) {
+func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64) {
 	smoothOffset := 1.0
 	if time.Since(e.lastMetricsUpdate) <= 1*time.Second {
 		smoothOffset = math.Mod(time.Since(e.lastMetricsUpdate).Seconds(), 1.0)
@@ -526,88 +497,50 @@ func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64, rows []le
 	}
 	step := chartW / numSteps
 
-	for i := len(rows) - 1; i >= 0; i-- {
-		r := rows[i]
-		if !e.hasActivity(r) {
-			continue
+	// Colors for the four aggregated lines
+	goodCol := ColorDiscovery // Blue (Normal)
+	polyCol := ColorPolicy    // Purple (Policy)
+	badCol := ColorBad        // Orange (Bad)
+	critCol := ColorCritical  // Red (Critical)
+
+	e.drawOp.Blend = ebiten.BlendLighter
+
+	// Helper to draw a line segment
+	drawLine := func(val1, val2 int, c color.RGBA, j int) {
+		if val1 == 0 && val2 == 0 {
+			return
 		}
+		x1 := (float64(j) - smoothOffset) * step
+		x2 := (float64(j+1) - smoothOffset) * step
+		y1 := chartH - (e.logVal(val1)/globalMaxLog)*chartH
+		y2 := chartH - (e.logVal(val2)/globalMaxLog)*chartH
 
-		c := r.col
-		c.A = 255 // Draw opaque into buffer to avoid blending artifacts
+		dx := x2 - x1
+		dy := y2 - y1
+		length := math.Hypot(dx, dy)
+		angle := math.Atan2(dy, dx)
+		thickness := 4.0
 
-		// Reuse engine's internal options objects instead of local
-		// scope variables which sometimes trigger escape analysis limits
-		e.drawOp.Blend = ebiten.BlendSourceOver
-
-		// Pre-compute scale for circles outside loop
-		circleRadius := 3.0
-		jointScale := 1.5 / circleRadius
-
-		for j := 0; j < hLen-1; j++ {
-			if !e.hasRecentActivity(r, j) {
-				continue
-			}
-
-			x1 := (float64(j) - smoothOffset) * step
-			x2 := (float64(j+1) - smoothOffset) * step
-			y1 := chartH - (e.logVal(r.accessor(e.history[j]))/globalMaxLog)*chartH
-			y2 := chartH - (e.logVal(r.accessor(e.history[j+1]))/globalMaxLog)*chartH
-
-			dx := x2 - x1
-			dy := y2 - y1
-			length := math.Hypot(dx, dy)
-			angle := math.Atan2(dy, dx)
-			thickness := 4.0
-
-			e.drawOp.GeoM.Reset()
-			e.drawOp.GeoM.Translate(0, -0.5)
-			e.drawOp.GeoM.Scale(length, thickness)
-			e.drawOp.GeoM.Rotate(angle)
-			e.drawOp.GeoM.Translate(x1, y1)
-			e.drawOp.ColorScale.Reset()
-			e.drawOp.ColorScale.ScaleWithColor(c)
-			e.trendLinesBuffer.DrawImage(trendLineImg, e.drawOp)
-
-			e.drawOp.GeoM.Reset()
-			e.drawOp.GeoM.Translate(-circleRadius, -circleRadius)
-			e.drawOp.GeoM.Scale(jointScale, jointScale)
-			e.drawOp.GeoM.Translate(x2, y2)
-			e.drawOp.ColorScale.Reset()
-			e.drawOp.ColorScale.ScaleWithColor(c)
-			e.trendLinesBuffer.DrawImage(trendCircleImg, e.drawOp)
-		}
+		e.drawOp.GeoM.Reset()
+		e.drawOp.GeoM.Translate(0, -0.5)
+		e.drawOp.GeoM.Scale(length, thickness)
+		e.drawOp.GeoM.Rotate(angle)
+		e.drawOp.GeoM.Translate(x1, y1)
+		e.drawOp.ColorScale.Reset()
+		e.drawOp.ColorScale.ScaleWithColor(c)
+		e.trendLinesBuffer.DrawImage(e.trendLineImg, e.drawOp)
 	}
-}
 
-func (e *Engine) hasActivity(r legendRow) bool {
-	for _, s := range e.history {
-		if r.accessor(s) > 0 {
-			return true
-		}
-	}
-	return false
-}
+	for j := 0; j < hLen-1; j++ {
+		g1, p1, b1, c1 := e.aggregateMetrics(&e.history[j])
+		g2, p2, b2, c2 := e.aggregateMetrics(&e.history[j+1])
 
-func (e *Engine) hasRecentActivity(r legendRow, j int) bool {
-	val1 := r.accessor(e.history[j])
-	val2 := r.accessor(e.history[j+1])
-	if val1 > 0 || val2 > 0 {
-		return true
+		// Draw lines in order from bottom to top (Good -> Policy -> Bad -> Crit)
+		drawLine(g1, g2, goodCol, j)
+		drawLine(p1, p2, polyCol, j)
+		drawLine(b1, b2, badCol, j)
+		drawLine(c1, c2, critCol, j)
 	}
-	windowStart := j - 5
-	if windowStart < 0 {
-		windowStart = 0
-	}
-	windowEnd := j + 5
-	if windowEnd >= len(e.history) {
-		windowEnd = len(e.history) - 1
-	}
-	for k := windowStart; k <= windowEnd; k++ {
-		if r.accessor(e.history[k]) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func (e *Engine) StartMetricsLoop() {
@@ -643,7 +576,7 @@ func (e *Engine) StartMetricsLoop() {
 			e.impactUpdatedAt = now
 
 			e.updateVisualHubs(uiInterval, firstRun)
-			e.updateVisualImpacts(uiInterval, firstRun)
+			e.updateVisualImpacts(uiInterval)
 
 			e.prefixImpactHistory = append(e.prefixImpactHistory[1:], make(map[string]int))
 			e.countryActivity = make(map[string]int)
@@ -670,6 +603,17 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 		Peer:   int(e.windowPeer),
 		Open:   int(e.windowOpen),
 		Beacon: int(e.windowBeacon),
+
+		LinkFlap: int(e.windowLinkFlap),
+		AggFlap:  int(e.windowAggFlap),
+		Oscill:   int(e.windowOscill),
+		Babbling: int(e.windowBabbling),
+		Hunting:  int(e.windowHunting),
+		TE:       int(e.windowTE),
+		NextHop:  int(e.windowNextHop),
+		Outage:   int(e.windowOutage),
+		Leak:     int(e.windowLeak),
+		Global:   int(e.windowGlobal),
 	}
 	e.rateNew, e.rateUpd, e.rateWith, e.rateGossip = float64(snap.New)/interval, float64(snap.Upd)/interval, float64(snap.With)/interval, float64(snap.Gossip)/interval
 	e.rateNote, e.ratePeer, e.rateOpen = float64(snap.Note)/interval, float64(snap.Peer)/interval, float64(snap.Open)/interval
@@ -684,6 +628,10 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 	e.windowNew, e.windowUpd, e.windowWith, e.windowGossip = 0, 0, 0, 0
 	e.windowNote, e.windowPeer, e.windowOpen = 0, 0, 0
 	e.windowBeacon = 0
+
+	e.windowLinkFlap, e.windowAggFlap, e.windowOscill, e.windowBabbling = 0, 0, 0, 0
+	e.windowHunting, e.windowTE, e.windowNextHop, e.windowOutage = 0, 0, 0, 0
+	e.windowLeak, e.windowGlobal = 0, 0
 }
 
 func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
@@ -697,7 +645,7 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 	}
 	sort.Slice(current, func(i, j int) bool { return current[i].rate > current[j].rate })
 
-	maxItems := 5
+	maxItems := 8
 	if len(current) < maxItems {
 		maxItems = len(current)
 	}
@@ -707,13 +655,18 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		fontSize = 36.0
 	}
 	spacing := fontSize * 1.2
-	hubYBase := float64(e.Height) / 2.0
+
+	hubYBase := float64(e.Height) * 0.48
+	if e.Width > 2000 {
+		hubYBase = float64(e.Height) * 0.42
+	}
 
 	for _, vh := range e.VisualHubs {
 		vh.Active = false
 		vh.TargetAlpha = 0.0
 	}
 
+	e.ActiveHubs = nil
 	for i := 0; i < maxItems; i++ {
 		if current[i].rate < 0.1 && !firstRun {
 			continue
@@ -722,14 +675,8 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		targetY := hubYBase + float64(i)*spacing
 		rateStr := fmt.Sprintf("%.0f", current[i].rate)
 		tw, _ := text.Measure(rateStr, e.monoFace, 0)
-		if vh, ok := e.VisualHubs[current[i].cc]; ok {
-			vh.Active = true
-			vh.TargetY = targetY
-			vh.TargetAlpha = 1.0
-			vh.Rate = current[i].rate
-			vh.RateStr = rateStr
-			vh.RateWidth = tw
-		} else {
+		vh, ok := e.VisualHubs[current[i].cc]
+		if !ok {
 			countryName := countries.ByName(current[i].cc).String()
 			if countryName == "Unknown" {
 				countryName = current[i].cc
@@ -752,19 +699,25 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 				countryName = countryName[:maxLen-3] + "..."
 			}
 
-			e.VisualHubs[current[i].cc] = &VisualHub{
-				CC:          current[i].cc,
-				CountryStr:  countryName,
-				Rate:        current[i].rate,
-				RateStr:     rateStr,
-				RateWidth:   tw,
-				DisplayY:    targetY,
-				TargetY:     targetY,
-				Alpha:       0,
-				TargetAlpha: 1.0,
-				Active:      true,
+			vh = &VisualHub{
+				CC:         current[i].cc,
+				CountryStr: countryName,
+				DisplayY:   targetY,
+				Alpha:      0,
 			}
+			e.VisualHubs[current[i].cc] = vh
 		}
+
+		vh.Active = true
+		vh.TargetY = targetY
+		if vh.Alpha < 0.01 {
+			vh.DisplayY = vh.TargetY
+		}
+		vh.TargetAlpha = 1.0
+		vh.Rate = current[i].rate
+		vh.RateStr = rateStr
+		vh.RateWidth = tw
+		e.ActiveHubs = append(e.ActiveHubs, vh)
 	}
 
 	for cc, vh := range e.VisualHubs {
@@ -774,53 +727,89 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 	}
 }
 
-func (e *Engine) updateVisualImpacts(uiInterval float64, firstRun bool) {
-	type impact struct {
-		prefix string
-		rate   float64
+func (e *Engine) updateVisualImpacts(uiInterval float64) {
+	// 1. Gather all prefixes seen in the last 3 buckets (60s)
+	// This matches the 1-minute activity trend.
+	combinedBucket := make(map[string]int)
+	numBuckets := 3
+	if len(e.prefixImpactHistory) < numBuckets {
+		numBuckets = len(e.prefixImpactHistory)
+	}
+	for i := 0; i < numBuckets; i++ {
+		bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1-i]
+		for p, count := range bucket {
+			combinedBucket[p] += count
+		}
 	}
 
-	latestBucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
-	var allImpact []impact
-	for p, count := range latestBucket {
+	allImpact := make([]*VisualImpact, 0, len(combinedBucket))
+	for p, count := range combinedBucket {
 		if utils.IsBeaconPrefix(p) {
 			continue
 		}
-		allImpact = append(allImpact, impact{p, float64(count) / uiInterval})
-	}
-	sort.Slice(allImpact, func(i, j int) bool { return allImpact[i].rate > allImpact[j].rate })
+		vi, ok := e.VisualImpact[p]
+		if !ok {
+			vi = &VisualImpact{Prefix: p}
+			e.VisualImpact[p] = vi
+		}
 
-	maxImpact := 5
-	if len(allImpact) < maxImpact {
-		maxImpact = len(allImpact)
-	}
+		// Only include actual anomalies in this list (Red, Orange, or Purple).
+		// Any prefix that hasn't been classified or is just "Discovery" is skipped.
+		if e.GetPriority(vi.ClassificationName) == 0 {
+			continue
+		}
 
-	fontSize := 18.0
-	boxW, boxH := 280.0, 180.0
-	if e.Width > 2000 {
-		fontSize = 36.0
-		boxW, boxH = 560.0, 360.0
-	}
-	spacing := fontSize * 1.2
-	hubYBase := float64(e.Height) / 2.0
-	impactYBase := hubYBase + boxH + 40.0
-	if e.Width > 2000 {
-		impactYBase = hubYBase + boxH + 80.0
+		vi.Count = float64(count) / (uiInterval * float64(numBuckets))
+		allImpact = append(allImpact, vi)
 	}
 
+	// 2. Hierarchical sorting based on priority then rate
+	sort.SliceStable(allImpact, func(i, j int) bool {
+		p1, p2 := e.GetPriority(allImpact[i].ClassificationName), e.GetPriority(allImpact[j].ClassificationName)
+		if p1 != p2 {
+			return p1 > p2
+		}
+		return allImpact[i].Count > allImpact[j].Count
+	})
+
+	// 3. Mark all as inactive (they will be reactivated if in top 5)
 	for _, vi := range e.VisualImpact {
 		vi.Active = false
 		vi.TargetAlpha = 0.0
 	}
 
-	impactSpacing := spacing * 2.4
-	for i := 0; i < maxImpact; i++ {
-		if allImpact[i].rate < 0.1 && !firstRun {
-			continue
-		}
+	// 4. Dimensions
+	fontSize := 18.0
+	hubsBoxH, boxW := 120.0, 280.0
+	if e.Width > 2000 {
+		fontSize = 36.0
+		hubsBoxH, boxW = 240.0, 560.0
+	}
+	spacing := fontSize * 1.2
+	hubYBase := float64(e.Height) * 0.55
+	if e.Width > 2000 {
+		hubYBase = float64(e.Height) * 0.5
+	}
+	impactYBase := hubYBase + hubsBoxH + 20.0
+	if e.Width > 2000 {
+		impactYBase = hubYBase + hubsBoxH + 40.0
+	}
 
-		targetY := impactYBase + float64(i)*impactSpacing
-		asn := e.prefixToASN[allImpact[i].prefix]
+	// 5. Activate Top 5
+	maxImpact := 5
+	if len(allImpact) < maxImpact {
+		maxImpact = len(allImpact)
+	}
+	impactSpacing := spacing * 2.4
+	e.ActiveImpacts = nil
+	for i := 0; i < maxImpact; i++ {
+		vi := allImpact[i]
+
+		// Snapshot classification for this 20s interval
+		vi.DisplayClassificationName = vi.ClassificationName
+		vi.DisplayClassificationColor = vi.ClassificationColor
+
+		asn := e.prefixToASN[vi.Prefix]
 		var networkName string
 		if asn != 0 && e.asnMapping != nil {
 			networkName = e.asnMapping.GetName(asn)
@@ -834,51 +823,30 @@ func (e *Engine) updateVisualImpacts(uiInterval float64, firstRun bool) {
 			}
 		}
 
-		rateStr := fmt.Sprintf("%.1f", allImpact[i].rate)
-		tw, _ := text.Measure(rateStr, e.monoFace, 0)
-
-		var asnLines []string
-		if asnStr != "" {
-			charW, _ := text.Measure("A", e.subMonoFace, 0)
-			maxChars := int((boxW - 25) / charW)
-			if maxChars < 10 {
-				maxChars = 10
-			}
-			asnLines = wrapString(asnStr, maxChars, 2)
+		charW, _ := text.Measure("A", e.subMonoFace, 0)
+		maxChars := int((boxW - 100) / charW)
+		if maxChars < 10 {
+			maxChars = 10
 		}
 
-		if vi, ok := e.VisualImpact[allImpact[i].prefix]; ok {
-			vi.Active = true
-			vi.TargetY = targetY
-			vi.TargetAlpha = 1.0
-			vi.Count = allImpact[i].rate
-			vi.ASN = asn
-			vi.NetworkName = networkName
-			vi.asnStr = asnStr
-			vi.asnLines = asnLines
-			vi.RateStr = rateStr
-			vi.RateWidth = tw
-		} else {
-			e.VisualImpact[allImpact[i].prefix] = &VisualImpact{
-				Prefix:      allImpact[i].prefix,
-				ASN:         asn,
-				NetworkName: networkName,
-				asnStr:      asnStr,
-				asnLines:    asnLines,
-				Count:       allImpact[i].rate,
-				RateStr:     rateStr,
-				RateWidth:   tw,
-				DisplayY:    targetY,
-				TargetY:     targetY,
-				Alpha:       0,
-				TargetAlpha: 1.0,
-				Active:      true,
-			}
+		vi.Active = true
+		vi.TargetY = impactYBase + float64(i)*impactSpacing
+		if vi.Alpha < 0.01 {
+			vi.DisplayY = vi.TargetY
 		}
+		vi.TargetAlpha = 1.0
+		vi.ASN = asn
+		vi.NetworkName = networkName
+		vi.asnStr = asnStr
+		vi.asnLines = wrapString(asnStr, maxChars, 2)
+		vi.RateStr = fmt.Sprintf("%.1f", vi.Count)
+		vi.RateWidth, _ = text.Measure(vi.RateStr, e.monoFace, 0)
+		e.ActiveImpacts = append(e.ActiveImpacts, vi)
 	}
 
+	// 6. Cleanup invisible items
 	for p, vi := range e.VisualImpact {
-		if !vi.Active {
+		if !vi.Active && vi.Alpha < 0.01 {
 			delete(e.VisualImpact, p)
 		}
 	}
@@ -898,15 +866,16 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 	text.Draw(screen, title, e.titleFace, e.textOp)
 
 	// Donut Pie Chart dimensions
-	radius := h * 0.45
+	radius := h * 0.38
 	centerX := x + (w / 2) - 10
 	centerY := y + (h / 2) - 10
 
-	// 1. Background circle
+	// 1. Background circle (Organic traffic color)
+	organicCol := color.RGBA{100, 100, 100, 255}
 	var bgPath vector.Path
 	bgPath.Arc(float32(centerX), float32(centerY), float32(radius), 0, 2*math.Pi, vector.Clockwise)
 	e.vectorDrawPathOp.ColorScale.Reset()
-	e.vectorDrawPathOp.ColorScale.ScaleWithColor(color.RGBA{30, 30, 30, 255})
+	e.vectorDrawPathOp.ColorScale.ScaleWithColor(organicCol)
 	vector.FillPath(screen, &bgPath, &e.vectorFillOp, &e.vectorDrawPathOp)
 
 	// 2. Beacon slice
@@ -914,79 +883,99 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 		var beaconPath vector.Path
 		startAngle := -math.Pi / 2 // Top
 		endAngle := startAngle + (2 * math.Pi * e.displayBeaconPercent / 100.0)
-
 		beaconPath.MoveTo(float32(centerX), float32(centerY))
 		beaconPath.Arc(float32(centerX), float32(centerY), float32(radius), float32(startAngle), float32(endAngle), vector.Clockwise)
-		beaconPath.Close()
-
+		beaconPath.LineTo(float32(centerX), float32(centerY))
 		e.vectorDrawPathOp.ColorScale.Reset()
 		e.vectorDrawPathOp.ColorScale.ScaleWithColor(color.RGBA{255, 165, 0, 255})
 		vector.FillPath(screen, &beaconPath, &e.vectorFillOp, &e.vectorDrawPathOp)
 	}
 
-	// 3. Donut hole (mask)
+	// 3. Center cutout (Donut)
 	var holePath vector.Path
-	holeRadius := radius * 0.7
-	holePath.Arc(float32(centerX), float32(centerY), float32(holeRadius), 0, 2*math.Pi, vector.Clockwise)
-
+	holePath.Arc(float32(centerX), float32(centerY), float32(radius*0.6), 0, 2*math.Pi, vector.Clockwise)
 	e.vectorDrawPathOp.ColorScale.Reset()
-	e.vectorDrawPathOp.ColorScale.ScaleWithColor(color.RGBA{8, 10, 15, 255})
+	e.vectorDrawPathOp.ColorScale.ScaleWithColor(color.RGBA{15, 15, 15, 255})
 	vector.FillPath(screen, &holePath, &e.vectorFillOp, &e.vectorDrawPathOp)
 
-	// 4. Percentage Text (in middle of donut)
-	percentStr := fmt.Sprintf("%.0f%%", e.displayBeaconPercent)
-	tw, _ := text.Measure(percentStr, e.titleFace09, 0)
-	e.textOp.GeoM.Reset()
-	e.textOp.GeoM.Translate(centerX-(tw/2), centerY-(fontSize/2))
+	// 4. Text Label in Center
 	e.textOp.ColorScale.Reset()
-	e.textOp.ColorScale.Scale(1, 1, 1, 0.9)
-	text.Draw(screen, percentStr, e.titleFace09, e.textOp)
-
-	// 5. Small Legend Underneath
-	legY := centerY + radius + fontSize*0.6
-	swatchSize := fontSize * 0.4
-
-	// Calculate combined width of both legend items
-	bStr, oStr := "BEACON", "ORGANIC"
-	btw, _ := text.Measure(bStr, e.titleFace05, 0)
-	otw, _ := text.Measure(oStr, e.titleFace05, 0)
-
-	// Total width = swatch + gap + text + padding + swatch + gap + text
-	itemGap := 20.0
-	bItemW := swatchSize + 5 + btw
-	oItemW := swatchSize + 5 + otw
-	totalLegW := bItemW + itemGap + oItemW
-
-	legX := x + (w / 2) - (totalLegW / 2) - 10 // Center relative to donut center (-10 is from centerX calculation)
-
-	// Beacon Legend Item
-	vector.FillRect(screen, float32(legX), float32(legY), float32(swatchSize), float32(swatchSize), color.RGBA{255, 165, 0, 255}, false)
+	e.textOp.ColorScale.Scale(1, 1, 1, 0.8)
+	label := fmt.Sprintf("%.0f%%", e.displayBeaconPercent)
+	tw, th := text.Measure(label, e.titleMonoFace, 0)
 	e.textOp.GeoM.Reset()
-	e.textOp.GeoM.Translate(legX+swatchSize+5, legY-fontSize*0.1)
+	e.textOp.GeoM.Translate(centerX-(tw/2), centerY-(th/2))
+	text.Draw(screen, label, e.titleMonoFace, e.textOp)
+
+	// 5. Small Legend Items below chart
+	legendY := y + h - fontSize*0.8
+	e.drawBeaconLegendItem(screen, x, legendY, fontSize, color.RGBA{255, 165, 0, 255}, "Beacon")
+	e.drawBeaconLegendItem(screen, x+(w/2), legendY, fontSize, organicCol, "Organic")
+}
+
+func (e *Engine) drawBeaconLegendItem(screen *ebiten.Image, x, y, fontSize float64, c color.RGBA, label string) {
+	swatchSize := fontSize * 0.6
+	_, th := text.Measure(label, e.subFace, 0)
+
+	vector.FillRect(screen, float32(x), float32(y+(fontSize-swatchSize)/2), float32(swatchSize), float32(swatchSize), c, false)
+	e.textOp.GeoM.Reset()
+	e.textOp.GeoM.Translate(x+swatchSize+10, y+(fontSize-th)/2)
 	e.textOp.ColorScale.Reset()
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.6)
-	text.Draw(screen, bStr, e.titleFace05, e.textOp)
+	text.Draw(screen, label, e.subFace, e.textOp)
+}
 
-	// Organic Legend Item
-	legX += bItemW + itemGap
-	vector.FillRect(screen, float32(legX), float32(legY), float32(swatchSize), float32(swatchSize), color.RGBA{30, 30, 30, 255}, false)
+func (e *Engine) drawMarquee(dst *ebiten.Image, content string, face *text.GoTextFace, x, y, alpha float64, isGlitching bool, intensity float64, buffer **ebiten.Image) {
+	if content == "" {
+		return
+	}
+	tw, th := text.Measure(content, face, 0)
+	if *buffer == nil || (*buffer).Bounds().Dx() != int(tw+50) {
+		*buffer = ebiten.NewImage(int(tw+50), int(th+10))
+	}
+	(*buffer).Clear()
 	e.textOp.GeoM.Reset()
-	e.textOp.GeoM.Translate(legX+swatchSize+5, legY-fontSize*0.1)
+	e.textOp.GeoM.Translate(0, 0)
 	e.textOp.ColorScale.Reset()
-	e.textOp.ColorScale.Scale(1, 1, 1, 0.6)
-	text.Draw(screen, oStr, e.titleFace05, e.textOp)
+	e.textOp.ColorScale.Scale(1, 1, 1, 1.0)
+	text.Draw(*buffer, content, face, e.textOp)
+
+	// Draw to destination
+	e.drawOp.GeoM.Reset()
+	e.drawOp.GeoM.Translate(x, y)
+	e.drawOp.ColorScale.Reset()
+	e.drawOp.ColorScale.Scale(1, 1, 1, float32(alpha))
+	dst.DrawImage(*buffer, e.drawOp)
+
+	if isGlitching && rand.Float64() < intensity*0.5 {
+		offset := 2.0 * intensity
+		e.drawOp.GeoM.Reset()
+		e.drawOp.GeoM.Translate(x+offset, y)
+		e.drawOp.ColorScale.Reset()
+		e.drawOp.ColorScale.Scale(1, 0, 0, float32(alpha*0.5*intensity))
+		dst.DrawImage(*buffer, e.drawOp)
+
+		e.drawOp.GeoM.Reset()
+		e.drawOp.GeoM.Translate(x-offset, y)
+		e.drawOp.ColorScale.Reset()
+		e.drawOp.ColorScale.Scale(0, 1, 1, float32(alpha*0.5*intensity))
+		dst.DrawImage(*buffer, e.drawOp)
+	}
 }
 
 func wrapString(s string, maxChars, maxLines int) []string {
-	if len(s) <= maxChars {
+	if s == "" || maxChars <= 0 {
+		return nil
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
 		return []string{s}
 	}
 
 	var lines []string
-	words := strings.Fields(s)
 	currentLine := ""
 
-	for i, word := range words {
+	for i := 0; i < len(words); i++ {
 		if len(lines) >= maxLines-1 && maxLines > 0 {
 			// Last allowed line, append remaining and truncate
 			if currentLine != "" {
@@ -995,7 +984,6 @@ func wrapString(s string, maxChars, maxLines int) []string {
 			} else {
 				currentLine = strings.Join(words[i:], " ")
 			}
-
 			if len(currentLine) > maxChars {
 				currentLine = currentLine[:maxChars-3] + "..."
 			}
@@ -1003,20 +991,28 @@ func wrapString(s string, maxChars, maxLines int) []string {
 			return lines
 		}
 
-		switch {
-		case currentLine == "":
-			currentLine = word
-		case len(currentLine)+1+len(word) <= maxChars:
-			currentLine += " " + word
-		default:
-			lines = append(lines, currentLine)
-			currentLine = word
+		testLine := currentLine
+		if testLine != "" {
+			testLine += " "
+		}
+		testLine += words[i]
+
+		if len(testLine) > maxChars {
+			if currentLine != "" {
+				lines = append(lines, currentLine)
+				currentLine = words[i]
+			} else {
+				// Single word is too long
+				lines = append(lines, words[i][:maxChars-3]+"...")
+				currentLine = ""
+			}
+		} else {
+			currentLine = testLine
 		}
 	}
 
 	if currentLine != "" {
 		lines = append(lines, currentLine)
 	}
-
 	return lines
 }

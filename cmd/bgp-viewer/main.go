@@ -32,6 +32,13 @@ func main() {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
+	engine := initEngine()
+	startBackgroundTasks(engine)
+	setupSignalHandler(engine)
+	runWindowLoop(engine)
+}
+
+func initEngine() *bgpengine.Engine {
 	engine := bgpengine.NewEngine(*renderWidth, *renderHeight, *renderScale)
 	engine.FrameCaptureInterval = *captureInterval
 	engine.FrameCaptureDir = *captureDir
@@ -44,7 +51,10 @@ func main() {
 	}
 
 	engine.InitPulseTexture()
+	return engine
+}
 
+func startBackgroundTasks(engine *bgpengine.Engine) {
 	// Start all data loading in the background
 	go func() {
 		// 1. Generate initial map background
@@ -69,24 +79,40 @@ func main() {
 	}()
 
 	go engine.StartMemoryWatcher()
+}
 
+func setupSignalHandler(engine *bgpengine.Engine) {
 	// Handle graceful shutdown for audio fade-out
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigChan
 		log.Println("Received termination signal...")
-		if ap := engine.GetAudioPlayer(); ap != nil {
-			ap.Shutdown()
-		}
-		if engine.SeenDB != nil {
-			if err := engine.SeenDB.Close(); err != nil {
-				log.Printf("Error closing database: %v", err)
-			}
-		}
+		closeEngineResources(engine)
 		os.Exit(0)
 	}()
+}
 
+func closeEngineResources(engine *bgpengine.Engine) {
+	if ap := engine.GetAudioPlayer(); ap != nil {
+		ap.Shutdown()
+	}
+	if proc := engine.GetProcessor(); proc != nil {
+		proc.Close()
+	}
+	if engine.SeenDB != nil {
+		if err := engine.SeenDB.Close(); err != nil {
+			log.Printf("Error closing SeenDB: %v", err)
+		}
+	}
+	if engine.StateDB != nil {
+		if err := engine.StateDB.Close(); err != nil {
+			log.Printf("Error closing StateDB: %v", err)
+		}
+	}
+}
+
+func runWindowLoop(engine *bgpengine.Engine) {
 	ebiten.SetTPS(*tpsFlag)
 	ebiten.SetWindowTitle("BGP Real-Time Map Viewer")
 	ebiten.SetWindowDecorated(!*hideWindowControls)
@@ -107,9 +133,5 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if engine.SeenDB != nil {
-		if err := engine.SeenDB.Close(); err != nil {
-			log.Printf("Error closing database: %v", err)
-		}
-	}
+	closeEngineResources(engine)
 }

@@ -1,0 +1,37 @@
+syntax = "proto3";
+package bgp.v1;
+option go_package = "github.com/sudorandom/bgp-stream/pkg/bgpengine/proto/v1;bgpproto";
+
+message StatsBucket {
+    int32 announcements = 1;
+    int32 withdrawals = 2;
+    int32 total_messages = 3;
+    int32 path_changes = 4;
+    int32 community_changes = 5;
+    int32 next_hop_changes = 6;
+    int32 aggregator_changes = 7;
+    int32 path_length_increases = 8;
+    int32 path_length_decreases = 9;
+    int32 med_changes = 10;
+    int32 local_pref_changes = 11;
+}
+
+message LastAttrs {
+    string path = 1;
+    string communities = 2;
+    string next_hop = 3;
+    string aggregator = 4;
+    int32 last_path_len = 5;
+    uint32 origin_asn = 6;
+    int32 med = 7;
+    int32 local_pref = 8;
+}
+
+message PrefixState {
+    map<int64, StatsBucket> buckets = 1; // timestamp (minute-aligned) -> bucket
+    map<string, LastAttrs> peer_last_attrs = 2;
+    int64 last_update_ts = 3;
+    int64 start_time_ts = 4;
+    bool uncategorized_counted = 5;
+    int32 classified_type = 6;
+}

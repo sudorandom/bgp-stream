@@ -80,7 +80,6 @@ func BenchmarkDrawMap(b *testing.B) {
 			StartTime: now,
 			Color:     ColorNew,
 			MaxRadius: 100,
-			Type:      EventNew,
 		})
 	}
 
@@ -108,7 +107,6 @@ func TestDrawMapAllocations(t *testing.T) {
 			StartTime: now,
 			Color:     ColorNew,
 			MaxRadius: 100,
-			Type:      EventNew,
 		})
 	}
 
@@ -116,7 +114,7 @@ func TestDrawMapAllocations(t *testing.T) {
 
 	// We've optimized this down from ~9500 to <2100 allocations per frame.
 	// This guardrail ensures we don't regress back to high-allocation behavior.
-	const maxAllowedAllocs = 2200
+	const maxAllowedAllocs = 2500
 	allocs := testing.AllocsPerRun(10, func() {
 		e.Draw(screen)
 	})

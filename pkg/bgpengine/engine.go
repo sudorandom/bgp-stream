@@ -76,26 +76,42 @@ type Pulse struct {
 	StartTime time.Time
 	Color     color.RGBA
 	MaxRadius float64
-	Type      EventType
 }
 
 type QueuedPulse struct {
 	Lat, Lng      float64
 	Type          EventType
+	Color         color.RGBA
 	Count         int
 	ScheduledTime time.Time
 }
 
 type BufferedCity struct {
-	Lat, Lng               float64
-	New, Upd, With, Gossip int
+	Lat, Lng float64
+	Counts   map[color.RGBA]int
 }
 
 var (
-	ColorGossip = color.RGBA{0, 191, 255, 255} // Deep Sky Blue (Propagation)
-	ColorNew    = color.RGBA{57, 255, 20, 255} // Hacker Green (New Announcement)
-	ColorUpd    = color.RGBA{148, 0, 211, 255} // Deep Violet/Purple (Path Change)
-	ColorWith   = color.RGBA{255, 50, 50, 255} // Red (Withdrawal)
+	ColorGossip = color.RGBA{0, 191, 255, 255} // Deep Sky Blue (Discovery)
+	ColorNew    = color.RGBA{57, 255, 20, 255} // Hacker Green
+	ColorUpd    = color.RGBA{148, 0, 211, 255} // Deep Violet/Purple (Policy Churn)
+	ColorWith   = color.RGBA{255, 50, 50, 255} // Red (Withdrawal / Outage)
+
+	// Level 2 - Cool/Neutral (Good/Normalish)
+	ColorDiscovery = color.RGBA{0, 191, 255, 255} // Deep Sky Blue (Normal)
+	ColorPolicy    = color.RGBA{148, 0, 211, 255} // Deep Violet/Purple (Normal)
+	ColorBad       = color.RGBA{255, 127, 0, 255} // Orange (Bad)
+	ColorCritical  = color.RGBA{255, 0, 0, 255}   // Pure Red (Critical)
+
+	// Keep specific pulse colors for variety but group by tier color in legend
+	ColorLinkFlap = color.RGBA{255, 127, 0, 255}
+	ColorBabbling = color.RGBA{255, 165, 0, 255}
+	ColorOutage   = color.RGBA{255, 50, 50, 255}
+	ColorLeak     = color.RGBA{255, 0, 0, 255}
+	ColorNextHop  = color.RGBA{218, 165, 32, 255}
+	ColorAggFlap  = color.RGBA{255, 140, 0, 255}
+	ColorOscill   = color.RGBA{148, 0, 211, 255}
+	ColorHunting  = color.RGBA{148, 0, 211, 255}
 
 	// Lighter versions for UI text and trendlines
 	ColorGossipUI = color.RGBA{135, 206, 250, 255} // Light Sky Blue
@@ -134,23 +150,29 @@ type Engine struct {
 
 	cityBuffer         map[uint64]*BufferedCity
 	cityBufferPool     sync.Pool
-	seenBuffer         []string
+	seenBuffer         map[string]uint32
 	bufferMu           sync.Mutex
 	visualQueue        []*QueuedPulse
 	queueMu            sync.Mutex
 	nextPulseEmittedAt time.Time
 
-	bgImage    *ebiten.Image
-	pulseImage *ebiten.Image
-	whitePixel *ebiten.Image
-	fadeMask   *ebiten.Image
-	fontSource *text.GoTextFaceSource
-	monoSource *text.GoTextFaceSource
+	bgImage        *ebiten.Image
+	pulseImage     *ebiten.Image
+	trendLineImg   *ebiten.Image
+	trendCircleImg *ebiten.Image
+	whitePixel     *ebiten.Image
+	fadeMask       *ebiten.Image
+	fontSource     *text.GoTextFaceSource
+	monoSource     *text.GoTextFaceSource
 
 	// Metrics (Windowed for Rate calculation)
 	windowNew, windowUpd, windowWith, windowGossip int64
 	windowNote, windowPeer, windowOpen             int64
 	windowBeacon                                   int64
+
+	windowLinkFlap, windowAggFlap, windowOscill, windowBabbling int64
+	windowHunting, windowTE, windowNextHop, windowOutage        int64
+	windowLeak, windowGlobal                                    int64
 
 	rateNew, rateUpd, rateWith, rateGossip float64
 	rateNote, ratePeer, rateOpen           float64
@@ -182,13 +204,16 @@ type Engine struct {
 	hubUpdatedAt      time.Time
 	impactUpdatedAt   time.Time
 
-	VisualHubs map[string]*VisualHub
+	VisualHubs  map[string]*VisualHub
+	ActiveHubs  []*VisualHub
 
 	prefixImpactHistory []map[string]int
 	prefixToASN         map[string]uint32
 	VisualImpact        map[string]*VisualImpact
+	ActiveImpacts       []*VisualImpact
 
-	SeenDB *utils.DiskTrie
+	SeenDB  *utils.DiskTrie
+	StateDB *utils.DiskTrie
 
 	audioPlayer *AudioPlayer
 
@@ -230,24 +255,32 @@ type VisualHub struct {
 }
 
 type VisualImpact struct {
-	Prefix      string
-	ASN         uint32
-	NetworkName string
-	asnStr      string
-	asnLines    []string
-	Count       float64
-	RateStr     string
-	RateWidth   float64
-	DisplayY    float64
-	TargetY     float64
-	Alpha       float32
-	TargetAlpha float32
-	Active      bool
+	Prefix                     string
+	ASN                        uint32
+	NetworkName                string
+	ClassificationName         string
+	ClassificationColor        color.RGBA
+	DisplayClassificationName  string
+	DisplayClassificationColor color.RGBA
+	asnStr                     string
+	asnLines                   []string
+	Count                      float64
+	RateStr                    string
+	RateWidth                  float64
+	DisplayY                   float64
+	TargetY                    float64
+	Alpha                      float32
+	TargetAlpha                float32
+	Active                     bool
 }
 
 type MetricSnapshot struct {
 	New, Upd, With, Gossip, Note, Peer, Open int
 	Beacon                                   int
+
+	LinkFlap, AggFlap, Oscill, Babbling int
+	Hunting, TE, NextHop, Outage        int
+	Leak, Attr, Global, Dedupe, Uncat   int
 }
 
 func NewEngine(width, height int, scale float64) *Engine {
@@ -272,6 +305,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 				return &BufferedCity{}
 			},
 		},
+		seenBuffer:          make(map[string]uint32),
 		nextPulseEmittedAt:  time.Now(),
 		fontSource:          s,
 		monoSource:          m,
@@ -320,10 +354,21 @@ func NewEngine(width, height int, scale float64) *Engine {
 	e.titleFace05 = &text.GoTextFace{Source: s, Size: fontSize * 0.5}
 
 	e.legendRows = []legendRow{
-		{"PROPAGATION", 0, ColorGossip, ColorGossipUI, func(s MetricSnapshot) int { return s.Gossip }},
-		{"PATH CHANGE", 0, ColorUpd, ColorUpdUI, func(s MetricSnapshot) int { return s.Upd }},
-		{"WITHDRAWAL", 0, ColorWith, ColorWithUI, func(s MetricSnapshot) int { return s.With }},
-		{"NEW PATHS", 0, ColorNew, ColorNewUI, func(s MetricSnapshot) int { return s.New }},
+		// Column 1: Normal (Blue/Purple)
+		{"DISCOVERY", 0, ColorDiscovery, ColorGossipUI, func(s MetricSnapshot) int { return s.Global }},
+		{"POLICY CHURN", 0, ColorPolicy, ColorUpdUI, func(s MetricSnapshot) int { return s.TE }},
+		{"PATH HUNTING", 0, ColorPolicy, ColorUpdUI, func(s MetricSnapshot) int { return s.Hunting }},
+		{"PATH OSCILLATION", 0, ColorPolicy, ColorUpdUI, func(s MetricSnapshot) int { return s.Oscill }},
+
+		// Column 2: Bad (Orange)
+		{"BGP BABBLING", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.Babbling }},
+		{"AGGREGATOR FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.AggFlap }},
+		{"NEXT-HOP FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.NextHop }},
+		{"LINK FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.LinkFlap }},
+
+		// Column 3: Critical (Red)
+		{"ROUTE LEAK", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Leak }},
+		{"HARD OUTAGE", 0, ColorCritical, ColorCritical, func(s MetricSnapshot) int { return s.Outage }},
 	}
 
 	e.audioPlayer = NewAudioPlayer(nil, func(song, artist, extra string) {
@@ -375,18 +420,7 @@ func (e *Engine) Update() error {
 		e.visualQueue = e.visualQueue[1:]
 		added++
 		if now.Sub(p.ScheduledTime) < 2*time.Second {
-			var c color.RGBA
-			switch p.Type {
-			case EventNew:
-				c = ColorNew
-			case EventUpdate:
-				c = ColorUpd
-			case EventWithdrawal:
-				c = ColorWith
-			case EventGossip:
-				c = ColorGossip
-			}
-			e.AddPulse(p.Lat, p.Lng, c, p.Count, p.Type)
+			e.AddPulse(p.Lat, p.Lng, p.Color, p.Count)
 		}
 	}
 	e.queueMu.Unlock()
@@ -457,9 +491,6 @@ func (e *Engine) Update() error {
 	active := e.pulses[:0]
 	for _, p := range e.pulses {
 		duration := 1500 * time.Millisecond
-		if p.Type == EventNew {
-			duration = 3000 * time.Millisecond // Discoveries last twice as long
-		}
 		if now.Sub(p.StartTime) < duration {
 			active = append(active, p)
 		}
@@ -517,41 +548,6 @@ func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, base
 	screen.DrawImage(img, e.drawOp)
 }
 
-func (e *Engine) drawGlitchTextSubtle(screen *ebiten.Image, label string, face *text.GoTextFace, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
-	fontSize := face.Size
-	if isGlitching && rand.Float64() < intensity {
-		// Even subtler chromatic aberration for hubs
-		offset := 1.0 * intensity
-		jx := (rand.Float64() - 0.5) * (fontSize / 4) * intensity
-		jy := (rand.Float64() - 0.5) * (fontSize / 8) * intensity
-
-		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(tx+jx+offset, ty+jy)
-		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 0, 0, baseAlpha*0.5)
-		text.Draw(screen, label, face, e.textOp)
-
-		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(tx+jx-offset, ty+jy)
-		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(0, 1, 1, baseAlpha*0.5)
-		text.Draw(screen, label, face, e.textOp)
-	}
-
-	jx, jy := 0.0, 0.0
-	alpha := baseAlpha
-	if isGlitching && rand.Float64() < intensity {
-		jx = (rand.Float64() - 0.5) * (fontSize / 4) * intensity
-		jy = (rand.Float64() - 0.5) * (fontSize / 8) * intensity
-		alpha = float32((0.4 + rand.Float64()*0.6) * float64(baseAlpha))
-	}
-	e.textOp.GeoM.Reset()
-	e.textOp.GeoM.Translate(tx+jx, ty+jy)
-	e.textOp.ColorScale.Reset()
-	e.textOp.ColorScale.Scale(1, 1, 1, float32(alpha))
-	text.Draw(screen, label, face, e.textOp)
-}
-
 func (e *Engine) Draw(screen *ebiten.Image) {
 	if e.mapImage == nil || e.mapImage.Bounds().Dx() != e.Width || e.mapImage.Bounds().Dy() != e.Height {
 		e.mapImage = ebiten.NewImage(e.Width, e.Height)
@@ -572,31 +568,15 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
 		totalDuration := 1.5
-		if p.Type == EventNew {
-			totalDuration = 3.0
-		}
 		progress := elapsed / totalDuration
 		if progress > 1.0 {
 			continue
 		}
 
 		baseAlpha := 0.5
-		if p.Type == EventNew {
-			baseAlpha = 0.7
-		}
-		if p.Type == EventWithdrawal {
-			baseAlpha = 0.2
-		}
-		if p.Type == EventGossip {
-			baseAlpha = 0.2
-		}
 
 		// Use a smaller base offset (+1) and more conservative scaling
 		scale := (1 + progress*p.MaxRadius) / float64(imgW) * 2.0
-		if p.Type == EventNew {
-			easeOut := 1.0 - (1.0-progress)*(1.0-progress)*(1.0-progress)
-			scale = (1 + easeOut*p.MaxRadius) / float64(imgW) * 2.0
-		}
 
 		alpha := (1.0 - progress) * baseAlpha
 		e.drawOp.GeoM.Reset()
@@ -619,7 +599,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	}
 
 	screen.DrawImage(e.mapImage, nil)
-	e.drawMetrics(screen)
+	e.DrawBGPStatus(screen)
 
 	if shouldCapture {
 		e.captureFrame(screen, "full", now)
@@ -656,6 +636,26 @@ func (e *Engine) InitPulseTexture() {
 		}
 	}
 	e.pulseImage.WritePixels(pixels)
+
+	// Create a 1x1 white image for trendlines
+	e.trendLineImg = ebiten.NewImage(1, 1)
+	e.trendLineImg.Fill(color.White)
+
+	// Create a simple circular texture for trendline joints
+	size = 64
+	e.trendCircleImg = ebiten.NewImage(size, size)
+	pixels = make([]byte, size*size*4)
+	center, maxDist = float64(size)/2.0, float64(size)/2.0
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx, dy := float64(x)-center, float64(y)-center
+			if math.Sqrt(dx*dx+dy*dy) < maxDist {
+				pixels[(y*size+x)*4+3] = 255
+				pixels[(y*size+x)*4+0], pixels[(y*size+x)*4+1], pixels[(y*size+x)*4+2] = 255, 255, 255
+			}
+		}
+	}
+	e.trendCircleImg.WritePixels(pixels)
 }
 
 func (e *Engine) GenerateInitialBackground() error {
@@ -671,11 +671,15 @@ func (e *Engine) GenerateInitialBackground() error {
 }
 
 func (e *Engine) LoadRemainingData() error {
-	// 1. Open seen prefixes database
+	// 1. Open databases
 	var err error
 	e.SeenDB, err = utils.OpenDiskTrie("data/seen-prefixes.db")
 	if err != nil {
 		log.Printf("Warning: Failed to open seen prefixes database: %v. Persistent state will be disabled.", err)
+	}
+	e.StateDB, err = utils.OpenDiskTrie("data/prefix-state.db")
+	if err != nil {
+		log.Printf("Warning: Failed to open prefix state database: %v. Persistent state will be disabled.", err)
 	}
 
 	// 2. Load prefix data (this maps prefixes to coordinates)
@@ -691,7 +695,7 @@ func (e *Engine) LoadRemainingData() error {
 
 	// 4. Download worldcities.csv if missing
 	citiesPath := "data/worldcities.csv"
-	if _, err := os.Stat(citiesPath); os.IsNotExist(err) {
+	if _, err := os.Stat(citiesPath); err != nil && os.IsNotExist(err) {
 		url := "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/csv/cities.csv"
 		log.Printf("Downloading world cities database from %s...", url)
 		if err := utils.DownloadFile(url, citiesPath); err != nil {
@@ -713,7 +717,7 @@ func (e *Engine) LoadRemainingData() error {
 		log.Printf("Warning: Failed to load ASN mapping: %v", err)
 	}
 
-	e.processor = NewBGPProcessor(e.geo.GetIPCoords, e.SeenDB, e.prefixToIP, e.recordEvent)
+	e.processor = NewBGPProcessor(e.geo.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.prefixToIP, e.recordEvent)
 
 	return nil
 }
@@ -1270,10 +1274,12 @@ func (e *Engine) processSeenBuffer() {
 	// 1. Batch persist seen prefixes
 	if len(e.seenBuffer) > 0 && e.SeenDB != nil {
 		batch := make(map[string][]byte)
-		for _, p := range e.seenBuffer {
-			batch[p] = []byte{1}
+		for p, asn := range e.seenBuffer {
+			asnBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(asnBytes, asn)
+			batch[p] = asnBytes
 		}
-		e.seenBuffer = e.seenBuffer[:0]
+		e.seenBuffer = make(map[string]uint32)
 
 		// Execute write in a separate goroutine to avoid blocking the visual queue
 		go func(b map[string][]byte) {
@@ -1291,21 +1297,15 @@ func (e *Engine) drainCityBuffer() []*QueuedPulse {
 	e.bufferMu.Lock()
 	defer e.bufferMu.Unlock()
 	var nextBatch []*QueuedPulse
-	// 2. Convert buffered city activity into discrete pulse events for each type
+	// 2. Convert buffered city activity into discrete pulse events for each color
 	for key, d := range e.cityBuffer {
-		if d.With > 0 {
-			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventWithdrawal, Count: d.With})
-		}
-		if d.Upd > 0 {
-			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventUpdate, Count: d.Upd})
-		}
-		if d.New > 0 {
-			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventNew, Count: d.New})
-		}
-		if d.Gossip > 0 {
-			nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Type: EventGossip, Count: d.Gossip})
+		for c, count := range d.Counts {
+			if count > 0 {
+				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Color: c, Count: count})
+			}
 		}
 		// Reset and return to pool
+		d.Counts = nil
 		*d = BufferedCity{}
 		e.cityBufferPool.Put(d)
 		delete(e.cityBuffer, key)
@@ -1356,10 +1356,12 @@ func (e *Engine) scheduleVisualPulses(nextBatch []*QueuedPulse) {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, prefix string, asn uint32) {
+func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, level2Type Level2EventType, prefix string, asn uint32) {
+	e.metricsMu.Lock()
+	defer e.metricsMu.Unlock()
+
 	// 1. Track prefix impact (latest bucket)
 	if prefix != "" {
-		e.metricsMu.Lock()
 		if len(e.prefixImpactHistory) > 0 {
 			bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
 			if bucket == nil {
@@ -1377,11 +1379,57 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 		if utils.IsBeaconPrefix(prefix) {
 			e.windowBeacon++
 		}
-		e.metricsMu.Unlock()
 	}
 
-	// Use bit manipulation to create a unique uint64 key for cityBuffer
-	// This avoids expensive fmt.Sprintf allocations on every BGP event
+	// 2. Buffer city activity
+	b := e.getOrCreateCityBuffer(lat, lng)
+
+	if cc != "" {
+		e.countryActivity[cc]++
+	}
+
+	if b.Counts == nil {
+		b.Counts = make(map[color.RGBA]int)
+	}
+
+	// 3. Determine color and name based on Level 2 type
+	c, name := e.getLevel2Visuals(level2Type)
+
+	// 4. Increment counts only if a Level 2 color was chosen
+	if c != (color.RGBA{}) {
+		b.Counts[c]++
+	}
+
+	// 5. Update Visual Impact metadata
+	if prefix != "" {
+		e.updateHierarchicalRates(prefix, name, c)
+	}
+
+	// 6. Update windowed metrics (this drives the dashboard numbers)
+	e.updateWindowedMetrics(eventType, level2Type, prefix, asn)
+}
+
+func (e *Engine) updatePrefixImpact(prefix string, asn uint32) {
+	if len(e.prefixImpactHistory) > 0 {
+		bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
+		if bucket == nil {
+			bucket = make(map[string]int)
+			e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
+		}
+		bucket[prefix]++
+	}
+	if e.prefixToASN == nil {
+		e.prefixToASN = make(map[string]uint32)
+	}
+	if asn != 0 {
+		e.prefixToASN[prefix] = asn
+	}
+	if utils.IsBeaconPrefix(prefix) {
+		e.windowBeacon++
+	}
+}
+
+func (e *Engine) getOrCreateCityBuffer(lat, lng float64) *BufferedCity {
 	key := math.Float64bits(lat) ^ (math.Float64bits(lng) << 1)
 	e.bufferMu.Lock()
 	defer e.bufferMu.Unlock()
@@ -1392,29 +1440,101 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, p
 		b.Lng = lng
 		e.cityBuffer[key] = b
 	}
+	return b
+}
 
-	e.metricsMu.Lock()
-	if cc != "" {
-		e.countryActivity[cc]++
+func (e *Engine) getLevel2Visuals(level2Type Level2EventType) (visualColor color.RGBA, classificationName string) {
+	switch level2Type {
+	case Level2Discovery:
+		return ColorDiscovery, nameDiscovery
+	case Level2PolicyChurn:
+		return ColorPolicy, namePolicyChurn
+	case Level2PathLengthOscillation:
+		return ColorPolicy, namePathOscillation
+	case Level2PathHunting:
+		return ColorPolicy, namePathHunting
+	case Level2LinkFlap:
+		return ColorBad, nameLinkFlap
+	case Level2Babbling:
+		return ColorBad, nameBabbling
+	case Level2AggFlap:
+		return ColorBad, nameAggFlap
+	case Level2NextHopOscillation:
+		return ColorBad, nameNextHopFlap
+	case Level2Outage:
+		return ColorCritical, nameHardOutage
+	case Level2RouteLeak:
+		return ColorCritical, nameRouteLeak
+	default:
+		return color.RGBA{}, ""
 	}
+}
+
+func (e *Engine) GetPriority(name string) int {
+	switch name {
+	case nameRouteLeak, nameHardOutage:
+		return 3 // Critical (Red)
+	case nameLinkFlap, nameBabbling, nameNextHopFlap, nameAggFlap:
+		return 2 // Bad (Orange)
+	case namePolicyChurn, namePathOscillation, namePathHunting:
+		return 1 // Normalish (Purple)
+	default:
+		return 0 // Discovery (Blue)
+	}
+}
+
+func (e *Engine) updateHierarchicalRates(prefix, name string, c color.RGBA) {
+	vi, ok := e.VisualImpact[prefix]
+	if !ok {
+		vi = &VisualImpact{Prefix: prefix}
+		e.VisualImpact[prefix] = vi
+	}
+	if name != "" {
+		// Only update classification if it's higher priority than what we have
+		if e.GetPriority(name) >= e.GetPriority(vi.ClassificationName) {
+			vi.ClassificationName = name
+			vi.ClassificationColor = c
+		}
+	}
+}
+
+func (e *Engine) updateWindowedMetrics(eventType EventType, level2Type Level2EventType, prefix string, asn uint32) {
+	switch level2Type {
+	case Level2LinkFlap:
+		e.windowLinkFlap++
+	case Level2AggFlap:
+		e.windowAggFlap++
+	case Level2PathLengthOscillation:
+		e.windowOscill++
+	case Level2Babbling:
+		e.windowBabbling++
+	case Level2PathHunting:
+		e.windowHunting++
+	case Level2PolicyChurn:
+		e.windowTE++
+	case Level2NextHopOscillation:
+		e.windowNextHop++
+	case Level2Outage:
+		e.windowOutage++
+	case Level2RouteLeak:
+		e.windowLeak++
+	case Level2Discovery:
+		e.windowGlobal++
+	}
+
 	switch eventType {
 	case EventNew:
-		b.New++
 		e.windowNew++
 		if prefix != "" {
-			e.seenBuffer = append(e.seenBuffer, prefix)
+			e.seenBuffer[prefix] = asn
 		}
 	case EventUpdate:
-		b.Upd++
 		e.windowUpd++
 	case EventWithdrawal:
-		b.With++
 		e.windowWith++
 	case EventGossip:
-		b.Gossip++
 		e.windowGossip++
 	}
-	e.metricsMu.Unlock()
 }
 
 type point struct{ x, y float64 }
@@ -1523,7 +1643,7 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 	}
 }
 
-func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType EventType) {
+func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int) {
 	lat += (rand.Float64() - 0.5) * 0.8
 	lng += (rand.Float64() - 0.5) * 0.8
 	x, y := e.geo.Project(lat, lng)
@@ -1541,7 +1661,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, eventType E
 		if radius > 240 {
 			radius = 240
 		}
-		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius, Type: eventType})
+		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius})
 	}
 }
 

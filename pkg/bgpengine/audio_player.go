@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dhowden/tag"
@@ -25,6 +26,7 @@ type AudioPlayer struct {
 	AudioDir     string
 	stopChan     chan struct{}
 	stoppedChan  chan struct{}
+	stopOnce     sync.Once
 	isStopping   bool
 }
 
@@ -41,7 +43,9 @@ func NewAudioPlayer(writer io.Writer, onMetadata AudioMetadataCallback) *AudioPl
 func (p *AudioPlayer) Shutdown() {
 	log.Println("Audio player shutting down with fade-out...")
 	p.isStopping = true
-	close(p.stopChan)
+	p.stopOnce.Do(func() {
+		close(p.stopChan)
+	})
 	<-p.stoppedChan
 	log.Println("Audio player stopped.")
 }

@@ -157,6 +157,12 @@ func (t *DiskTrie) Lookup(ip net.IP) (val []byte, maskLen int, err error) {
 	return foundVal, foundMask, err
 }
 
+func (t *DiskTrie) DeleteRaw(key []byte) error {
+	return t.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete(key)
+	})
+}
+
 func (t *DiskTrie) ForEach(fn func(k []byte, v []byte) error) error {
 	return t.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
