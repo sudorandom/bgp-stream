@@ -636,7 +636,7 @@ func (e *Engine) drawTrendLayers(chartW, chartH, globalMaxLog float64) {
 	goodCol := ColorDiscovery // Blue (Normal)
 	polyCol := ColorPolicy    // Purple (Policy)
 	badCol := ColorBad        // Orange (Bad)
-	critCol := ColorWithUI    // Light Red (Critical)
+	critCol := ColorCritical  // Pure Red (Critical)
 
 	e.drawOp.Blend = ebiten.BlendLighter
 
