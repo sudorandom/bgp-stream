@@ -818,7 +818,9 @@ func (p *BGPProcessor) logRouteLeak(prefix string, path []uint32) {
 
 func (p *BGPProcessor) isTier1(asn uint32) bool {
 	switch asn {
-	case 174, 209, 701, 1239, 1299, 2828, 2914, 3257, 3320, 3356, 3549, 3561, 4134, 5511, 6453, 6461, 6762, 7018, 12956:
+	case 209, 701, 1239, 1299, 2828, 2914, 3257, 3320, 3356, 3491, 3549, 3561, 5511, 6453, 6461, 6762, 6830, 7018, 12956: // global Tier-1s
+		return true
+	case 4134, 4809, 4837, 7473, 174, 6939, 9002, 1273, 4637, 7922: // regional Tier-1s
 		return true
 	default:
 		return false
@@ -827,7 +829,7 @@ func (p *BGPProcessor) isTier1(asn uint32) bool {
 
 func (p *BGPProcessor) isCloud(asn uint32) bool {
 	switch asn {
-	case 13335, 15169, 16509, 14618, 20940, 8075, 32934:
+	case 13335, 15169, 16509, 14618, 20940, 8075, 32934, 31898, 40027, 36040: // Major cloud providers
 		return true
 	default:
 		return false
