@@ -309,24 +309,6 @@ func (p *BGPProcessor) cleanupRecentlySeen(now time.Time) {
 	}
 }
 
-func (p *BGPProcessor) saveState(prefix string, state *bgpproto.PrefixState) {
-	if p.stateDB == nil || p.isStopping() {
-		return
-	}
-	data, err := proto.Marshal(state)
-	if err != nil {
-		log.Printf("Error marshaling prefix state: %v", err)
-		return
-	}
-
-	// Fast clone of prefix/data to write asynchronously
-	go func(key string, val []byte) {
-		if err := p.stateDB.BatchInsertRaw(map[string][]byte{key: val}); err != nil {
-			log.Printf("Error saving prefix state: %v", err)
-		}
-	}(prefix, data)
-}
-
 func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals map[uint32]struct {
 	Time   time.Time
 	Prefix string
