@@ -820,9 +820,9 @@ func (p *BGPProcessor) findCriticalAnomaly(prefix string, s prefixStats, elapsed
 }
 
 func (p *BGPProcessor) findBadAnomaly(s prefixStats, elapsed, perPeerRate float64) (Level2EventType, bool) {
-	isAggFlap := s.totalAgg > 5 && float64(s.totalAgg)/elapsed > 0.02
-	isNextHopOsc := len(s.uniqueHops) > 1 && s.totalHop >= 3 && s.totalPath <= 1
-	isLinkFlap := s.totalWith > 3 && float64(s.totalAnn)/float64(s.totalWith) < 3.0
+	isAggFlap := s.totalAgg >= 10 && float64(s.totalAgg)/elapsed > 0.05
+	isNextHopOsc := len(s.uniqueHops) > 1 && s.totalHop >= 10 && s.totalPath <= 2
+	isLinkFlap := s.totalWith >= 5 && float64(s.totalAnn)/float64(s.totalWith) < 2.0
 
 	if isAggFlap {
 		return Level2AggFlap, true
@@ -835,16 +835,16 @@ func (p *BGPProcessor) findBadAnomaly(s prefixStats, elapsed, perPeerRate float6
 	}
 
 	// Babbling is the catch-all for "Bad" high volume activity
-	if perPeerRate >= 1.5 && s.totalMsgs >= 10 && s.totalPath == 0 && s.totalComm == 0 && s.totalMed == 0 && s.totalLP == 0 && s.totalAgg == 0 && s.totalHop == 0 {
+	if perPeerRate >= 2.0 && s.totalMsgs >= 20 && s.totalPath == 0 && s.totalComm == 0 && s.totalMed == 0 && s.totalLP == 0 && s.totalAgg == 0 && s.totalHop == 0 {
 		return Level2Babbling, true
 	}
 	return Level2None, false
 }
 
 func (p *BGPProcessor) findNormalAnomaly(s prefixStats, elapsed float64) (Level2EventType, bool) {
-	isPathHunting := s.totalAnn >= 2 && s.totalIncreases >= 1 && s.totalWith >= 1
-	isPolicyChurn := s.totalComm >= 3 || (s.totalPath >= 3 && s.totalIncreases+s.totalDecreases <= 1) || (s.totalMed+s.totalLP >= 2 && s.totalPath <= 2)
-	isPathLengthOsc := (s.totalIncreases+s.totalDecreases) >= 2 && float64(s.totalIncreases+s.totalDecreases)/elapsed > 0.005
+	isPathHunting := s.totalAnn >= 5 && s.totalIncreases >= 2 && s.totalWith >= 1
+	isPolicyChurn := s.totalComm >= 10 || (s.totalPath >= 10 && s.totalIncreases+s.totalDecreases <= 2) || (s.totalMed+s.totalLP >= 5 && s.totalPath <= 5)
+	isPathLengthOsc := (s.totalIncreases+s.totalDecreases) >= 5 && float64(s.totalIncreases+s.totalDecreases)/elapsed > 0.01
 
 	if isPathHunting {
 		return Level2PathHunting, true
@@ -856,9 +856,9 @@ func (p *BGPProcessor) findNormalAnomaly(s prefixStats, elapsed float64) (Level2
 		return Level2PathLengthOscillation, true
 	}
 
-	// Discovery as the catch-all for high volume activity (>= 30 messages)
+	// Discovery as the catch-all for high volume activity (>= 100 messages)
 	// that didn't match any "Bad" anomaly or specific "Normal" pattern.
-	if s.totalMsgs >= 30 {
+	if s.totalMsgs >= 100 {
 		return Level2Discovery, true
 	}
 	return Level2None, false

@@ -38,7 +38,7 @@ func runClassificationTest(t *testing.T, name string, expect Level2EventType, st
 
 func TestClassification(t *testing.T) {
 	runClassificationTest(t, "Babbling", Level2Babbling, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 11; i++ {
+		for i := 0; i < 21; i++ {
 			classify("1.1.1.0/24", &MessageContext{
 				Peer: "peer1", PathStr: "[100 200]", Now: now.Add(time.Duration(i) * time.Second),
 			})
@@ -54,7 +54,7 @@ func TestClassification(t *testing.T) {
 	})
 
 	runClassificationTest(t, "Discovery (Catch-all)", Level2Discovery, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 31; i++ {
+		for i := 0; i < 101; i++ {
 			classify("11.11.11.0/24", &MessageContext{
 				Peer: fmt.Sprintf("peer%d", i), PathStr: "[100 200]", Now: now.Add(time.Duration(i*5) * time.Second),
 			})
@@ -98,10 +98,11 @@ func TestClassification(t *testing.T) {
 		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300]", PathLen: 3, Now: now.Add(60 * time.Second)})
 		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300 400]", PathLen: 4, Now: now.Add(90 * time.Second)})
 		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300 400 500]", PathLen: 5, Now: now.Add(120 * time.Second)})
+		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300 400 500 600]", PathLen: 6, Now: now.Add(150 * time.Second)})
 	})
 
 	runClassificationTest(t, "Policy Churn", Level2PolicyChurn, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 6; i++ {
+		for i := 0; i < 11; i++ {
 			classify("7.7.7.0/24", &MessageContext{
 				Peer: "p1", PathStr: "[100]", CommStr: fmt.Sprintf("[[100:%d]]", i), Now: now.Add(time.Duration(i*25) * time.Second),
 			})
@@ -132,14 +133,14 @@ func TestClassification(t *testing.T) {
 	})
 
 	runClassificationTest(t, "Next-Hop Flap", Level2NextHopOscillation, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 10; i++ {
-			peer := fmt.Sprintf("peer%d", i%5)
+		for i := 0; i < 15; i++ {
 			classify("10.10.10.0/24", &MessageContext{
-				Peer: peer, PathStr: "[100]", NextHop: fmt.Sprintf("1.1.1.%d", i%2), Now: now.Add(time.Duration(i*10) * time.Second),
+				Peer: "peer1", PathStr: "[100]", NextHop: fmt.Sprintf("1.1.1.%d", i%2), Now: now.Add(time.Duration(i*10) * time.Second),
 			})
 		}
+		// Second peer to trigger len(uniqueHops) > 1
 		classify("10.10.10.0/24", &MessageContext{
-			Peer: "peer0", PathStr: "[100]", NextHop: "1.1.1.0", Now: now.Add(130 * time.Second),
+			Peer: "peer2", PathStr: "[100]", NextHop: "2.2.2.2", Now: now.Add(160 * time.Second),
 		})
 	})
 }
