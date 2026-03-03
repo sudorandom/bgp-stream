@@ -125,15 +125,15 @@ type BGPProcessor struct {
 	rpki         *utils.RPKIManager
 	onEvent      BGPEventCallback
 	prefixToIP   PrefixToIPConverter
-	recentlySeen map[uint32]struct {
+	recentlySeen *utils.LRUCache[uint32, struct {
 		Time time.Time
 		Type EventType
-	}
+	}]
 
 	level2Stats          map[Level2EventType]int
 	level2UniquePrefixes map[Level2EventType]map[string]struct{}
 	totalLevel2Events    int
-	prefixStates         map[string]*bgpproto.PrefixState
+	prefixStates         *utils.LRUCache[string, *bgpproto.PrefixState]
 
 	stateWriteQueue  chan map[string]*bgpproto.PrefixState
 	stateDeleteQueue chan string
@@ -141,9 +141,6 @@ type BGPProcessor struct {
 	mu       sync.Mutex
 	url      string
 	stopping atomic.Bool
-
-	RecentlySeenResets atomic.Uint64
-	PrefixStateResets  atomic.Uint64
 }
 
 func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnMapping *utils.ASNMapping, rpki *utils.RPKIManager, prefixToIP PrefixToIPConverter, onEvent BGPEventCallback) *BGPProcessor {
@@ -155,13 +152,13 @@ func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnM
 		rpki:       rpki,
 		onEvent:    onEvent,
 		prefixToIP: prefixToIP,
-		recentlySeen: make(map[uint32]struct {
+		recentlySeen: utils.NewLRUCache[uint32, struct {
 			Time time.Time
 			Type EventType
-		}),
+		}](1000000),
 		level2Stats:          make(map[Level2EventType]int),
 		level2UniquePrefixes: make(map[Level2EventType]map[string]struct{}),
-		prefixStates:         make(map[string]*bgpproto.PrefixState),
+		prefixStates:         utils.NewLRUCache[string, *bgpproto.PrefixState](1000000),
 		stateWriteQueue:      make(chan map[string]*bgpproto.PrefixState, 200),
 		stateDeleteQueue:     make(chan string, 2000),
 		url:                  "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream",
@@ -326,10 +323,10 @@ func (p *BGPProcessor) startWithdrawalPacer(pendingWithdrawals map[uint32]struct
 				if now.After(entry.Time) {
 					if lat, lng, cc, resType := p.geo(ip); cc != "" {
 						p.onEvent(lat, lng, cc, EventWithdrawal, Level2None, entry.Prefix, 0)
-						p.recentlySeen[ip] = struct {
+						p.recentlySeen.Add(ip, struct {
 							Time time.Time
 							Type EventType
-						}{Time: now, Type: EventWithdrawal}
+						}{Time: now, Type: EventWithdrawal})
 					} else {
 						log.Printf("[GEO-DEBUG] Unknown prefix (withdrawal): %s, Resolution: %s", entry.Prefix, resType)
 					}
@@ -338,56 +335,12 @@ func (p *BGPProcessor) startWithdrawalPacer(pendingWithdrawals map[uint32]struct
 			}
 
 			ticks++
-			var batch map[string]*bgpproto.PrefixState
-			if ticks >= 30 {
-				ticks = 0
-				batch = p.cleanupRecentlySeen()
-			}
 			p.mu.Unlock()
-
-			if len(batch) > 0 {
-				p.stateWriteQueue <- batch
-			}
 		}
 	}()
 }
 
-func (p *BGPProcessor) cleanupRecentlySeen() map[string]*bgpproto.PrefixState {
-	if len(p.recentlySeen) > 1000000 {
-		p.RecentlySeenResets.Add(1)
-		p.recentlySeen = make(map[uint32]struct {
-			Time time.Time
-			Type EventType
-		})
-	}
-
-	batch := make(map[string]*bgpproto.PrefixState)
-	if len(p.prefixStates) > 1000000 {
-		p.PrefixStateResets.Add(1)
-		p.prefixStates = make(map[string]*bgpproto.PrefixState)
-	}
-
-	return batch
-}
-
 func (p *BGPProcessor) ReportProcessorMetrics() {
-	seenResets := p.RecentlySeenResets.Swap(0)
-	stateResets := p.PrefixStateResets.Swap(0)
-
-	if seenResets > 0 || stateResets > 0 {
-		var sb strings.Builder
-		sb.WriteString("[PROC-STATS]")
-		if seenResets > 0 {
-			fmt.Fprintf(&sb, " SeenResets: %d", seenResets)
-		}
-		if stateResets > 0 {
-			if seenResets > 0 {
-				sb.WriteString(",")
-			}
-			fmt.Fprintf(&sb, " StateResets: %d", stateResets)
-		}
-		log.Println(sb.String())
-	}
 }
 
 func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals map[uint32]struct {
@@ -466,7 +419,7 @@ func (p *BGPProcessor) handleWithdrawals(withdrawals []string, originASN uint32,
 			continue
 		}
 
-		if last, ok := p.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
+		if last, ok := p.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
 			events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, level2Type: Level2None})
 			continue
 		}
@@ -506,24 +459,24 @@ func (p *BGPProcessor) processAnnouncement(prefix string, originASN uint32, now 
 		return pendingEvent{}, false
 	}
 
-	if last, ok := p.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
-		p.recentlySeen[ip] = struct {
+	if last, ok := p.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
+		p.recentlySeen.Add(ip, struct {
 			Time time.Time
 			Type EventType
-		}{Time: now, Type: EventUpdate}
+		}{Time: now, Type: EventUpdate})
 		return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventUpdate, level2Type: Level2None}, true
 	}
 
-	if last, ok := p.recentlySeen[ip]; ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
+	if last, ok := p.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
 		return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, level2Type: Level2None}, true
 	}
 
 	if _, ok := pendingWithdrawals[ip]; ok {
 		delete(pendingWithdrawals, ip)
-		p.recentlySeen[ip] = struct {
+		p.recentlySeen.Add(ip, struct {
 			Time time.Time
 			Type EventType
-		}{Time: now, Type: EventUpdate}
+		}{Time: now, Type: EventUpdate})
 		return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventUpdate, level2Type: Level2None}, true
 	}
 
@@ -543,10 +496,10 @@ func (p *BGPProcessor) handleNewOrUpdate(prefix string, ip, originASN uint32, no
 		eventType = EventNew
 	}
 
-	p.recentlySeen[ip] = struct {
+	p.recentlySeen.Add(ip, struct {
 		Time time.Time
 		Type EventType
-	}{Time: now, Type: eventType}
+	}{Time: now, Type: eventType})
 
 	return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: eventType, level2Type: Level2None}, true
 }
@@ -555,7 +508,7 @@ func (p *BGPProcessor) classifyEvent(prefix string, ctx *MessageContext) (pendin
 	if strings.Contains(prefix, ":") {
 		return pendingEvent{}, false
 	}
-	state, ok := p.prefixStates[prefix]
+	state, ok := p.prefixStates.Get(prefix)
 	if !ok {
 		// Try to load from stateDB
 		if p.stateDB != nil {
@@ -576,7 +529,7 @@ func (p *BGPProcessor) classifyEvent(prefix string, ctx *MessageContext) (pendin
 				StartTimeTs:   ctx.Now.Unix(),
 			}
 		}
-		p.prefixStates[prefix] = state
+		p.prefixStates.Add(prefix, state)
 	}
 
 	state.LastUpdateTs = ctx.Now.Unix()
