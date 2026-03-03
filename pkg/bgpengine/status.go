@@ -944,7 +944,7 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 	}
 
 	for et, prefixes := range e.currentAnomalies {
-		_, name := e.getLevel2Visuals(et)
+		_, name := e.getClassificationVisuals(et)
 		prio := e.GetPriority(name)
 
 		for p, count := range prefixes {
@@ -963,7 +963,7 @@ func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 			// Only upgrade the classification if it's higher priority
 			if name != "" && (v.ClassificationName == "" || prio > e.GetPriority(v.ClassificationName)) {
 				v.ClassificationName = name
-				v.ClassificationColor, _ = e.getLevel2Visuals(et)
+				v.ClassificationColor, _ = e.getClassificationVisuals(et)
 			}
 
 			// Aggregate counts across categories for this prefix

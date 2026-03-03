@@ -201,8 +201,8 @@ type Engine struct {
 
 	prefixImpactHistory []map[string]int
 	prefixToASN         map[string]uint32
-	prefixToLevel2      map[string]Level2EventType
-	currentAnomalies    map[Level2EventType]map[string]int
+	prefixToClassification      map[string]ClassificationType
+	currentAnomalies    map[ClassificationType]map[string]int
 	VisualImpact        map[string]*VisualImpact
 	ActiveImpacts       []*VisualImpact
 	ActiveASNImpacts    []*ASNImpact
@@ -356,8 +356,8 @@ func NewEngine(width, height int, scale float64) *Engine {
 		lastMetricsUpdate:   time.Now(),
 		VisualHubs:          make(map[string]*VisualHub),
 		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 20s = 20 mins
-		prefixToLevel2:      make(map[string]Level2EventType),
-		currentAnomalies:    make(map[Level2EventType]map[string]int),
+		prefixToClassification:      make(map[string]ClassificationType),
+		currentAnomalies:    make(map[ClassificationType]map[string]int),
 		VisualImpact:        make(map[string]*VisualImpact),
 		impactMap:           make(map[string]*VisualImpact),
 		countMap:            make(map[string]*PrefixCount),
@@ -1067,7 +1067,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 
 func (e *Engine) Layout(w, h int) (width, height int) { return e.Width, e.Height }
 
-func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, level2Type Level2EventType, prefix string, asn uint32) {
+func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
 	e.metricsMu.Lock()
 	defer e.metricsMu.Unlock()
 
@@ -1092,16 +1092,16 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 		}
 
 		// Track all anomalies and patterns
-		e.prefixToLevel2[prefix] = level2Type
+		e.prefixToClassification[prefix] = classificationType
 
 		// If this is an announcement, clear any existing Outage classification for this prefix
 		if eventType == EventNew || eventType == EventUpdate || eventType == EventGossip {
-			if prefixes, ok := e.currentAnomalies[Level2Outage]; ok {
+			if prefixes, ok := e.currentAnomalies[ClassificationOutage]; ok {
 				delete(prefixes, prefix)
 			}
 		}
 
-		if actualType, ok := e.prefixToLevel2[prefix]; ok {
+		if actualType, ok := e.prefixToClassification[prefix]; ok {
 			if e.currentAnomalies[actualType] == nil {
 				e.currentAnomalies[actualType] = make(map[string]int)
 			}
@@ -1115,7 +1115,7 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 	}
 
 	// 3. Determine color and name based on Level 2 type
-	c, name := e.getLevel2Visuals(level2Type)
+	c, name := e.getClassificationVisuals(classificationType)
 
 	// 4. Buffer city activity
 	e.incrementCityBuffer(lat, lng, c)
@@ -1126,7 +1126,7 @@ func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, l
 	}
 
 	// 6. Update windowed metrics (this drives the dashboard numbers)
-	e.updateWindowedMetrics(eventType, level2Type, prefix, asn)
+	e.updateWindowedMetrics(eventType, classificationType, prefix, asn)
 }
 
 func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
@@ -1210,29 +1210,29 @@ func (e *Engine) incrementCityBuffer(lat, lng float64, c color.RGBA) {
 	b.Counts[c]++
 }
 
-func (e *Engine) getLevel2Visuals(level2Type Level2EventType) (visualColor color.RGBA, classificationName string) {
-	switch level2Type {
-	case Level2None:
+func (e *Engine) getClassificationVisuals(classificationType ClassificationType) (visualColor color.RGBA, classificationName string) {
+	switch classificationType {
+	case ClassificationNone:
 		return ColorDiscovery, nameDiscovery
-	case Level2Discovery:
+	case ClassificationDiscovery:
 		return ColorDiscovery, nameDiscovery
-	case Level2PolicyChurn:
+	case ClassificationPolicyChurn:
 		return ColorPolicy, namePolicyChurn
-	case Level2PathLengthOscillation:
+	case ClassificationPathLengthOscillation:
 		return ColorPolicy, namePathOscillation
-	case Level2PathHunting:
+	case ClassificationPathHunting:
 		return ColorPolicy, namePathHunting
-	case Level2LinkFlap:
+	case ClassificationLinkFlap:
 		return ColorBad, nameLinkFlap
-	case Level2Babbling:
+	case ClassificationBabbling:
 		return ColorBad, nameBabbling
-	case Level2AggFlap:
+	case ClassificationAggFlap:
 		return ColorBad, nameAggFlap
-	case Level2NextHopOscillation:
+	case ClassificationNextHopOscillation:
 		return ColorBad, nameNextHopFlap
-	case Level2Outage:
+	case ClassificationOutage:
 		return ColorOutage, nameHardOutage
-	case Level2RouteLeak:
+	case ClassificationRouteLeak:
 		return ColorCritical, nameRouteLeak
 	default:
 		return color.RGBA{}, ""
@@ -1280,27 +1280,27 @@ func (e *Engine) updateHierarchicalRates(prefix, name string, c color.RGBA) {
 	}
 }
 
-func (e *Engine) updateWindowedMetrics(eventType EventType, level2Type Level2EventType, prefix string, asn uint32) {
-	switch level2Type {
-	case Level2LinkFlap:
+func (e *Engine) updateWindowedMetrics(eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+	switch classificationType {
+	case ClassificationLinkFlap:
 		e.windowLinkFlap++
-	case Level2AggFlap:
+	case ClassificationAggFlap:
 		e.windowAggFlap++
-	case Level2PathLengthOscillation:
+	case ClassificationPathLengthOscillation:
 		e.windowOscill++
-	case Level2Babbling:
+	case ClassificationBabbling:
 		e.windowBabbling++
-	case Level2PathHunting:
+	case ClassificationPathHunting:
 		e.windowHunting++
-	case Level2PolicyChurn:
+	case ClassificationPolicyChurn:
 		e.windowTE++
-	case Level2NextHopOscillation:
+	case ClassificationNextHopOscillation:
 		e.windowNextHop++
-	case Level2Outage:
+	case ClassificationOutage:
 		e.windowOutage++
-	case Level2RouteLeak:
+	case ClassificationRouteLeak:
 		e.windowLeak++
-	case Level2None, Level2Discovery:
+	case ClassificationNone, ClassificationDiscovery:
 		e.windowGlobal++
 	}
 

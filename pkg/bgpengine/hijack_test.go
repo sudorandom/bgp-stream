@@ -40,7 +40,7 @@ func TestHijackDetection(t *testing.T) {
 		name       string
 		prefix     string
 		updates    []*MessageContext
-		expectAnom Level2EventType
+		expectAnom ClassificationType
 		setup      func(p *BGPProcessor)
 	}
 
@@ -53,7 +53,7 @@ func TestHijackDetection(t *testing.T) {
 				{Peer: "p2", Host: "rrc00", OriginASN: 100, Now: now.Add(time.Second)},
 				{Peer: "p3", Host: "rrc01", OriginASN: 100, Now: now.Add(2 * time.Second)},
 			},
-			expectAnom: Level2None,
+			expectAnom: ClassificationNone,
 		},
 		{
 			name:   "Single Peer RPKI Invalid (Noise/Leak)",
@@ -61,7 +61,7 @@ func TestHijackDetection(t *testing.T) {
 			updates: []*MessageContext{
 				{Peer: "p1", Host: "rrc00", OriginASN: 666, Now: now},
 			},
-			expectAnom: Level2None,
+			expectAnom: ClassificationNone,
 		},
 		{
 			name:   "Transition Hijack (High Signal)",
@@ -73,7 +73,7 @@ func TestHijackDetection(t *testing.T) {
 				{Peer: "p4", Host: "rrc01", OriginASN: 666, Now: now.Add(3 * time.Second)},
 				{Peer: "p5", Host: "rrc02", OriginASN: 666, Now: now.Add(4 * time.Second)},
 			},
-			expectAnom: Level2RouteLeak,
+			expectAnom: ClassificationRouteLeak,
 			setup: func(p *BGPProcessor) {
 				// Prefix was previously seen as AS100
 				asnBytes := make([]byte, 4)
@@ -91,7 +91,7 @@ func TestHijackDetection(t *testing.T) {
 				{Peer: "p4", Host: "rrc00", OriginASN: 666, Now: now.Add(3 * time.Second)},
 				{Peer: "p5", Host: "rrc00", OriginASN: 666, Now: now.Add(4 * time.Second)},
 			},
-			expectAnom: Level2None, // Fails because all from same host
+			expectAnom: ClassificationNone, // Fails because all from same host
 			setup: func(p *BGPProcessor) {
 				asnBytes := make([]byte, 4)
 				binary.BigEndian.PutUint32(asnBytes, 100)
@@ -108,7 +108,7 @@ func TestHijackDetection(t *testing.T) {
 				{Peer: "p4", Host: "rrc01", OriginASN: 666, Now: now.Add(3 * time.Second)},
 				{Peer: "p5", Host: "rrc02", OriginASN: 666, Now: now.Add(4 * time.Second)},
 			},
-			expectAnom: Level2None, // Fails because it was already seen as AS666
+			expectAnom: ClassificationNone, // Fails because it was already seen as AS666
 			setup: func(p *BGPProcessor) {
 				asnBytes := make([]byte, 4)
 				binary.BigEndian.PutUint32(asnBytes, 666)
@@ -124,7 +124,7 @@ func TestHijackDetection(t *testing.T) {
 				{Peer: "p3", Host: "rrc01", OriginASN: 999, Now: now.Add(2 * time.Second)},
 				{Peer: "p4", Host: "rrc01", OriginASN: 999, Now: now.Add(3 * time.Second)},
 			},
-			expectAnom: Level2None,
+			expectAnom: ClassificationNone,
 		},
 		{
 			name:   "Sibling ASN Leak (Suppressed)",
@@ -135,7 +135,7 @@ func TestHijackDetection(t *testing.T) {
 				{Peer: "p2", Host: "rrc00", PathStr: "[3356 1221 4637]", Now: now.Add(time.Second)},
 				{Peer: "p3", Host: "rrc01", PathStr: "[3356 1221 4637]", Now: now.Add(2 * time.Second)},
 			},
-			expectAnom: Level2None,
+			expectAnom: ClassificationNone,
 			setup: func(p *BGPProcessor) {
 				// Mock siblings
 				p.asnMapping = utils.NewASNMapping() // Fresh mapping
@@ -152,7 +152,7 @@ func TestHijackDetection(t *testing.T) {
 				{Peer: "p2", Host: "rrc00", PathStr: "[1299 23764 4809]", Now: now.Add(time.Second)},
 				{Peer: "p3", Host: "rrc01", PathStr: "[1299 23764 4809]", Now: now.Add(2 * time.Second)},
 			},
-			expectAnom: Level2None,
+			expectAnom: ClassificationNone,
 			setup: func(p *BGPProcessor) {
 				// Use the actual Load() which now includes hardcoded China Telecom siblings
 				p.asnMapping = utils.NewASNMapping()
@@ -163,10 +163,10 @@ func TestHijackDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var lastAnom Level2EventType
-			onEvent := func(lat, lng float64, cc string, eventType EventType, level2Type Level2EventType, prefix string, asn uint32) {
-				if level2Type != Level2None {
-					lastAnom = level2Type
+			var lastAnom ClassificationType
+			onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+				if classificationType != ClassificationNone {
+					lastAnom = classificationType
 				}
 			}
 
@@ -187,8 +187,8 @@ func TestHijackDetection(t *testing.T) {
 			}
 
 			for _, ctx := range tt.updates {
-				if e, ok := p.classifyEvent(tt.prefix, ctx); ok {
-					p.onEvent(0, 0, "US", e.eventType, e.level2Type, e.prefix, e.asn)
+				if e, ok := p.classifier.classifyEvent(tt.prefix, ctx); ok {
+					p.onEvent(0, 0, "US", e.eventType, e.classificationType, e.prefix, e.asn)
 				}
 			}
 

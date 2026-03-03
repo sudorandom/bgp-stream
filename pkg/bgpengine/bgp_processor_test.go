@@ -9,7 +9,7 @@ import (
 
 func TestBGPProcessorDeduplication(t *testing.T) {
 	events := 0
-	onEvent := func(lat, lng float64, cc string, eventType EventType, level2Type Level2EventType, prefix string, asn uint32) {
+	onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
 		events++
 	}
 	geo := func(ip uint32) (float64, float64, string, geoservice.ResolutionType) {
@@ -24,7 +24,7 @@ func TestBGPProcessorDeduplication(t *testing.T) {
 
 	// Simulate receiving a Withdrawal followed by Announcement (Path Change)
 	p.mu.Lock()
-	p.onEvent(37.0, -122.0, "US", EventNew, Level2None, "8.8.8.0/24", 0) // Initial discovery
+	p.onEvent(37.0, -122.0, "US", EventNew, ClassificationNone, "8.8.8.0/24", 0) // Initial discovery
 	p.recentlySeen.Add(0x08080808, struct {
 		Time time.Time
 		Type EventType
@@ -39,7 +39,7 @@ func TestBGPProcessorDeduplication(t *testing.T) {
 	p.mu.Lock()
 	// Simulate what would happen in ris_message handler
 	if last, ok := p.recentlySeen.Get(0x08080808); ok && time.Since(last.Time) < 15*time.Second {
-		p.onEvent(37.0, -122.0, "US", EventGossip, Level2None, "8.8.8.0/24", 0)
+		p.onEvent(37.0, -122.0, "US", EventGossip, ClassificationNone, "8.8.8.0/24", 0)
 	}
 	p.mu.Unlock()
 
