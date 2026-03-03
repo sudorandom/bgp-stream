@@ -723,7 +723,7 @@ func (p *BGPProcessor) evaluatePrefixState(prefix string, state *bgpproto.Prefix
 		return pendingEvent{}, false
 	}
 
-	eventType, classified := p.findClassification(prefix, state, stats, elapsed, ctx)
+	eventType, classified := p.findClassification(prefix, state, &stats, elapsed, ctx)
 
 	if classified {
 		if state.ClassifiedType != 0 {
@@ -811,7 +811,7 @@ func (p *BGPProcessor) aggregateRecentBuckets(state *bgpproto.PrefixState, now t
 	return s
 }
 
-func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixState, s prefixStats, elapsed float64, ctx *MessageContext) (Level2EventType, bool) {
+func (p *BGPProcessor) findClassification(prefix string, state *bgpproto.PrefixState, s *prefixStats, elapsed float64, ctx *MessageContext) (Level2EventType, bool) {
 	numPeers := float64(len(state.PeerLastAttrs))
 	if numPeers == 0 {
 		numPeers = 1
@@ -847,7 +847,7 @@ func (p *BGPProcessor) getHistoricalASN(prefix string) uint32 {
 	return binary.BigEndian.Uint32(val)
 }
 
-func (p *BGPProcessor) findCriticalAnomaly(prefix string, s prefixStats, elapsed float64, ctx *MessageContext) (Level2EventType, bool) {
+func (p *BGPProcessor) findCriticalAnomaly(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (Level2EventType, bool) {
 	if s.totalWith >= 3 && s.totalAnn == 0 && elapsed > 60 {
 		return Level2Outage, true
 	}
@@ -881,7 +881,7 @@ func (p *BGPProcessor) findCriticalAnomaly(prefix string, s prefixStats, elapsed
 	}
 
 	// 2. AS Path Valley-Free Check (The Heuristic)
-	if segment, ok := p.hasRouteLeak(prefix, ctx); ok {
+	if segment, ok := p.hasRouteLeak(ctx); ok {
 		// Consensus requirement for path violations to filter out terminal edge/collector leaks.
 		// If we see a Tier-1 -> Stub -> Tier-1 path from multiple vantage points,
 		// it is highly likely to be a real traffic-impacting leak.
@@ -932,7 +932,7 @@ func (p *BGPProcessor) isDDoSProvider(asn uint32) bool {
 	return scrubbers[asn]
 }
 
-func (p *BGPProcessor) hasRouteLeak(prefix string, ctx *MessageContext) ([3]uint32, bool) {
+func (p *BGPProcessor) hasRouteLeak(ctx *MessageContext) ([3]uint32, bool) {
 	if ctx.PathStr == "" {
 		return [3]uint32{}, false
 	}
@@ -1026,7 +1026,7 @@ func (p *BGPProcessor) isCloud(asn uint32) bool {
 	}
 }
 
-func (p *BGPProcessor) findBadAnomaly(s prefixStats, elapsed, perPeerRate float64) (Level2EventType, bool) {
+func (p *BGPProcessor) findBadAnomaly(s *prefixStats, elapsed, perPeerRate float64) (Level2EventType, bool) {
 	isAggFlap := s.totalAgg >= 10 && float64(s.totalAgg)/elapsed > 0.05
 	isNextHopOsc := len(s.uniqueHops) > 1 && s.totalHop >= 10 && s.totalPath <= 2
 	isLinkFlap := s.totalWith >= 5 && float64(s.totalAnn)/float64(s.totalWith) < 2.0
@@ -1048,7 +1048,7 @@ func (p *BGPProcessor) findBadAnomaly(s prefixStats, elapsed, perPeerRate float6
 	return Level2None, false
 }
 
-func (p *BGPProcessor) findNormalAnomaly(s prefixStats, elapsed float64) (Level2EventType, bool) {
+func (p *BGPProcessor) findNormalAnomaly(s *prefixStats, elapsed float64) (Level2EventType, bool) {
 	isPathHunting := s.totalAnn >= 5 && s.totalIncreases >= 2 && s.totalWith >= 1
 	isPolicyChurn := s.totalComm >= 10 || (s.totalPath >= 10 && s.totalIncreases+s.totalDecreases <= 2) || (s.totalMed+s.totalLP >= 5 && s.totalPath <= 5)
 	isPathLengthOsc := (s.totalIncreases+s.totalDecreases) >= 5 && float64(s.totalIncreases+s.totalDecreases)/elapsed > 0.01

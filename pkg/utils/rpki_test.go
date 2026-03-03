@@ -8,13 +8,18 @@ import (
 
 func TestRPKIManager_Validate(t *testing.T) {
 	dbPath := "test-rpki.db"
-	defer os.RemoveAll(dbPath)
+	_ = os.RemoveAll(dbPath)
+	defer func() {
+		_ = os.RemoveAll(dbPath)
+	}()
 
 	m, err := NewRPKIManager(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create RPKIManager: %v", err)
 	}
-	defer m.Close()
+	defer func() {
+		_ = m.Close()
+	}()
 
 	// Setup mock VRPs
 	vrpData := map[string][]VRP{

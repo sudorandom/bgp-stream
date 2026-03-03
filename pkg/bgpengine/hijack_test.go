@@ -14,18 +14,25 @@ import (
 func TestHijackDetection(t *testing.T) {
 	dbPath := "test-rpki-hijack.db"
 	_ = os.RemoveAll(dbPath)
-	defer os.RemoveAll(dbPath)
+	defer func() {
+		_ = os.RemoveAll(dbPath)
+	}()
 
 	rpki, err := utils.NewRPKIManager(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create RPKIManager: %v", err)
 	}
-	defer rpki.Close()
+	defer func() {
+		_ = rpki.Close()
+	}()
 
 	// Setup mock VRP for 1.1.1.0/24 owned by AS100
 	vrp := []utils.VRP{{Prefix: "1.1.1.0/24", MaxLength: 24, ASN: 100}}
 	b, _ := json.Marshal(vrp)
-	utils.SetVRPInTrie(rpki, "1.1.1.0/24", b)
+	// Directly insert into the trie since we don't have a mock Sync
+	if err := utils.SetVRPInTrie(rpki, "1.1.1.0/24", b); err != nil {
+		t.Fatalf("Failed to set mock VRP: %v", err)
+	}
 
 	now := time.Now().Truncate(time.Hour)
 
@@ -71,7 +78,7 @@ func TestHijackDetection(t *testing.T) {
 				// Prefix was previously seen as AS100
 				asnBytes := make([]byte, 4)
 				binary.BigEndian.PutUint32(asnBytes, 100)
-				p.seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
+				_ = p.seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
 			},
 		},
 		{
@@ -88,7 +95,7 @@ func TestHijackDetection(t *testing.T) {
 			setup: func(p *BGPProcessor) {
 				asnBytes := make([]byte, 4)
 				binary.BigEndian.PutUint32(asnBytes, 100)
-				p.seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
+				_ = p.seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
 			},
 		},
 		{
@@ -105,7 +112,7 @@ func TestHijackDetection(t *testing.T) {
 			setup: func(p *BGPProcessor) {
 				asnBytes := make([]byte, 4)
 				binary.BigEndian.PutUint32(asnBytes, 666)
-				p.seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
+				_ = p.seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
 			},
 		},
 		{
@@ -149,7 +156,7 @@ func TestHijackDetection(t *testing.T) {
 			setup: func(p *BGPProcessor) {
 				// Use the actual Load() which now includes hardcoded China Telecom siblings
 				p.asnMapping = utils.NewASNMapping()
-				p.asnMapping.Load()
+				_ = p.asnMapping.Load()
 			},
 		},
 	}
@@ -167,7 +174,7 @@ func TestHijackDetection(t *testing.T) {
 			_ = os.RemoveAll(seenDBPath)
 			seenDB, _ := utils.OpenDiskTrie(seenDBPath)
 			defer func() {
-				seenDB.Close()
+				_ = seenDB.Close()
 				_ = os.RemoveAll(seenDBPath)
 			}()
 

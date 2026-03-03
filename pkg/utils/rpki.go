@@ -6,7 +6,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 type RPKIStatus int
@@ -39,7 +38,6 @@ type VRP struct {
 
 type RPKIManager struct {
 	trie *DiskTrie
-	mu   sync.RWMutex
 }
 
 func NewRPKIManager(dbPath string) (*RPKIManager, error) {
@@ -58,12 +56,16 @@ func (m *RPKIManager) Sync() error {
 	// Using a reliable public VRP export
 	url := "https://console.rpki-client.org/vrps.json"
 	log.Printf("[RPKI] Syncing VRPs from %s", url)
-	
+
 	r, err := GetCachedReader(url, true, "[RPKI]")
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() {
+		if err := r.Close(); err != nil {
+			log.Printf("Error closing RPKI reader: %v", err)
+		}
+	}()
 
 	var data struct {
 		VRPs []struct {

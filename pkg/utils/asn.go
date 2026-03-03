@@ -100,7 +100,11 @@ func (m *ASNMapping) loadCAIDA() error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() {
+		if err := r.Close(); err != nil {
+			log.Printf("Error closing CAIDA reader: %v", err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(r)
 	inASNSection := false
@@ -152,7 +156,11 @@ func (m *ASNMapping) loadThyme() error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() {
+		if err := r.Close(); err != nil {
+			log.Printf("Error closing Thyme ASN reader: %v", err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -190,7 +198,11 @@ func (m *ASNMapping) loadPeeringDB() error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() {
+		if err := r.Close(); err != nil {
+			log.Printf("Error closing PeeringDB ASN reader: %v", err)
+		}
+	}()
 
 	var response struct {
 		Data []struct {
