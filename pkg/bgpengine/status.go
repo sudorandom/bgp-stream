@@ -115,7 +115,7 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 		text.Draw(e.hubsBuffer, vh.RateStr, e.subMonoFace, e.textOp)
 	}
 
-	now := time.Now()
+	now := Now()
 	isHubUpdating := now.Sub(e.hubUpdatedAt) < 2*time.Second
 	hubIntensity := 0.0
 	if isHubUpdating {
@@ -281,7 +281,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 		}
 	}
 
-	now := time.Now()
+	now := Now()
 	isImpactUpdating := now.Sub(e.impactUpdatedAt) < 2*time.Second
 	impactIntensity := 0.0
 	if isImpactUpdating {
@@ -291,7 +291,7 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 }
 
 func (e *Engine) drawNowPlaying(screen *ebiten.Image, margin, boxW, fontSize float64, face *text.GoTextFace) {
-	now := time.Now()
+	now := Now()
 	if e.CurrentSong == "" {
 		return
 	}
@@ -682,14 +682,14 @@ func (e *Engine) StartMetricsLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	uiTicks := 0
 	logTicks := 0
-	lastUIUpdate := time.Now()
+	lastUIUpdate := Now()
 	firstRun := true
 
 	run := func() {
 		e.metricsMu.Lock()
 		defer e.metricsMu.Unlock()
 
-		now := time.Now()
+		now := Now()
 		interval := now.Sub(e.lastMetricsUpdate).Seconds()
 		if interval <= 0 {
 			interval = 1.0

@@ -19,7 +19,7 @@ func runClassificationTest(t *testing.T, name string, expect Level2EventType, st
 		p := NewBGPProcessor(func(uint32) (float64, float64, string, geoservice.ResolutionType) {
 			return 0, 0, "US", geoservice.ResGeoIP
 		}, nil, nil, nil, nil, func(string) uint32 { return 0 }, onEvent)
-		now := time.Now().Truncate(time.Hour)
+		now := Now().Truncate(time.Hour)
 
 		classify := func(prefix string, ctx *MessageContext) {
 			if e, ok := p.classifyEvent(prefix, ctx); ok {

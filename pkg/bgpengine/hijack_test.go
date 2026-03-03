@@ -34,7 +34,7 @@ func TestHijackDetection(t *testing.T) {
 		t.Fatalf("Failed to set mock VRP: %v", err)
 	}
 
-	now := time.Now().Truncate(time.Hour)
+	now := Now().Truncate(time.Hour)
 
 	type testCase struct {
 		name       string

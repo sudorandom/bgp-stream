@@ -3,7 +3,6 @@ package bgpengine
 import (
 	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
@@ -78,7 +77,7 @@ func BenchmarkDrawMap(b *testing.B) {
 	e.InitTrendlineTexture()
 
 	// Fill with pulses
-	now := time.Now()
+	now := Now()
 	for i := 0; i < 500; i++ {
 		e.pulses = append(e.pulses, &Pulse{
 			X:         rand.Float64() * float64(width),
@@ -107,7 +106,7 @@ func TestDrawMapAllocations(t *testing.T) {
 	e.InitTrendlineTexture()
 
 	// Fill with pulses
-	now := time.Now()
+	now := Now()
 	for i := 0; i < 500; i++ {
 		e.pulses = append(e.pulses, &Pulse{
 			X:         rand.Float64() * float64(width),

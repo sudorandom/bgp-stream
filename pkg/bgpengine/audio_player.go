@@ -182,12 +182,12 @@ func (p *AudioPlayer) streamTrack(d *mp3.Decoder, path string) error {
 	duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
 
 	buf := make([]byte, 8192)
-	startTime := time.Now()
+	startTime := Now()
 	var stoppingAt time.Time
 
 	for {
 		if p.isStopping && stoppingAt.IsZero() {
-			stoppingAt = time.Now()
+			stoppingAt = Now()
 		}
 
 		n, err := d.Read(buf)
@@ -236,11 +236,11 @@ func (p *AudioPlayer) playTrackLocally(d *mp3.Decoder, path string) error {
 	fadeDuration := 5 * time.Second
 	totalBytes := d.Length()
 	duration := time.Duration(totalBytes) * time.Second / time.Duration(d.SampleRate()*4)
-	startTime := time.Now()
+	startTime := Now()
 	var stoppingAt time.Time
 	for player.IsPlaying() {
 		if p.isStopping && stoppingAt.IsZero() {
-			stoppingAt = time.Now()
+			stoppingAt = Now()
 		}
 
 		vol := p.calculateVolume(startTime, duration, stoppingAt, fadeDuration)

@@ -319,7 +319,7 @@ func (p *BGPProcessor) startWithdrawalPacer(pendingWithdrawals map[uint32]struct
 		defer ticker.Stop()
 		ticks := 0
 		for range ticker.C {
-			now := time.Now()
+			now := Now()
 			p.mu.Lock()
 
 			for ip, entry := range pendingWithdrawals {
@@ -407,7 +407,7 @@ func (p *BGPProcessor) handleRISMessage(data *RISMessageData, pendingWithdrawals
 	}
 
 	var events []pendingEvent
-	now := time.Now()
+	now := Now()
 	events = append(events, p.handleWithdrawals(data.Withdrawals, originASN, now, pendingWithdrawals)...)
 	events = append(events, p.handleAnnouncements(data.Announcements, originASN, now, pendingWithdrawals)...)
 

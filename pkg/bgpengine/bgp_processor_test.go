@@ -28,7 +28,7 @@ func TestBGPProcessorDeduplication(t *testing.T) {
 	p.recentlySeen[0x08080808] = struct {
 		Time time.Time
 		Type EventType
-	}{Time: time.Now(), Type: EventNew}
+	}{Time: Now(), Type: EventNew}
 	p.mu.Unlock()
 
 	if events != 1 {

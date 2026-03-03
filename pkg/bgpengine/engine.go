@@ -228,6 +228,7 @@ type Engine struct {
 	MMDBFiles   []string
 
 	MinimalUI           bool
+	AnimationSpeed      float64
 	minimalUIKeyPressed bool
 
 	lastPerfLog time.Time
@@ -345,7 +346,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 			},
 		},
 		seenBuffer:          make(map[string]uint32),
-		nextPulseEmittedAt:  time.Now(),
+		nextPulseEmittedAt:  Now(),
 		fontSource:          s,
 		monoSource:          m,
 		countryActivity:     make(map[string]int),
@@ -353,7 +354,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 		hubChangedAt:        make(map[string]time.Time),
 		lastHubs:            make(map[string]int),
 		hubPosition:         make(map[string]int),
-		lastMetricsUpdate:   time.Now(),
+		lastMetricsUpdate:   Now(),
 		VisualHubs:          make(map[string]*VisualHub),
 		prefixImpactHistory: make([]map[string]int, 60), // 60 buckets * 20s = 20 mins
 		prefixToLevel2:      make(map[string]Level2EventType),
@@ -363,7 +364,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 		countMap:            make(map[string]*PrefixCount),
 		asnsPerClass:        make(map[string]map[uint32]struct{}),
 		asnGroups:           make(map[asnGroupKey]*asnGroup),
-		lastFrameCapturedAt: time.Now(),
+		lastFrameCapturedAt: Now(),
 		drawOp:              &ebiten.DrawImageOptions{},
 		textOp:              &text.DrawOptions{},
 		vectorDrawPathOp:    vector.DrawPathOptions{AntiAlias: true},
@@ -421,7 +422,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 		e.CurrentSong = song
 		e.CurrentArtist = artist
 		e.CurrentExtra = extra
-		e.songChangedAt = time.Now()
+		e.songChangedAt = Now()
 	})
 
 	return e
@@ -625,7 +626,7 @@ func (e *Engine) generateBackground() error {
 	}
 
 	log.Println("Generating background map...")
-	start := time.Now()
+	start := Now()
 	cpuImg := image.NewRGBA(image.Rect(0, 0, e.Width, e.Height))
 	draw.Draw(cpuImg, cpuImg.Bounds(), &image.Uniform{color.RGBA{8, 10, 15, 255}}, image.Point{}, draw.Src)
 
@@ -857,7 +858,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...
 		if radius > 240 {
 			radius = 240
 		}
-		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius, IsFlare: flare})
+		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: Now(), Color: c, MaxRadius: radius, IsFlare: flare})
 	} else {
 		e.droppedPulses.Add(1)
 	}
@@ -868,7 +869,7 @@ func (e *Engine) GetProcessor() *BGPProcessor {
 }
 
 func (e *Engine) UpdatePerformanceMetrics() {
-	now := time.Now()
+	now := Now()
 	if now.Sub(e.lastPerfLog) < 10*time.Second {
 		return
 	}
@@ -898,7 +899,7 @@ func (e *Engine) UpdatePerformanceMetrics() {
 
 func (e *Engine) Update() error {
 	e.UpdatePerformanceMetrics()
-	now := time.Now()
+	now := Now()
 	e.queueMu.Lock()
 	added := 0
 	maxAdded := DefaultPulsesPerTick
@@ -978,7 +979,7 @@ func (e *Engine) Update() error {
 	e.pulsesMu.Lock()
 	active := e.pulses[:0]
 	for _, p := range e.pulses {
-		duration := 1500 * time.Millisecond
+		duration := time.Duration(1500 / e.AnimationSpeed) * time.Millisecond
 		if now.Sub(p.StartTime) < duration {
 			active = append(active, p)
 		}
@@ -999,14 +1000,14 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		e.mapImage.Fill(color.RGBA{8, 10, 15, 255})
 	}
 	e.pulsesMu.Lock()
-	now := time.Now()
+	now := Now()
 	e.drawOp.GeoM.Reset()
 	e.drawOp.ColorScale.Reset()
 	e.drawOp.Filter = ebiten.FilterLinear // Use linear for smooth scaling
 	e.drawOp.Blend = ebiten.BlendLighter
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
-		totalDuration := 1.5
+		totalDuration := 1.5 / e.AnimationSpeed
 		progress := elapsed / totalDuration
 		if progress > 1.0 {
 			continue
@@ -1329,7 +1330,7 @@ func (e *Engine) SetAudioWriter(w io.Writer) {
 			e.CurrentSong = song
 			e.CurrentArtist = artist
 			e.CurrentExtra = extra
-			e.songChangedAt = time.Now()
+			e.songChangedAt = Now()
 		})
 	}
 }
@@ -1539,7 +1540,7 @@ func (e *Engine) scheduleVisualPulses(nextBatch []*QueuedPulse) {
 
 	// Spread the batch evenly across the next 500ms interval
 	spacing := 500 * time.Millisecond / time.Duration(len(nextBatch))
-	now := time.Now()
+	now := Now()
 	if e.nextPulseEmittedAt.Before(now) {
 		e.nextPulseEmittedAt = now
 	}
