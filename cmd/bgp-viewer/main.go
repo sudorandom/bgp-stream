@@ -25,21 +25,21 @@ func (f *multiFlag) Set(value string) error {
 }
 
 var (
-	renderWidth        = flag.Int("width", 3840, "Internal rendering width")
-	renderHeight       = flag.Int("height", 2160, "Internal rendering height")
-	renderScale        = flag.Float64("scale", 760.0, "Internal rendering scale")
-	windowWidth        = flag.Int("window-width", 0, "Initial window width (defaults to render width)")
-	windowHeight       = flag.Int("window-height", 0, "Initial window height (defaults to render height)")
-	tpsFlag            = flag.Int("tps", 30, "Ticks per second (engine updates)")
-	audioFd            = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
-	hideWindowControls = flag.Bool("hide-window-controls", false, "Whether to hide window decorations (title bar, etc.)")
-	floating           = flag.Bool("floating", false, "Whether to keep the window always on top")
-	captureInterval    = flag.Duration("capture-interval", 0, "Interval to periodically capture high-quality frames (e.g., 1m, 1h). 0 to disable.")
+	renderWidth                = flag.Int("width", 3840, "Internal rendering width")
+	renderHeight               = flag.Int("height", 2160, "Internal rendering height")
+	renderScale                = flag.Float64("scale", 760.0, "Internal rendering scale")
+	windowWidth                = flag.Int("window-width", 0, "Initial window width (defaults to render width)")
+	windowHeight               = flag.Int("window-height", 0, "Initial window height (defaults to render height)")
+	tpsFlag                    = flag.Int("tps", 30, "Ticks per second (engine updates)")
+	audioFd                    = flag.Int("audio-fd", -1, "File descriptor to write raw PCM audio data (streaming only)")
+	hideWindowControls         = flag.Bool("hide-window-controls", false, "Whether to hide window decorations (title bar, etc.)")
+	floating                   = flag.Bool("floating", false, "Whether to keep the window always on top")
+	captureInterval            = flag.Duration("capture-interval", 0, "Interval to periodically capture high-quality frames (e.g., 1m, 1h). 0 to disable.")
 	captureDir         *string = flag.String("capture-dir", "captures", "Directory to store captured frames")
 	minimalUI          *bool   = flag.Bool("minimal-ui", false, "Start with only the map and now-playing panel visible")
 	hideUI             *bool   = flag.Bool("hide-ui", false, "Hide all UI elements")
 	videoPath          *string = flag.String("video", "", "Path to save recorded video (implies -hide-ui and -tps 30)")
-	videoDelay         = flag.Duration("video-delay", 8*time.Second, "Delay before starting video recording")
+	videoDelay                 = flag.Duration("video-delay", 8*time.Second, "Delay before starting video recording")
 	mmdbFiles          multiFlag
 )
 

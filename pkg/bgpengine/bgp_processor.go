@@ -64,13 +64,13 @@ type BGPProcessor struct {
 func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnMapping *utils.ASNMapping, rpki *utils.RPKIManager, prefixToIP PrefixToIPConverter, timeProvider TimeProvider, onEvent BGPEventCallback) *BGPProcessor {
 	prefixStates := utils.NewLRUCache[string, *bgpproto.PrefixState](1000000)
 	p := &BGPProcessor{
-		geo:        geo,
-		seenDB:     seenDB,
-		stateDB:    stateDB,
-		asnMapping: asnMapping,
-		rpki:       rpki,
-		onEvent:    onEvent,
-		prefixToIP: prefixToIP,
+		geo:          geo,
+		seenDB:       seenDB,
+		stateDB:      stateDB,
+		asnMapping:   asnMapping,
+		rpki:         rpki,
+		onEvent:      onEvent,
+		prefixToIP:   prefixToIP,
 		timeProvider: timeProvider,
 		recentlySeen: utils.NewLRUCache[uint32, struct {
 			Time time.Time
