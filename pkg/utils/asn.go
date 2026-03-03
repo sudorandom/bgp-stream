@@ -60,6 +60,7 @@ func (m *ASNMapping) loadCustomOrgs() {
 
 		// China Mobile
 		58453: "CHINAMOBILE",
+		58807: "CHINAMOBILE",
 		9808:  "CHINAMOBILE",
 		9242:  "CHINAMOBILE",
 
