@@ -74,6 +74,18 @@ func (m *ASNMapping) loadCustomOrgs() {
 		// Tata
 		6453: "TATA",
 		4755: "TATA",
+
+		// GTT
+		3257:  "GTT",
+		5580:  "GTT",
+		4436:  "GTT",
+		29686: "GTT",
+
+		// Lumen / Level 3 / CenturyLink
+		3356:  "LUMEN",
+		209:   "LUMEN",
+		3549:  "LUMEN",
+		22561: "LUMEN",
 	}
 
 	for asn, orgID := range knownSiblings {
