@@ -130,7 +130,7 @@ type Engine struct {
 	FPS           int
 	Scale         float64
 
-	pulses   []*Pulse
+	pulses   []Pulse
 	pulsesMu sync.Mutex
 
 	geo *geoservice.GeoService
@@ -139,7 +139,7 @@ type Engine struct {
 	cityBufferPool     sync.Pool
 	seenBuffer         map[string]uint32
 	bufferMu           sync.Mutex
-	visualQueue        []*QueuedPulse
+	visualQueue        []QueuedPulse
 	queueMu            sync.Mutex
 	nextPulseEmittedAt time.Time
 
@@ -857,7 +857,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...
 		if radius > 240 {
 			radius = 240
 		}
-		e.pulses = append(e.pulses, &Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius, IsFlare: flare})
+		e.pulses = append(e.pulses, Pulse{X: x, Y: y, StartTime: time.Now(), Color: c, MaxRadius: radius, IsFlare: flare})
 	} else {
 		e.droppedPulses.Add(1)
 	}
@@ -1511,16 +1511,16 @@ func (e *Engine) processSeenBuffer() {
 	}
 }
 
-func (e *Engine) drainCityBuffer() []*QueuedPulse {
+func (e *Engine) drainCityBuffer() []QueuedPulse {
 	e.bufferMu.Lock()
 	defer e.bufferMu.Unlock()
-	var nextBatch []*QueuedPulse
+	var nextBatch []QueuedPulse
 	// 2. Convert buffered city activity into discrete pulse events for each color
 	for _, d := range e.cityBuffer {
 		for c, count := range d.Counts {
 			if count > 0 {
 				isFlare := (c == ColorLeak)
-				nextBatch = append(nextBatch, &QueuedPulse{Lat: d.Lat, Lng: d.Lng, Color: c, Count: count, IsFlare: isFlare})
+				nextBatch = append(nextBatch, QueuedPulse{Lat: d.Lat, Lng: d.Lng, Color: c, Count: count, IsFlare: isFlare})
 			}
 		}
 		// Reset and return to pool
@@ -1533,7 +1533,7 @@ func (e *Engine) drainCityBuffer() []*QueuedPulse {
 	return nextBatch
 }
 
-func (e *Engine) scheduleVisualPulses(nextBatch []*QueuedPulse) {
+func (e *Engine) scheduleVisualPulses(nextBatch []QueuedPulse) {
 	// Shuffle the batch so events from different geographic locations are interleaved
 	rand.Shuffle(len(nextBatch), func(i, j int) { nextBatch[i], nextBatch[j] = nextBatch[j], nextBatch[i] })
 
