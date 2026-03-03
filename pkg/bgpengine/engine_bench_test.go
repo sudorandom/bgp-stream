@@ -80,7 +80,7 @@ func BenchmarkDrawMap(b *testing.B) {
 	// Fill with pulses
 	now := time.Now()
 	for i := 0; i < 500; i++ {
-		e.pulses = append(e.pulses, &Pulse{
+		e.pulses = append(e.pulses, Pulse{
 			X:         rand.Float64() * float64(width),
 			Y:         rand.Float64() * float64(height),
 			StartTime: now,
@@ -109,7 +109,7 @@ func TestDrawMapAllocations(t *testing.T) {
 	// Fill with pulses
 	now := time.Now()
 	for i := 0; i < 500; i++ {
-		e.pulses = append(e.pulses, &Pulse{
+		e.pulses = append(e.pulses, Pulse{
 			X:         rand.Float64() * float64(width),
 			Y:         rand.Float64() * float64(height),
 			StartTime: now,
