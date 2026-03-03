@@ -228,6 +228,42 @@ func (t *DiskTrie) Lookup(ip net.IP) (val []byte, maskLen int, err error) {
 	return foundVal, foundMask, err
 }
 
+// LookupAll returns all values associated with prefixes that cover the IP.
+func (t *DiskTrie) LookupAll(ip net.IP) (vals [][]byte, err error) {
+	target := ip.To4()
+	if target == nil {
+		return nil, fmt.Errorf("invalid IPv4")
+	}
+
+	targetInt := binary.BigEndian.Uint32(target)
+	err = t.db.View(func(txn *badger.Txn) error {
+		key := make([]byte, 5)
+		for m := 32; m >= 0; m-- {
+			var mask uint32
+			if m > 0 {
+				mask = uint32(0xFFFFFFFF) << (32 - m)
+			} else {
+				mask = 0
+			}
+
+			prefixIP := targetInt & mask
+			binary.BigEndian.PutUint32(key, prefixIP)
+			key[4] = byte(m)
+
+			item, getErr := txn.Get(key)
+			if getErr == nil {
+				val, copyErr := item.ValueCopy(nil)
+				if copyErr == nil {
+					vals = append(vals, val)
+				}
+			}
+		}
+		return nil
+	})
+
+	return vals, err
+}
+
 func (t *DiskTrie) LookupUint32(ip uint32) (val []byte, maskLen int, err error) {
 	if v, ok := t.cache.Load(ip); ok {
 		if v == nil {

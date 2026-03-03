@@ -20,7 +20,7 @@ func TestBGPProcessorDeduplication(t *testing.T) {
 		return 0x08080808
 	}
 
-	p := NewBGPProcessor(geo, nil, nil, nil, prefixToIP, onEvent)
+	p := NewBGPProcessor(geo, nil, nil, nil, nil, prefixToIP, onEvent)
 
 	// Simulate receiving a Withdrawal followed by Announcement (Path Change)
 	p.mu.Lock()

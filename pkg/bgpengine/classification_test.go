@@ -18,7 +18,7 @@ func runClassificationTest(t *testing.T, name string, expect Level2EventType, st
 		}
 		p := NewBGPProcessor(func(uint32) (float64, float64, string, geoservice.ResolutionType) {
 			return 0, 0, "US", geoservice.ResGeoIP
-		}, nil, nil, nil, func(string) uint32 { return 0 }, onEvent)
+		}, nil, nil, nil, nil, func(string) uint32 { return 0 }, onEvent)
 		now := time.Now().Truncate(time.Hour)
 
 		classify := func(prefix string, ctx *MessageContext) {
@@ -87,7 +87,8 @@ func TestClassification(t *testing.T) {
 	runClassificationTest(t, "Route Leak", Level2RouteLeak, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
 		for i := 0; i < 5; i++ {
 			classify("5.5.5.0/24", &MessageContext{
-				Peer: "peer1", PathStr: "[3356 500 2914]", Now: now.Add(time.Duration(i*30) * time.Second),
+				Peer: fmt.Sprintf("peer%d", i), Host: fmt.Sprintf("rrc%d", i%2),
+				PathStr: "[3356 500 2914]", Now: now.Add(time.Duration(i*30) * time.Second),
 			})
 		}
 	})

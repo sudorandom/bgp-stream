@@ -209,6 +209,7 @@ type Engine struct {
 
 	SeenDB  *utils.DiskTrie
 	StateDB *utils.DiskTrie
+	RPKI    *utils.RPKIManager
 
 	// Reusable structures for updates (to reduce allocations)
 	impactMap       map[string]*VisualImpact
@@ -479,6 +480,24 @@ func (e *Engine) LoadRemainingData() error {
 	if err != nil {
 		log.Printf("Warning: Failed to open prefix state database: %v. Persistent state will be disabled.", err)
 	}
+	e.RPKI, err = utils.NewRPKIManager("data/rpki-vrps.db")
+	if err != nil {
+		log.Printf("Warning: Failed to initialize RPKI manager: %v", err)
+	} else {
+		// Initial sync
+		go func() {
+			if err := e.RPKI.Sync(); err != nil {
+				log.Printf("Error during RPKI sync: %v", err)
+			}
+			// Periodic sync every 30 minutes
+			ticker := time.NewTicker(30 * time.Minute)
+			for range ticker.C {
+				if err := e.RPKI.Sync(); err != nil {
+					log.Printf("Error during RPKI sync: %v", err)
+				}
+			}
+		}()
+	}
 
 	// 2. Load prefix data
 	if err := e.loadPrefixData(); err != nil {
@@ -495,7 +514,7 @@ func (e *Engine) LoadRemainingData() error {
 		log.Printf("Warning: Failed to load ASN mapping: %v", err)
 	}
 
-	e.processor = NewBGPProcessor(e.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.prefixToIP, e.recordEvent)
+	e.processor = NewBGPProcessor(e.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.RPKI, e.prefixToIP, e.recordEvent)
 
 	log.Println("Engine startup complete. Listening for events...")
 

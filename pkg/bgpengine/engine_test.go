@@ -81,7 +81,7 @@ func TestEngineOutageClearing(t *testing.T) {
 	// Update mock to match new signature
 	e.processor = NewBGPProcessor(func(ip uint32) (float64, float64, string, geoservice.ResolutionType) {
 		return e.geo.GetIPCoords(ip)
-	}, e.SeenDB, e.StateDB, e.asnMapping, e.prefixToIP, e.recordEvent)
+	}, e.SeenDB, e.StateDB, e.asnMapping, e.RPKI, e.prefixToIP, e.recordEvent)
 
 	prefix := "1.2.3.0/24"
 

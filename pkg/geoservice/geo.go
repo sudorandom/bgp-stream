@@ -284,7 +284,7 @@ func (g *GeoService) ReportGeoMetrics() {
 	resets := g.metrics.CacheResets.Swap(0)
 	total := custom + cloud + mmdb + rir + whois + peering + hubs + unknown
 
-	if total == 0 {
+	if total == 0 || unknown == 0 {
 		return
 	}
 

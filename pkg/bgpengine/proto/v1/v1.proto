@@ -26,6 +26,7 @@ message LastAttrs {
     int32 med = 7;
     int32 local_pref = 8;
     int64 last_update_ts = 9;
+    string host = 10;
 }
 
 message PrefixState {
@@ -36,4 +37,6 @@ message PrefixState {
     bool uncategorized_counted = 5;
     int32 classified_type = 6;
     int64 classified_time_ts = 7;
+    int32 last_rpki_status = 8;
+    uint32 last_origin_asn = 9;
 }
