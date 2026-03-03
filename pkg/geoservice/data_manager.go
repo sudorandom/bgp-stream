@@ -47,7 +47,7 @@ type prefixSegment struct {
 
 func (dm *DataManager) LoadWorldCities() {
 	var citiesReader io.Reader
-	citiesPath := "data/worldcities.csv"
+	citiesPath := "./data/worldcities.csv"
 	if f, err := os.Open(citiesPath); err == nil {
 		defer func() { _ = f.Close() }()
 		citiesReader = f
@@ -137,7 +137,7 @@ func (dm *DataManager) InitMatchers() {
 }
 
 func (dm *DataManager) DownloadWorldCities(force bool) error {
-	citiesPath := "data/worldcities.csv"
+	citiesPath := "./data/worldcities.csv"
 	if !force {
 		if _, err := os.Stat(citiesPath); err == nil {
 			return nil
@@ -220,7 +220,7 @@ func (dm *DataManager) ProcessRIRData() error {
 	hubSegments := dm.flattenPrefixData(countryOnlyRanges)
 	dm.indexPrefixData(hubSegments, &dm.geo.hubsData)
 
-	cachePath := "data/prefix-dump-cache.json"
+	cachePath := "./data/prefix-dump-cache.json"
 	if f, err := os.Create(cachePath); err == nil {
 		if err := json.NewEncoder(f).Encode(dm.geo.prefixData); err != nil {
 			log.Printf("Warning: Failed to encode prefix cache: %v", err)
@@ -228,7 +228,7 @@ func (dm *DataManager) ProcessRIRData() error {
 		_ = f.Close()
 	}
 
-	hubsCachePath := "data/hubs-dump-cache.json"
+	hubsCachePath := "./data/hubs-dump-cache.json"
 	if f, err := os.Create(hubsCachePath); err == nil {
 		if err := json.NewEncoder(f).Encode(dm.geo.hubsData); err != nil {
 			log.Printf("Warning: Failed to encode hubs cache: %v", err)

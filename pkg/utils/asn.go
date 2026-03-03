@@ -136,7 +136,7 @@ func (m *ASNMapping) loadCustomOrgs() {
 	}
 
 	// Also try to load from a local file if users want to maintain their own
-	if data, err := os.ReadFile("data/custom_orgs.json"); err == nil {
+	if data, err := os.ReadFile("./data/custom_orgs.json"); err == nil {
 		var localMapping map[string]string
 		if err := json.Unmarshal(data, &localMapping); err == nil {
 			for asnStr, orgID := range localMapping {
@@ -146,7 +146,7 @@ func (m *ASNMapping) loadCustomOrgs() {
 					m.data[uint32(asn)] = info
 				}
 			}
-			log.Printf("Loaded %d custom ASN-Org associations from data/custom_orgs.json", len(localMapping))
+			log.Printf("Loaded %d custom ASN-Org associations from ./data/custom_orgs.json", len(localMapping))
 		}
 	}
 }

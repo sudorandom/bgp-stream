@@ -112,12 +112,12 @@ var (
 )
 
 const (
-	MaxActivePulses      = 9000
-	MaxVisualQueueSize   = 30000
-	DefaultPulsesPerTick = 120
-	BurstPulsesPerTick   = 600
-	VisualQueueThreshold = 6000
-	VisualQueueCull      = 12000
+	MaxActivePulses      = 15000
+	MaxVisualQueueSize   = 60000
+	DefaultPulsesPerTick = 200
+	BurstPulsesPerTick   = 500
+	VisualQueueThreshold = 10000
+	VisualQueueCull      = 30000
 )
 
 type asnGroupKey struct {
@@ -227,10 +227,26 @@ type Engine struct {
 	dataMgr     *geoservice.DataManager
 	MMDBFiles   []string
 
-	MinimalUI           bool
-	minimalUIKeyPressed bool
+	MinimalUI              bool
+	minimalUIKeyPressed    bool
+	tourKeyPressed         bool
+	tourSkipKeyPressed     bool
+	tourOffset             time.Duration
+	tourRegionStayDuration time.Duration
 
 	lastPerfLog time.Time
+
+	// Viewport and Tour state
+	currentZoom         float64
+	currentCX           float64
+	currentCY           float64
+	targetZoom          float64
+	targetCX            float64
+	targetCY            float64
+	tourManualStartTime time.Time
+	tourRegionIndex     int // -1 means no tour active (full map)
+	lastTourStateChange time.Time
+	pipImage            *ebiten.Image
 
 	FrameCaptureInterval time.Duration
 	FrameCaptureDir      string
@@ -368,6 +384,14 @@ func NewEngine(width, height int, scale float64) *Engine {
 		textOp:                 &text.DrawOptions{},
 		vectorDrawPathOp:       vector.DrawPathOptions{AntiAlias: true},
 		vectorStrokeOp:         vector.StrokeOptions{Width: 3, LineJoin: vector.LineJoinBevel, LineCap: vector.LineCapButt},
+		currentZoom:            1.0,
+		targetZoom:             1.0,
+		currentCX:              float64(width) / 2,
+		currentCY:              float64(height) / 2,
+		targetCX:               float64(width) / 2,
+		targetCY:               float64(height) / 2,
+		tourRegionIndex:        -1, // Start with full map
+		tourRegionStayDuration: 10 * time.Second,
 	}
 	e.dataMgr = geoservice.NewDataManager(e.geo)
 
@@ -472,15 +496,15 @@ func (e *Engine) LoadRemainingData() error {
 	}
 
 	var err error
-	e.SeenDB, err = utils.OpenDiskTrie("data/seen-prefixes.db")
+	e.SeenDB, err = utils.OpenDiskTrie("./data/seen-prefixes.db")
 	if err != nil {
 		log.Printf("Warning: Failed to open seen prefixes database: %v. Persistent state will be disabled.", err)
 	}
-	e.StateDB, err = utils.OpenDiskTrie("data/prefix-state.db")
+	e.StateDB, err = utils.OpenDiskTrie("./data/prefix-state.db")
 	if err != nil {
 		log.Printf("Warning: Failed to open prefix state database: %v. Persistent state will be disabled.", err)
 	}
-	e.RPKI, err = utils.NewRPKIManager("data/rpki-vrps.db")
+	e.RPKI, err = utils.NewRPKIManager("./data/rpki-vrps.db")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize RPKI manager: %v", err)
 	} else {
@@ -523,7 +547,7 @@ func (e *Engine) LoadRemainingData() error {
 
 func (e *Engine) loadPrefixData() error {
 	var prefixData geoservice.PrefixData
-	cachePath := "data/prefix-dump-cache.json"
+	cachePath := "./data/prefix-dump-cache.json"
 	if data, err := os.ReadFile(cachePath); err == nil {
 		if err := json.Unmarshal(data, &prefixData); err == nil {
 			log.Printf("[GEO] Loaded %d prefix segments from cache", len(prefixData.R)/2)
@@ -532,7 +556,7 @@ func (e *Engine) loadPrefixData() error {
 	}
 
 	var hubsData geoservice.PrefixData
-	hubsCachePath := "data/hubs-dump-cache.json"
+	hubsCachePath := "./data/hubs-dump-cache.json"
 	if data, err := os.ReadFile(hubsCachePath); err == nil {
 		if err := json.Unmarshal(data, &hubsData); err == nil {
 			log.Printf("[GEO] Loaded %d country hubs from cache", len(hubsData.R)/2)
@@ -613,7 +637,7 @@ func (e *Engine) drawGrid(img *image.RGBA) {
 }
 
 func (e *Engine) generateBackground() error {
-	cacheDir := "data/cache"
+	cacheDir := "./data/cache"
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		log.Printf("Warning: Failed to create cache directory: %v", err)
 	}
@@ -897,14 +921,26 @@ func (e *Engine) UpdatePerformanceMetrics() {
 }
 
 func (e *Engine) Update() error {
+	e.UpdateTour()
 	e.UpdatePerformanceMetrics()
+	e.updateVisualQueue()
+	e.updateInput()
+	e.updateMetrics()
+	e.updateActivePulses()
+	return nil
+}
+
+func (e *Engine) updateVisualQueue() {
 	now := time.Now()
 	e.queueMu.Lock()
+	defer e.queueMu.Unlock()
+
 	added := 0
 	maxAdded := DefaultPulsesPerTick
 	if len(e.visualQueue) > VisualQueueThreshold {
 		maxAdded = BurstPulsesPerTick
 	}
+
 	for len(e.visualQueue) > 0 && (e.visualQueue[0].ScheduledTime.Before(now) || len(e.visualQueue) > VisualQueueCull) && added < maxAdded {
 		p := e.visualQueue[0]
 		e.visualQueue = e.visualQueue[1:]
@@ -913,8 +949,9 @@ func (e *Engine) Update() error {
 			e.AddPulse(p.Lat, p.Lng, p.Color, p.Count, p.IsFlare)
 		}
 	}
-	e.queueMu.Unlock()
+}
 
+func (e *Engine) updateInput() {
 	if ebiten.IsKeyPressed(ebiten.KeyM) {
 		if !e.minimalUIKeyPressed {
 			e.MinimalUI = !e.MinimalUI
@@ -924,35 +961,72 @@ func (e *Engine) Update() error {
 		e.minimalUIKeyPressed = false
 	}
 
+	if ebiten.IsKeyPressed(ebiten.KeyT) {
+		if !e.tourKeyPressed {
+			e.tourManualStartTime = time.Now()
+			e.tourOffset = 0 // Reset offset on manual start
+			e.tourKeyPressed = true
+		}
+	} else {
+		e.tourKeyPressed = false
+	}
+
+	if ebiten.IsKeyPressed(ebiten.KeyN) {
+		if !e.tourSkipKeyPressed {
+			e.handleTourSkip()
+			e.tourSkipKeyPressed = true
+		}
+	} else {
+		e.tourSkipKeyPressed = false
+	}
+}
+
+func (e *Engine) handleTourSkip() {
+	// Calculate current elapsed time to figure out the next jump
+	now := time.Now()
+	tourDuration := time.Duration(len(regions)) * e.tourRegionStayDuration
+	cycleDuration := 10 * time.Minute
+	elapsedInCycle := now.Sub(now.Truncate(cycleDuration))
+	elapsedSinceManual := now.Sub(e.tourManualStartTime)
+
+	var elapsed time.Duration
+	if !e.tourManualStartTime.IsZero() && elapsedSinceManual < tourDuration+10*time.Second {
+		elapsed = elapsedSinceManual + e.tourOffset
+	} else {
+		elapsed = elapsedInCycle + e.tourOffset
+	}
+
+	// Snap to the beginning of the next 10-second bucket
+	currentIdx := int(elapsed.Seconds() / e.tourRegionStayDuration.Seconds())
+	targetElapsed := time.Duration(currentIdx+1) * e.tourRegionStayDuration
+	e.tourOffset += (targetElapsed - elapsed)
+}
+
+func (e *Engine) updateMetrics() {
 	e.metricsMu.Lock()
+	defer e.metricsMu.Unlock()
+
 	for cc, vh := range e.VisualHubs {
-		// Snap Y position
 		vh.DisplayY = vh.TargetY
-
-		// Interpolate Alpha
 		vh.Alpha += (vh.TargetAlpha - vh.Alpha) * 0.2
-
-		// Cleanup inactive or invisible hubs instantly
 		if !vh.Active || vh.Alpha < 0.01 {
 			delete(e.VisualHubs, cc)
 		}
 	}
 
 	for p, vi := range e.VisualImpact {
-		// Snap Y position
 		vi.DisplayY = vi.TargetY
-		// Interpolate Alpha
 		vi.Alpha += (vi.TargetAlpha - vi.Alpha) * 0.2
-
-		// Cleanup inactive or invisible items instantly
 		if !vi.Active || vi.Alpha < 0.01 {
 			delete(e.VisualImpact, p)
 		}
 	}
 
-	// Calculate 10-second rolling average for beacon percentage
-	sumTotal := 0
-	sumBeacon := 0
+	e.updateBeaconPercent()
+}
+
+func (e *Engine) updateBeaconPercent() {
+	sumTotal, sumBeacon := 0, 0
 	hLen := len(e.history)
 	window := 10
 	if hLen < window {
@@ -972,20 +1046,20 @@ func (e *Engine) Update() error {
 		targetPercent = 100
 	}
 	e.displayBeaconPercent += (targetPercent - e.displayBeaconPercent) * 0.1
+}
 
-	e.metricsMu.Unlock()
-
+func (e *Engine) updateActivePulses() {
+	now := time.Now()
 	e.pulsesMu.Lock()
+	defer e.pulsesMu.Unlock()
+
 	active := e.pulses[:0]
 	for _, p := range e.pulses {
-		duration := 1500 * time.Millisecond
-		if now.Sub(p.StartTime) < duration {
+		if now.Sub(p.StartTime) < 1500*time.Millisecond {
 			active = append(active, p)
 		}
 	}
 	e.pulses = active
-	e.pulsesMu.Unlock()
-	return nil
 }
 
 func (e *Engine) Draw(screen *ebiten.Image) {
@@ -1057,7 +1131,12 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		e.captureFrame(e.mapImage, "map", now)
 	}
 
-	screen.DrawImage(e.mapImage, nil)
+	e.drawOp.GeoM.Reset()
+	e.drawOp.ColorScale.Reset()
+	e.ApplyTourTransform(e.drawOp)
+	screen.DrawImage(e.mapImage, e.drawOp)
+
+	e.DrawPIP(screen)
 	e.DrawBGPStatus(screen)
 
 	if shouldCapture {
@@ -1537,11 +1616,16 @@ func (e *Engine) scheduleVisualPulses(nextBatch []QueuedPulse) {
 	// Shuffle the batch so events from different geographic locations are interleaved
 	rand.Shuffle(len(nextBatch), func(i, j int) { nextBatch[i], nextBatch[j] = nextBatch[j], nextBatch[i] })
 
-	// Spread the batch evenly across the next 500ms interval
-	spacing := 500 * time.Millisecond / time.Duration(len(nextBatch))
+	// Spread the batch evenly across a longer window to smooth out bursts
+	// We overlap batches to ensure a continuous flow (every 500ms we add a 1500ms batch)
+	spreadWindow := 1500 * time.Millisecond
+	spacing := spreadWindow / time.Duration(len(nextBatch))
 	now := time.Now()
-	if e.nextPulseEmittedAt.Before(now) {
-		e.nextPulseEmittedAt = now
+
+	// If we're too far behind (more than 1s), jump closer to 'now' but keep a small
+	// buffer to avoid a hard gap in the visualization.
+	if e.nextPulseEmittedAt.Before(now.Add(-1000 * time.Millisecond)) {
+		e.nextPulseEmittedAt = now.Add(-500 * time.Millisecond)
 	}
 
 	e.queueMu.Lock()
@@ -1557,7 +1641,7 @@ func (e *Engine) scheduleVisualPulses(nextBatch []QueuedPulse) {
 			log.Printf("Truncating batch of %d pulses to fit queue (Current: %d, Max: %d)", len(nextBatch), currentSize, maxQueueSize)
 			nextBatch = nextBatch[:maxQueueSize-currentSize]
 			if len(nextBatch) > 0 {
-				spacing = 500 * time.Millisecond / time.Duration(len(nextBatch))
+				spacing = spreadWindow / time.Duration(len(nextBatch))
 			}
 		}
 
@@ -1571,11 +1655,11 @@ func (e *Engine) scheduleVisualPulses(nextBatch []QueuedPulse) {
 		log.Printf("Dropping batch of %d pulses (Queue size: %d)", len(nextBatch), len(e.visualQueue))
 	}
 
-	// Advance the next emission baseline, capping the visual backlog to 2 seconds
-	// to prevent the visualization from falling too far behind real-time spikes.
+	// Advance the next emission baseline by 500ms (the ticker interval),
+	// capping the visual backlog to 3 seconds to prevent falling too far behind.
 	e.nextPulseEmittedAt = e.nextPulseEmittedAt.Add(500 * time.Millisecond)
-	if e.nextPulseEmittedAt.After(now.Add(2 * time.Second)) {
-		e.nextPulseEmittedAt = now.Add(2 * time.Second)
+	if e.nextPulseEmittedAt.After(now.Add(3 * time.Second)) {
+		e.nextPulseEmittedAt = now.Add(3 * time.Second)
 	}
 }
 

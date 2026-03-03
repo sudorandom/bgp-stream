@@ -191,7 +191,7 @@ func GetCacheFileName(url, logPrefix string) string {
 
 // FindCachedURL takes a list of candidate URLs and returns the first one that exists in the local cache.
 func FindCachedURL(urls []string, logPrefix string) (string, bool) {
-	cacheDir := "data/cache"
+	cacheDir := "./data/cache"
 	for _, u := range urls {
 		fname := GetCacheFileName(u, logPrefix)
 		if _, err := os.Stat(filepath.Join(cacheDir, fname)); err == nil {
@@ -204,7 +204,7 @@ func FindCachedURL(urls []string, logPrefix string) (string, bool) {
 // GetCachedReader returns a reader for the given URL, using a local cache if enabled.
 func GetCachedReader(url string, useCache bool, logPrefix string) (io.ReadCloser, error) {
 	if useCache {
-		cacheDir := "data/cache"
+		cacheDir := "./data/cache"
 		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create cache dir: %w", err)
 		}
