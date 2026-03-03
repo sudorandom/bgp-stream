@@ -145,3 +145,124 @@ func TestClassification(t *testing.T) {
 		})
 	})
 }
+
+func TestBGPClassifier_IsDDoSProvider(t *testing.T) {
+	c := NewBGPClassifier(nil, nil)
+
+	tests := []struct {
+		asn      uint32
+		expected bool
+	}{
+		{13335, true},  // Cloudflare
+		{15169, true},  // Google
+		{12345, false}, // Random
+		{20940, true},  // Akamai
+		{32934, true},  // Facebook
+		{6453, true},   // Tata
+		{99999, false}, // Random
+	}
+
+	for _, tt := range tests {
+		result := c.isDDoSProvider(tt.asn)
+		if result != tt.expected {
+			t.Errorf("expected isDDoSProvider(%d) to be %v, got %v", tt.asn, tt.expected, result)
+		}
+	}
+}
+
+func TestBGPClassifier_HasRouteLeak(t *testing.T) {
+	c := NewBGPClassifier(nil, nil)
+
+	tests := []struct {
+		name     string
+		pathStr  string
+		expected bool
+	}{
+		{
+			name:     "Empty path",
+			pathStr:  "",
+			expected: false,
+		},
+		{
+			name:     "Short path",
+			pathStr:  "[100 200]",
+			expected: false,
+		},
+		{
+			name: "Valley-free violation (Tier-1 -> Stub -> Tier-1)",
+			// 1299 (Telia, Tier-1) -> 500 (Stub) -> 3356 (Level 3, Tier-1)
+			pathStr:  "[1299 500 3356]",
+			expected: true,
+		},
+		{
+			name: "Valid path (Stub -> Tier-1 -> Tier-1)",
+			// 500 (Stub) -> 1299 (Telia) -> 3356 (Level 3)
+			pathStr:  "[500 1299 3356]",
+			expected: false,
+		},
+		{
+			name: "Cloud provider in middle (Not a leak)",
+			// 1299 (Tier-1) -> 15169 (Google, Cloud) -> 3356 (Tier-1)
+			pathStr:  "[1299 15169 3356]",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &MessageContext{
+				PathStr: tt.pathStr,
+			}
+			_, leak := c.hasRouteLeak(ctx)
+			if leak != tt.expected {
+				t.Errorf("expected %v, got %v for path %s", tt.expected, leak, tt.pathStr)
+			}
+		})
+	}
+}
+
+func TestBGPClassifier_IsTier1(t *testing.T) {
+	c := NewBGPClassifier(nil, nil)
+	tests := []struct {
+		asn      uint32
+		expected bool
+	}{
+		{209, true},
+		{701, true},
+		{1299, true},
+		{3356, true},
+		{6453, true},
+		{174, true},
+		{6939, true},
+		{12345, false},
+		{99999, false},
+	}
+	for _, tt := range tests {
+		result := c.isTier1(tt.asn)
+		if result != tt.expected {
+			t.Errorf("expected isTier1(%d) to be %v, got %v", tt.asn, tt.expected, result)
+		}
+	}
+}
+
+func TestBGPClassifier_IsCloud(t *testing.T) {
+	c := NewBGPClassifier(nil, nil)
+	tests := []struct {
+		asn      uint32
+		expected bool
+	}{
+		{13335, true},
+		{15169, true},
+		{16509, true},
+		{14618, true},
+		{8075, true},
+		{12345, false},
+		{99999, false},
+	}
+	for _, tt := range tests {
+		result := c.isCloud(tt.asn)
+		if result != tt.expected {
+			t.Errorf("expected isCloud(%d) to be %v, got %v", tt.asn, tt.expected, result)
+		}
+	}
+}
