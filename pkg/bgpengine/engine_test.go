@@ -86,25 +86,25 @@ func TestEngineOutageClearing(t *testing.T) {
 	prefix := "1.2.3.0/24"
 
 	// 1. Manually record an outage event
-	e.recordEvent(0, 0, "US", EventUnknown, Level2Outage, prefix, 0)
+	e.recordEvent(0, 0, "US", EventUnknown, ClassificationOutage, prefix, 0)
 
-	if e.prefixToLevel2[prefix] != Level2Outage {
-		t.Errorf("Expected prefixToLevel2 to be Level2Outage, got %v", e.prefixToLevel2[prefix])
+	if e.prefixToClassification[prefix] != ClassificationOutage {
+		t.Errorf("Expected prefixToClassification to be ClassificationOutage, got %v", e.prefixToClassification[prefix])
 	}
-	if _, ok := e.currentAnomalies[Level2Outage][prefix]; !ok {
-		t.Error("Expected prefix in currentAnomalies[Level2Outage]")
+	if _, ok := e.currentAnomalies[ClassificationOutage][prefix]; !ok {
+		t.Error("Expected prefix in currentAnomalies[ClassificationOutage]")
 	}
 
 	// 2. Record an announcement event (EventUpdate) for the same prefix
-	// This should clear the Level2Outage from currentAnomalies
-	e.recordEvent(0, 0, "US", EventUpdate, Level2None, prefix, 0)
+	// This should clear the ClassificationOutage from currentAnomalies
+	e.recordEvent(0, 0, "US", EventUpdate, ClassificationNone, prefix, 0)
 
-	if e.prefixToLevel2[prefix] != Level2None {
-		t.Errorf("Expected prefixToLevel2 to be Level2None, got %v", e.prefixToLevel2[prefix])
+	if e.prefixToClassification[prefix] != ClassificationNone {
+		t.Errorf("Expected prefixToClassification to be ClassificationNone, got %v", e.prefixToClassification[prefix])
 	}
 
-	// Verify it's gone from currentAnomalies[Level2Outage]
-	if _, ok := e.currentAnomalies[Level2Outage][prefix]; ok {
-		t.Error("Expected prefix to be REMOVED from currentAnomalies[Level2Outage] after announce")
+	// Verify it's gone from currentAnomalies[ClassificationOutage]
+	if _, ok := e.currentAnomalies[ClassificationOutage][prefix]; ok {
+		t.Error("Expected prefix to be REMOVED from currentAnomalies[ClassificationOutage] after announce")
 	}
 }
