@@ -362,7 +362,7 @@ func (p *BGPProcessor) cleanupRecentlySeen() map[string]*bgpproto.PrefixState {
 	}
 
 	batch := make(map[string]*bgpproto.PrefixState)
-	if len(p.prefixStates) > 500000 {
+	if len(p.prefixStates) > 1000000 {
 		p.PrefixStateResets.Add(1)
 		p.prefixStates = make(map[string]*bgpproto.PrefixState)
 	}
@@ -869,12 +869,16 @@ func (p *BGPProcessor) findCriticalAnomaly(prefix string, s *prefixStats, elapse
 			// - Origin has changed from what we saw historically
 			// - Seen across 3+ peers and 2+ RIPE collectors
 			if isTransition && peerCount >= 3 && hostCount >= 2 {
+				log.Printf("[!!! HIJACK TRANSITION !!!] Prefix: %s, New Origin: AS%d, Prev Origin: AS%d, RPKI: InvalidASN, Consensus: %d peers/%d hosts",
+					prefix, ctx.OriginASN, historicalASN, peerCount, hostCount)
 				return Level2RouteLeak, true
 			}
 
 			// MEDIUM SIGNAL: New prefix (never seen before) that is RPKI invalid
 			// We require more evidence for these as they are often just first-time seen misconfigs
 			if historicalASN == 0 && peerCount >= 5 && hostCount >= 3 {
+				log.Printf("[!!! HIJACK NEW PREFIX !!!] Prefix: %s, Origin: AS%d, RPKI: InvalidASN, Consensus: %d peers/%d hosts",
+					prefix, ctx.OriginASN, peerCount, hostCount)
 				return Level2RouteLeak, true
 			}
 		}
