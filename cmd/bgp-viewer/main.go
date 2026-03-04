@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/silbinarywolf/preferdiscretegpu"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/sudorandom/bgp-stream/pkg/bgpengine"
 )

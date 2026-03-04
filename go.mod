@@ -12,6 +12,7 @@ require (
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/paulmach/go.geojson v1.5.0
+	github.com/silbinarywolf/preferdiscretegpu v1.0.0
 	google.golang.org/protobuf v1.36.11
 )
 

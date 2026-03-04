@@ -35,6 +35,18 @@ builds:
     flags:
       - -tags=ebitengine
 
+  - id: bgp-viewer-windows-amd64
+    main: ./cmd/bgp-viewer
+    binary: bgp-viewer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+    flags:
+      - -tags=ebitengine
+
   - id: bgp-data-fetcher-amd64
     main: ./cmd/bgp-data-fetcher
     binary: bgp-data-fetcher
@@ -55,11 +67,24 @@ builds:
     goarch:
       - arm64
 
+  - id: bgp-data-fetcher-windows-amd64
+    main: ./cmd/bgp-data-fetcher
+    binary: bgp-data-fetcher
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+
 archives:
   - formats: ["tar.gz"]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
 
 checksum:
   name_template: 'checksums.txt'
