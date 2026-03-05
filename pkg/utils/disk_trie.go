@@ -147,6 +147,21 @@ func (t *DiskTrie) BatchInsertRaw(entries map[string][]byte) error {
 	defer wb.Cancel()
 
 	for k, v := range entries {
+		_, ipNet, err := net.ParseCIDR(k)
+		if err == nil {
+			ip := ipNet.IP.To4()
+			if ip != nil {
+				ones, _ := ipNet.Mask.Size()
+				key := make([]byte, 5)
+				copy(key, ip)
+				key[4] = byte(ones)
+				if err := wb.Set(key, v); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+
 		if err := wb.Set([]byte(k), v); err != nil {
 			return err
 		}
@@ -154,10 +169,40 @@ func (t *DiskTrie) BatchInsertRaw(entries map[string][]byte) error {
 	return wb.Flush()
 }
 
-func (t *DiskTrie) Get(key string) ([]byte, error) {
+func (t *DiskTrie) Get(prefix string) ([]byte, error) {
+	if t == nil || t.db == nil {
+		return nil, nil
+	}
+	_, ipNet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		// Fallback to raw string key if it's not a CIDR
+		var val []byte
+		err := t.db.View(func(txn *badger.Txn) error {
+			item, err := txn.Get([]byte(prefix))
+			if err != nil {
+				return err
+			}
+			val, err = item.ValueCopy(nil)
+			return err
+		})
+		if err == badger.ErrKeyNotFound {
+			return nil, nil
+		}
+		return val, err
+	}
+
+	ip := ipNet.IP.To4()
+	if ip == nil {
+		return nil, fmt.Errorf("only IPv4 supported")
+	}
+	ones, _ := ipNet.Mask.Size()
+	key := make([]byte, 5)
+	copy(key, ip)
+	key[4] = byte(ones)
+
 	var val []byte
-	err := t.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(key))
+	err = t.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(key)
 		if err != nil {
 			return err
 		}
@@ -168,6 +213,20 @@ func (t *DiskTrie) Get(key string) ([]byte, error) {
 		return nil, nil
 	}
 	return val, err
+}
+
+func (t *DiskTrie) Put(prefix string, val []byte) error {
+	if t == nil || t.db == nil {
+		return nil
+	}
+	_, ipNet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		// Fallback to raw string key if it's not a CIDR
+		return t.db.Update(func(txn *badger.Txn) error {
+			return txn.Set([]byte(prefix), val)
+		})
+	}
+	return t.Insert(ipNet, val)
 }
 
 type lookupResult struct {

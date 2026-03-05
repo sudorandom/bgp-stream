@@ -272,6 +272,9 @@ type PrefixState struct {
 	ClassifiedTimeTs     int64                  `protobuf:"varint,7,opt,name=classified_time_ts,json=classifiedTimeTs,proto3" json:"classified_time_ts,omitempty"`
 	LastRpkiStatus       int32                  `protobuf:"varint,8,opt,name=last_rpki_status,json=lastRpkiStatus,proto3" json:"last_rpki_status,omitempty"`
 	LastOriginAsn        uint32                 `protobuf:"varint,9,opt,name=last_origin_asn,json=lastOriginAsn,proto3" json:"last_origin_asn,omitempty"`
+	LeakType             int32                  `protobuf:"varint,10,opt,name=leak_type,json=leakType,proto3" json:"leak_type,omitempty"`
+	LeakerAsn            uint32                 `protobuf:"varint,11,opt,name=leaker_asn,json=leakerAsn,proto3" json:"leaker_asn,omitempty"`
+	VictimAsn            uint32                 `protobuf:"varint,12,opt,name=victim_asn,json=victimAsn,proto3" json:"victim_asn,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -369,6 +372,27 @@ func (x *PrefixState) GetLastOriginAsn() uint32 {
 	return 0
 }
 
+func (x *PrefixState) GetLeakType() int32 {
+	if x != nil {
+		return x.LeakType
+	}
+	return 0
+}
+
+func (x *PrefixState) GetLeakerAsn() uint32 {
+	if x != nil {
+		return x.LeakerAsn
+	}
+	return 0
+}
+
+func (x *PrefixState) GetVictimAsn() uint32 {
+	if x != nil {
+		return x.VictimAsn
+	}
+	return 0
+}
+
 var File_v1_v1_proto protoreflect.FileDescriptor
 
 const file_v1_v1_proto_rawDesc = "" +
@@ -403,7 +427,7 @@ const file_v1_v1_proto_rawDesc = "" +
 	"local_pref\x18\b \x01(\x05R\tlocalPref\x12$\n" +
 	"\x0elast_update_ts\x18\t \x01(\x03R\flastUpdateTs\x12\x12\n" +
 	"\x04host\x18\n" +
-	" \x01(\tR\x04host\"\xe7\x04\n" +
+	" \x01(\tR\x04host\"\xc2\x05\n" +
 	"\vPrefixState\x12:\n" +
 	"\abuckets\x18\x01 \x03(\v2 .bgp.v1.PrefixState.BucketsEntryR\abuckets\x12N\n" +
 	"\x0fpeer_last_attrs\x18\x02 \x03(\v2&.bgp.v1.PrefixState.PeerLastAttrsEntryR\rpeerLastAttrs\x12$\n" +
@@ -413,7 +437,13 @@ const file_v1_v1_proto_rawDesc = "" +
 	"\x0fclassified_type\x18\x06 \x01(\x05R\x0eclassifiedType\x12,\n" +
 	"\x12classified_time_ts\x18\a \x01(\x03R\x10classifiedTimeTs\x12(\n" +
 	"\x10last_rpki_status\x18\b \x01(\x05R\x0elastRpkiStatus\x12&\n" +
-	"\x0flast_origin_asn\x18\t \x01(\rR\rlastOriginAsn\x1aO\n" +
+	"\x0flast_origin_asn\x18\t \x01(\rR\rlastOriginAsn\x12\x1b\n" +
+	"\tleak_type\x18\n" +
+	" \x01(\x05R\bleakType\x12\x1d\n" +
+	"\n" +
+	"leaker_asn\x18\v \x01(\rR\tleakerAsn\x12\x1d\n" +
+	"\n" +
+	"victim_asn\x18\f \x01(\rR\tvictimAsn\x1aO\n" +
 	"\fBucketsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x03R\x03key\x12)\n" +
 	"\x05value\x18\x02 \x01(\v2\x13.bgp.v1.StatsBucketR\x05value:\x028\x01\x1aS\n" +

@@ -39,4 +39,7 @@ message PrefixState {
     int64 classified_time_ts = 7;
     int32 last_rpki_status = 8;
     uint32 last_origin_asn = 9;
+    int32 leak_type = 10;
+    uint32 leaker_asn = 11;
+    uint32 victim_asn = 12;
 }

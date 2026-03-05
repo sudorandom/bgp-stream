@@ -30,11 +30,11 @@ type AudioPlayer struct {
 	isStopping   bool
 }
 
-func NewAudioPlayer(writer io.Writer, onMetadata AudioMetadataCallback) *AudioPlayer {
+func NewAudioPlayer(dir string, writer io.Writer, onMetadata AudioMetadataCallback) *AudioPlayer {
 	return &AudioPlayer{
 		AudioWriter: writer,
 		OnMetadata:  onMetadata,
-		AudioDir:    "audio",
+		AudioDir:    dir,
 		stopChan:    make(chan struct{}),
 		stoppedChan: make(chan struct{}),
 	}
@@ -70,7 +70,6 @@ func (p *AudioPlayer) Start() {
 			}
 
 			if len(playlists) == 0 {
-				log.Println("No MP3 files found in audio directory.")
 				if p.waitForRetry() {
 					return
 				}

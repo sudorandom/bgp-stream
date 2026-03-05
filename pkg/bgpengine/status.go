@@ -41,28 +41,26 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		boxW = 560.0
 	}
 
-	// 1. Left Column: Active Countries & BGP Anomalies
-	// Shift down to avoid covering map features
-	leftBaselineY := float64(e.Height) * 0.48
+	// 1. Left Column: BGP Anomalies (Summary & Stream)
+	// Positioned lower to avoid covering the central part of the map
+	leftBaselineY := float64(e.Height) * 0.55
 	if e.Width > 2000 {
-		leftBaselineY = float64(e.Height) * 0.42
+		leftBaselineY = float64(e.Height) * 0.50
 	}
 
-	// Active Countries (Top)
-	e.drawHubs(screen, margin, leftBaselineY, boxW, fontSize)
+	// 1a. Anomaly Summary (Top Left)
+	summaryH := e.calculateSummaryBoxHeight(fontSize)
+	e.drawAnomalySummary(screen, margin, leftBaselineY, boxW, summaryH, fontSize)
 
-	// BGP Anomalies (Below)
-	hubsBoxH := 130.0
+	// 1b. Critical Event Stream (Below Summary)
+	streamY := leftBaselineY + summaryH + 20.0
 	if e.Width > 2000 {
-		hubsBoxH = 260.0
+		streamY = leftBaselineY + summaryH + 40.0
 	}
-	// Calculate dynamic height based on content
-	impactBoxH := e.calculateImpactBoxHeight(fontSize)
-	impactYBase := leftBaselineY + hubsBoxH + 20.0
-	if e.Width > 2000 {
-		impactYBase = leftBaselineY + hubsBoxH + 40.0
-	}
-	e.drawImpacts(screen, margin, impactYBase, boxW, impactBoxH, fontSize, e.titleMonoFace)
+	// Extend to near the bottom of the view
+	maxStreamH := float64(e.Height) - 20.0 - streamY
+	streamH := e.calculateStreamBoxHeight(fontSize, maxStreamH)
+	e.drawCriticalStream(screen, margin, streamY, boxW, streamH, fontSize)
 
 	// 3. Bottom Center: Now Playing
 	e.drawNowPlaying(screen, margin, boxW, fontSize, e.face)
@@ -124,59 +122,32 @@ func (e *Engine) drawHubs(screen *ebiten.Image, margin, hubYBase, boxW, fontSize
 	e.drawGlitchImage(screen, e.hubsBuffer, hubX-10, hubYBase-fontSize-15, 1.0, hubIntensity, isHubUpdating)
 }
 
-func (e *Engine) calculateImpactBoxHeight(fontSize float64) float64 {
-	// Note: metricsMu is already held by caller (DrawBGPStatus)
+func (e *Engine) calculateSummaryBoxHeight(fontSize float64) float64 {
+	totalHeight := fontSize + 30.0 // Header
 
-	// Header height
-	totalHeight := fontSize + 30.0
-
-	// ASN Groups
-	for _, v := range e.ActiveASNImpacts {
-		totalHeight += fontSize * 0.9                            // ASN Header
-		totalHeight += float64(len(v.Prefixes)) * fontSize * 0.9 // Prefixes
-		if v.Count > len(v.Prefixes) {
-			totalHeight += fontSize * 0.9 // "(X more)"
-		}
-		totalHeight += 5.0 // Spacer
-	}
-
-	// Prefix Counts Summary
 	if len(e.prefixCounts) > 0 {
-		totalHeight += 20.0                                          // Top gap
-		totalHeight += fontSize * 0.9                                // Column Headers
-		totalHeight += float64(len(e.prefixCounts)) * fontSize * 0.8 // Rows
+		totalHeight += fontSize * 1.1                                // Column Headers
+		totalHeight += float64(len(e.prefixCounts)) * fontSize * 1.0 // Rows
+	} else {
+		totalHeight += fontSize * 1.5 // "No anomalies detected"
 	}
 
-	totalHeight += 20.0 // Bottom padding
-
-	minHeight := 340.0
-	if e.Width > 2000 {
-		minHeight = 640.0
-	}
-
-	if totalHeight < minHeight {
-		return minHeight
-	}
+	totalHeight += 10.0 // Bottom padding
 	return totalHeight
 }
 
-func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, impactBoxH, fontSize float64, monoFace *text.GoTextFace) {
-	hubX := margin
-	// 1. Check if any items are actually visible
-	if len(e.ActiveASNImpacts) == 0 {
-		return
-	}
-
-	if e.impactBuffer == nil || e.impactBuffer.Bounds().Dx() != int(boxW) || e.impactBuffer.Bounds().Dy() != int(impactBoxH) {
-		e.impactBuffer = ebiten.NewImage(int(boxW), int(impactBoxH))
+func (e *Engine) drawAnomalySummary(screen *ebiten.Image, margin, yBase, boxW, boxH, fontSize float64) {
+	if e.impactBuffer == nil || e.impactBuffer.Bounds().Dx() != int(boxW*1.4) || e.impactBuffer.Bounds().Dy() != int(boxH) {
+		e.impactBuffer = ebiten.NewImage(int(boxW*1.4), int(boxH))
 	}
 	e.impactBuffer.Clear()
 
+	boxW *= 1.4
 	localX, localY := 10.0, fontSize+15.0
-	vector.FillRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), color.RGBA{0, 0, 0, 100}, false)
-	vector.StrokeRect(e.impactBuffer, 0, 0, float32(boxW), float32(impactBoxH), 1, color.RGBA{36, 42, 53, 255}, false)
+	vector.FillRect(e.impactBuffer, 0, 0, float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+	vector.StrokeRect(e.impactBuffer, 0, 0, float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	impactTitle := "BGP ANOMALIES (last 20 seconds)"
+	impactTitle := "BGP ANOMALY SUMMARY (20s)"
 	vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 	e.textOp.GeoM.Reset()
@@ -185,73 +156,53 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
 	text.Draw(e.impactBuffer, impactTitle, e.titleFace, e.textOp)
 
-	currentY := localY + 5.0
-	for _, v := range e.ActiveASNImpacts {
-		// Draw ASN header
+	if len(e.prefixCounts) == 0 {
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, currentY)
+		e.textOp.GeoM.Translate(localX+5, localY+5)
 		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, 0.8)
-		text.Draw(e.impactBuffer, v.ASNStr, e.subMonoFace, e.textOp)
-		currentY += fontSize * 0.9
+		e.textOp.ColorScale.Scale(1, 1, 1, 0.3)
+		text.Draw(e.impactBuffer, "No major anomalies detected.", e.subMonoFace, e.textOp)
+	} else {
+		currentY := localY + 5.0
+		// Layout: [ANOMALY NAME] [RATE] [ASNS] [PFXS]
+		col1X := localX + 5.0
+		col4X := localX + boxW - 40.0
+		col3X := col4X - 60.0
+		col2X := col3X - 80.0
 
-		// Draw prefixes indented
-		for _, p := range v.Prefixes {
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+15, currentY)
-			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.Scale(1, 1, 1, 0.6)
-			text.Draw(e.impactBuffer, p, monoFace, e.textOp)
-
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+boxW-v.AnomWidth-15, currentY)
-			e.textOp.ColorScale.Reset()
-			cr, cg, cb := float32(v.Color.R)/255.0, float32(v.Color.G)/255.0, float32(v.Color.B)/255.0
-			e.textOp.ColorScale.Scale(cr, cg, cb, 0.9)
-			text.Draw(e.impactBuffer, v.Anom, e.subMonoFace, e.textOp)
-
-			currentY += fontSize * 0.9
-		}
-
-		if v.MoreStr != "" {
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+15, currentY)
-			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.Scale(1, 1, 1, 0.4)
-			text.Draw(e.impactBuffer, v.MoreStr, e.subMonoFace, e.textOp)
-			currentY += fontSize * 0.9
-		}
-		currentY += 5.0 // Spacer between ASNs
-	}
-
-	if len(e.prefixCounts) > 0 {
-		// Draw headers for the columns
-		currentY += 10.0
-		col1X, col2X, col3X := localX+5.0, localX+boxW-100.0, localX+boxW-40.0
 		if e.Width > 2000 {
-			col1X, col2X, col3X = localX+10.0, localX+boxW-200.0, localX+boxW-80.0
+			col4X = localX + boxW - 80.0
+			col3X = col4X - 120.0
+			col2X = col3X - 160.0
 		}
 
 		e.textOp.ColorScale.Reset()
 		e.textOp.ColorScale.Scale(1, 1, 1, 0.4)
 
+		// Headers
 		e.textOp.GeoM.Reset()
 		e.textOp.GeoM.Translate(col1X, currentY)
-		text.Draw(e.impactBuffer, "ANOMALY", e.subMonoFace, e.textOp)
+		text.Draw(e.impactBuffer, "TYPE", e.subMonoFace, e.textOp)
+
+		hRate := "RATE"
+		hwRate, _ := text.Measure(hRate, e.subMonoFace, 0)
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(col2X-hwRate/2, currentY)
+		text.Draw(e.impactBuffer, hRate, e.subMonoFace, e.textOp)
 
 		h1 := "ASNS"
 		hw1, _ := text.Measure(h1, e.subMonoFace, 0)
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(col2X-hw1/2, currentY)
+		e.textOp.GeoM.Translate(col3X-hw1/2, currentY)
 		text.Draw(e.impactBuffer, h1, e.subMonoFace, e.textOp)
 
 		h2 := "PFXS"
 		hw2, _ := text.Measure(h2, e.subMonoFace, 0)
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(col3X-hw2/2, currentY)
+		e.textOp.GeoM.Translate(col4X-hw2/2, currentY)
 		text.Draw(e.impactBuffer, h2, e.subMonoFace, e.textOp)
 
-		currentY += fontSize * 0.9
+		currentY += fontSize * 1.1
 
 		for _, pc := range e.prefixCounts {
 			// Anomaly Name
@@ -261,10 +212,18 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 			e.textOp.ColorScale.ScaleWithColor(pc.Color)
 			text.Draw(e.impactBuffer, pc.Name, e.subMonoFace, e.textOp)
 
+			// Rate
+			rw, _ := text.Measure(pc.RateStr, e.subMonoFace, 0)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(col2X-rw/2, currentY)
+			e.textOp.ColorScale.Reset()
+			e.textOp.ColorScale.ScaleWithColor(pc.Color)
+			text.Draw(e.impactBuffer, pc.RateStr, e.subMonoFace, e.textOp)
+
 			// ASN Count
 			aw, _ := text.Measure(pc.ASNStr, e.subMonoFace, 0)
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(col2X-aw/2, currentY)
+			e.textOp.GeoM.Translate(col3X-aw/2, currentY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.ScaleWithColor(pc.Color)
 			text.Draw(e.impactBuffer, pc.ASNStr, e.subMonoFace, e.textOp)
@@ -272,22 +231,122 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 			// Prefix Count
 			pw, _ := text.Measure(pc.CountStr, e.subMonoFace, 0)
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(col3X-pw/2, currentY)
+			e.textOp.GeoM.Translate(col4X-pw/2, currentY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.ScaleWithColor(pc.Color)
 			text.Draw(e.impactBuffer, pc.CountStr, e.subMonoFace, e.textOp)
 
-			currentY += fontSize * 0.8
+			currentY += fontSize * 1.0
 		}
 	}
 
-	now := e.Now()
-	isImpactUpdating := now.Sub(e.impactUpdatedAt) < 2*time.Second
-	impactIntensity := 0.0
-	if isImpactUpdating {
-		impactIntensity = 1.0 - (now.Sub(e.impactUpdatedAt).Seconds() / 2.0)
+	e.drawGlitchImage(screen, e.impactBuffer, margin-10, yBase-fontSize-15, 1.0, 0, false)
+}
+
+func (e *Engine) calculateStreamBoxHeight(fontSize, maxHeight float64) float64 {
+	// Always return the full available height to extend to the bottom
+	return maxHeight
+}
+
+func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, boxH, fontSize float64) {
+	if e.streamBuffer == nil || e.streamBuffer.Bounds().Dx() != int(boxW*1.4) || e.streamBuffer.Bounds().Dy() != int(boxH) {
+		e.streamBuffer = ebiten.NewImage(int(boxW*1.4), int(boxH))
 	}
-	e.drawGlitchImage(screen, e.impactBuffer, hubX-10, impactYBase-fontSize-15, 1.0, impactIntensity, isImpactUpdating)
+	e.streamBuffer.Clear()
+
+	boxW *= 1.4
+	localX, localY := 10.0, fontSize+15.0
+	vector.FillRect(e.streamBuffer, 0, 0, float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+	vector.StrokeRect(e.streamBuffer, 0, 0, float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+
+	streamTitle := "CRITICAL EVENT STREAM (Real-time)"
+	vector.FillRect(e.streamBuffer, 0, 0, 4, float32(fontSize+10), color.RGBA{255, 50, 50, 255}, false)
+
+	e.textOp.GeoM.Reset()
+	e.textOp.GeoM.Translate(localX+5, localY-fontSize-5)
+	e.textOp.ColorScale.Reset()
+	e.textOp.ColorScale.Scale(1, 1, 1, 0.5)
+	text.Draw(e.streamBuffer, streamTitle, e.titleFace, e.textOp)
+
+	if len(e.CriticalStream) == 0 {
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(localX+5, localY+5)
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.Scale(1, 1, 1, 0.3)
+		text.Draw(e.streamBuffer, "Waiting for critical events...", e.subMonoFace, e.textOp)
+	} else {
+		currentY := localY + 5.0
+		for _, ce := range e.CriticalStream {
+			if currentY+fontSize > boxH {
+				break
+			}
+
+			// Draw Anomaly Type Label
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(localX, currentY)
+			e.textOp.ColorScale.Reset()
+			cr, cg, cb := float32(ce.Color.R)/255.0, float32(ce.Color.G)/255.0, float32(ce.Color.B)/255.0
+			e.textOp.ColorScale.Scale(cr, cg, cb, 0.9)
+			typeLabel := "[" + strings.ToUpper(ce.Anom) + "]"
+			text.Draw(e.streamBuffer, typeLabel, e.subMonoFace, e.textOp)
+
+			typeW, _ := text.Measure(typeLabel, e.subMonoFace, 0)
+
+			// Draw ASN (or Leak Type if it's a route leak)
+			e.textOp.GeoM.Reset()
+			e.textOp.GeoM.Translate(localX+typeW+10, currentY)
+			e.textOp.ColorScale.Reset()
+			e.textOp.ColorScale.Scale(1, 1, 1, 0.8)
+
+			firstLineDetail := ce.ASNStr
+			if ce.Anom == nameRouteLeak && ce.LeakType != LeakUnknown {
+				firstLineDetail = ce.LeakType.String()
+			}
+			text.Draw(e.streamBuffer, firstLineDetail, e.subMonoFace, e.textOp)
+
+			currentY += fontSize * 1.1
+
+			// Details for Route Leaks
+			if ce.Anom == nameRouteLeak && ce.LeakType != LeakUnknown {
+				if currentY+fontSize*2 > boxH {
+					break
+				}
+				e.textOp.ColorScale.Reset()
+				e.textOp.ColorScale.Scale(1, 0.8, 0, 0.7) // Golden yellow
+
+				// Leaker
+				leakerStr := fmt.Sprintf("  Leaker: AS%d", ce.LeakerASN)
+				if e.asnMapping != nil {
+					if name := e.asnMapping.GetName(ce.LeakerASN); name != "" {
+						leakerStr += " - " + name
+					}
+				}
+				e.textOp.GeoM.Reset()
+				e.textOp.GeoM.Translate(localX+5, currentY)
+				text.Draw(e.streamBuffer, leakerStr, e.subMonoFace, e.textOp)
+				currentY += fontSize * 1.0
+
+				// Victim
+				victimStr := "  Victim: Unknown"
+				if ce.VictimASN != 0 {
+					victimStr = fmt.Sprintf("  Victim: AS%d", ce.VictimASN)
+					if e.asnMapping != nil {
+						if name := e.asnMapping.GetName(ce.VictimASN); name != "" {
+							victimStr += " - " + name
+						}
+					}
+				}
+				e.textOp.GeoM.Reset()
+				e.textOp.GeoM.Translate(localX+5, currentY)
+				text.Draw(e.streamBuffer, victimStr, e.subMonoFace, e.textOp)
+				currentY += fontSize * 1.0
+			}
+
+			currentY += 10.0 // Spacer between events
+		}
+	}
+
+	e.drawGlitchImage(screen, e.streamBuffer, margin-10, yBase-fontSize-15, 1.0, 0, false)
 }
 
 func (e *Engine) drawNowPlaying(screen *ebiten.Image, margin, boxW, fontSize float64, face *text.GoTextFace) {
@@ -709,7 +768,7 @@ func (e *Engine) StartMetricsLoop() {
 		e.updateMetricSnapshots(interval)
 
 		logTicks++
-		if logTicks >= 10 {
+		if logTicks >= 60 {
 			logTicks = 0
 			e.geo.ReportGeoMetrics()
 			if e.processor != nil {
@@ -1014,10 +1073,12 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 
 		if pc, ok := e.countMap[vi.ClassificationName]; ok {
 			pc.Count++
+			pc.Rate += vi.Count
 		} else {
 			e.countMap[vi.ClassificationName] = &PrefixCount{
 				Name:     vi.ClassificationName,
 				Count:    1,
+				Rate:     vi.Count,
 				Color:    e.getClassificationUIColor(vi.ClassificationName),
 				Priority: prio,
 			}
@@ -1039,6 +1100,7 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 		// Pre-format strings here once every 20s
 		pc.ASNStr = strconv.Itoa(pc.ASNCount)
 		pc.CountStr = strconv.Itoa(pc.Count)
+		pc.RateStr = fmt.Sprintf("%.0f", pc.Rate)
 		e.prefixCounts = append(e.prefixCounts, *pc)
 	}
 
@@ -1066,6 +1128,9 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 		}
 
 		asn := e.prefixToASN[vi.Prefix]
+		if asn == 0 && vi.LeakerASN != 0 {
+			asn = vi.LeakerASN
+		}
 		if asn == 0 {
 			continue
 		}
@@ -1083,12 +1148,13 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 			}
 
 			g = &asnGroup{
-				asnStr:   asnStr,
-				anom:     vi.ClassificationName,
-				color:    e.getClassificationUIColor(vi.ClassificationName),
-				priority: prio,
-				maxCount: vi.Count,
-				prefixes: make([]string, 0, 4), // Small initial capacity
+				asnStr:    asnStr,
+				anom:      vi.ClassificationName,
+				color:     e.getClassificationUIColor(vi.ClassificationName),
+				priority:  prio,
+				maxCount:  vi.Count,
+				prefixes:  make([]string, 0, 4), // Small initial capacity
+				locations: make(map[string]struct{}),
 			}
 			e.asnGroups[key] = g
 		}
@@ -1096,6 +1162,17 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 		// Update max count if this prefix has a higher rate than others in this group
 		if vi.Count > g.maxCount {
 			g.maxCount = vi.Count
+		}
+		g.totalCount += vi.Count
+
+		if vi.LeakType != LeakUnknown {
+			g.leakType = vi.LeakType
+			g.leakerASN = vi.LeakerASN
+			g.victimASN = vi.VictimASN
+		}
+
+		for cc := range vi.CCs {
+			g.locations[cc] = struct{}{}
 		}
 
 		g.prefixes = append(g.prefixes, vi.Prefix)
@@ -1110,7 +1187,7 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 		if e.asnSortedGroups[i].priority != e.asnSortedGroups[j].priority {
 			return e.asnSortedGroups[i].priority > e.asnSortedGroups[j].priority
 		}
-		return len(e.asnSortedGroups[i].prefixes) > len(e.asnSortedGroups[j].prefixes)
+		return e.asnSortedGroups[i].totalCount > e.asnSortedGroups[j].totalCount
 	})
 
 	e.ActiveASNImpacts = e.ActiveASNImpacts[:0]
@@ -1133,6 +1210,13 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 
 		anomWidth, _ := text.Measure(g.anom, e.subMonoFace, 0)
 
+		locs := make([]string, 0, len(g.locations))
+		for cc := range g.locations {
+			locs = append(locs, cc)
+		}
+		sort.Strings(locs)
+		locStr := strings.Join(locs, ", ")
+
 		e.ActiveASNImpacts = append(e.ActiveASNImpacts, &ASNImpact{
 			ASNStr:    g.asnStr,
 			Prefixes:  displayPrefixes,
@@ -1141,6 +1225,11 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 			AnomWidth: anomWidth,
 			Color:     g.color,
 			Count:     len(g.prefixes),
+			Rate:      g.totalCount,
+			LeakType:  g.leakType,
+			LeakerASN: g.leakerASN,
+			VictimASN: g.victimASN,
+			Locations: locStr,
 		})
 	}
 }

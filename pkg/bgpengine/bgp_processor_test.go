@@ -9,7 +9,7 @@ import (
 
 func TestBGPProcessorDeduplication(t *testing.T) {
 	events := 0
-	onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+	onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
 		events++
 	}
 	geo := func(ip uint32) (float64, float64, string, geoservice.ResolutionType) {
@@ -22,10 +22,13 @@ func TestBGPProcessorDeduplication(t *testing.T) {
 
 	p := NewBGPProcessor(geo, nil, nil, nil, nil, prefixToIP, time.Now, onEvent)
 
-	// Simulate receiving a Withdrawal followed by Announcement (Path Change)
+	// Simulate receiving a New Announcement
 	p.mu.Lock()
 	p.onEvent(37.0, -122.0, "US", EventNew, ClassificationNone, "8.8.8.0/24", 0) // Initial discovery
-	p.recentlySeen.Add(0x08080808, struct {
+	
+	// Access recentlySeen through a worker
+	wIdx := int(0x08080808 % uint32(len(p.workers)))
+	p.workers[wIdx].recentlySeen.Add(0x08080808, struct {
 		Time time.Time
 		Type EventType
 	}{Time: time.Now(), Type: EventNew})
@@ -38,7 +41,7 @@ func TestBGPProcessorDeduplication(t *testing.T) {
 	// Immediate duplicate update should be Gossip
 	p.mu.Lock()
 	// Simulate what would happen in ris_message handler
-	if last, ok := p.recentlySeen.Get(0x08080808); ok && time.Since(last.Time) < 15*time.Second {
+	if last, ok := p.workers[wIdx].recentlySeen.Get(0x08080808); ok && time.Since(last.Time) < 15*time.Second {
 		p.onEvent(37.0, -122.0, "US", EventGossip, ClassificationNone, "8.8.8.0/24", 0)
 	}
 	p.mu.Unlock()

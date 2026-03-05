@@ -127,6 +127,18 @@ type asnGroupKey struct {
 	Anom string
 }
 
+type CriticalEvent struct {
+	Timestamp time.Time
+	Anom      string
+	ASNStr    string
+	OrgID     string
+	LeakType  LeakType
+	LeakerASN uint32
+	VictimASN uint32
+	Locations string
+	Color     color.RGBA
+}
+
 type Engine struct {
 	Width, Height int
 	FPS           int
@@ -184,6 +196,7 @@ type Engine struct {
 	extraBuffer      *ebiten.Image
 	hubsBuffer       *ebiten.Image
 	impactBuffer     *ebiten.Image
+	streamBuffer     *ebiten.Image
 	trendLinesBuffer *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
@@ -208,6 +221,8 @@ type Engine struct {
 	VisualImpact           map[string]*VisualImpact
 	ActiveImpacts          []*VisualImpact
 	ActiveASNImpacts       []*ASNImpact
+	CriticalStream         []*CriticalEvent
+	criticalCooldown       map[string]time.Time
 
 	SeenDB  *utils.DiskTrie
 	StateDB *utils.DiskTrie
@@ -228,6 +243,7 @@ type Engine struct {
 	geoResolver geoservice.GeoResolver
 	dataMgr     *geoservice.DataManager
 	MMDBFiles   []string
+	AudioDir    string
 
 	HideUI                 bool
 	VideoPath              string
@@ -277,6 +293,18 @@ type Engine struct {
 	droppedPulses atomic.Uint64
 	droppedQueue  atomic.Uint64
 	droppedStale  atomic.Uint64
+
+	eventCh chan *bgpEvent
+}
+
+type bgpEvent struct {
+	lat, lng           float64
+	cc                 string
+	eventType          EventType
+	classificationType ClassificationType
+	prefix             string
+	asn                uint32
+	leakDetail         *LeakDetail
 }
 
 type VisualHub struct {
@@ -298,6 +326,8 @@ type PrefixCount struct {
 	CountStr string
 	ASNCount int
 	ASNStr   string
+	Rate     float64
+	RateStr  string
 	Color    color.RGBA
 	Priority int
 }
@@ -310,6 +340,12 @@ type ASNImpact struct {
 	AnomWidth float64
 	Color     color.RGBA
 	Count     int
+	Rate      float64
+
+	LeakType  LeakType
+	LeakerASN uint32
+	VictimASN uint32
+	Locations string
 }
 
 type VisualImpact struct {
@@ -329,6 +365,11 @@ type VisualImpact struct {
 	Alpha                      float32
 	TargetAlpha                float32
 	Active                     bool
+
+	LeakType  LeakType
+	LeakerASN uint32
+	VictimASN uint32
+	CCs       map[string]struct{}
 }
 
 type MetricSnapshot struct {
@@ -341,12 +382,18 @@ type MetricSnapshot struct {
 }
 
 type asnGroup struct {
-	asnStr   string
-	prefixes []string
-	anom     string
-	color    color.RGBA
-	priority int
-	maxCount float64
+	asnStr     string
+	prefixes   []string
+	anom       string
+	color      color.RGBA
+	priority   int
+	maxCount   float64
+	totalCount float64
+
+	leakType  LeakType
+	leakerASN uint32
+	victimASN uint32
+	locations map[string]struct{}
 }
 
 func (e *Engine) Now() time.Time {
@@ -413,8 +460,11 @@ func NewEngine(width, height int, scale float64) *Engine {
 		targetCY:               float64(height) / 2,
 		tourRegionIndex:        -1, // Start with full map
 		tourRegionStayDuration: 10 * time.Second,
+		eventCh:                make(chan *bgpEvent, 250000),
+		criticalCooldown:       make(map[string]time.Time),
 	}
 	e.dataMgr = geoservice.NewDataManager(e.geo)
+	go e.runEventWorker()
 
 	e.whitePixel = ebiten.NewImage(1, 1)
 	e.whitePixel.Fill(color.White)
@@ -437,9 +487,9 @@ func NewEngine(width, height int, scale float64) *Engine {
 	e.monoFace = &text.GoTextFace{Source: m, Size: fontSize}
 	e.titleFace = &text.GoTextFace{Source: s, Size: fontSize * 0.8}
 	e.titleMonoFace = &text.GoTextFace{Source: m, Size: fontSize * 0.8}
-	e.subFace = &text.GoTextFace{Source: s, Size: fontSize * 0.6}
-	e.subMonoFace = &text.GoTextFace{Source: m, Size: fontSize * 0.6}
-	e.extraFace = &text.GoTextFace{Source: s, Size: fontSize * 0.6}
+	e.subFace = &text.GoTextFace{Source: s, Size: fontSize * 0.8}
+	e.subMonoFace = &text.GoTextFace{Source: m, Size: fontSize * 0.8}
+	e.extraFace = &text.GoTextFace{Source: s, Size: fontSize * 0.8}
 	e.artistFace = &text.GoTextFace{Source: s, Size: fontSize * 0.7}
 	e.titleFace09 = &text.GoTextFace{Source: s, Size: fontSize * 0.9}
 	e.titleFace05 = &text.GoTextFace{Source: s, Size: fontSize * 0.5}
@@ -461,13 +511,6 @@ func NewEngine(width, height int, scale float64) *Engine {
 		{"ROUTE LEAK", 0, ColorLeak, ColorWithUI, func(s MetricSnapshot) int { return s.Leak }},
 		{"OUTAGE", 0, ColorOutage, ColorWithUI, func(s MetricSnapshot) int { return s.Outage }},
 	}
-
-	e.audioPlayer = NewAudioPlayer(nil, func(song, artist, extra string) {
-		e.CurrentSong = song
-		e.CurrentArtist = artist
-		e.CurrentExtra = extra
-		e.songChangedAt = time.Now()
-	})
 
 	return e
 }
@@ -1203,66 +1246,161 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 
 func (e *Engine) Layout(w, h int) (width, height int) { return e.Width, e.Height }
 
-func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+func (e *Engine) runEventWorker() {
+	for ev := range e.eventCh {
+		e.processEvent(ev)
+	}
+}
+
+func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
+	var ld *LeakDetail
+	if len(leakDetail) > 0 {
+		ld = leakDetail[0]
+	}
+	select {
+	case e.eventCh <- &bgpEvent{lat, lng, cc, eventType, classificationType, prefix, asn, ld}:
+	default:
+		// Drop event if engine is too busy
+	}
+}
+
+func (e *Engine) processEvent(ev *bgpEvent) {
 	e.metricsMu.Lock()
 	defer e.metricsMu.Unlock()
 
 	// 1. Track prefix impact (latest bucket)
-	if prefix != "" {
+	if ev.prefix != "" {
 		if len(e.prefixImpactHistory) > 0 {
 			bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
 			if bucket == nil {
 				bucket = make(map[string]int)
 				e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
 			}
-			bucket[prefix]++
+			bucket[ev.prefix]++
 		}
 		if e.prefixToASN == nil {
 			e.prefixToASN = make(map[string]uint32)
 		}
-		if asn != 0 {
-			e.prefixToASN[prefix] = asn
+		if ev.asn != 0 {
+			e.prefixToASN[ev.prefix] = ev.asn
 		}
-		if utils.IsBeaconPrefix(prefix) {
+		if utils.IsBeaconPrefix(ev.prefix) {
 			e.windowBeacon++
 		}
 
 		// Track all anomalies and patterns
-		e.prefixToClassification[prefix] = classificationType
+		e.prefixToClassification[ev.prefix] = ev.classificationType
 
 		// If this is an announcement, clear any existing Outage classification for this prefix
-		if eventType == EventNew || eventType == EventUpdate || eventType == EventGossip {
+		if ev.eventType == EventNew || ev.eventType == EventUpdate || ev.eventType == EventGossip {
 			if prefixes, ok := e.currentAnomalies[ClassificationOutage]; ok {
-				delete(prefixes, prefix)
+				delete(prefixes, ev.prefix)
 			}
 		}
 
-		if actualType, ok := e.prefixToClassification[prefix]; ok {
+		if actualType, ok := e.prefixToClassification[ev.prefix]; ok {
 			if e.currentAnomalies[actualType] == nil {
 				e.currentAnomalies[actualType] = make(map[string]int)
 			}
-			e.currentAnomalies[actualType][prefix]++
+			e.currentAnomalies[actualType][ev.prefix]++
 		}
 	}
 
 	// 2. Track country activity
-	if cc != "" {
-		e.countryActivity[cc]++
+	if ev.cc != "" {
+		e.countryActivity[ev.cc]++
 	}
 
 	// 3. Determine color and name based on Level 2 type
-	c, name := e.getClassificationVisuals(classificationType)
+	c, name := e.getClassificationVisuals(ev.classificationType)
 
 	// 4. Buffer city activity
-	e.incrementCityBuffer(lat, lng, c)
+	e.incrementCityBuffer(ev.lat, ev.lng, c)
 
 	// 5. Update Visual Impact metadata
-	if prefix != "" {
-		e.updateHierarchicalRates(prefix, name, c)
+	if ev.prefix != "" {
+		e.updateHierarchicalRates(ev.prefix, name, ev.cc, c, ev.leakDetail)
+	}
+
+	// Record to CriticalStream if it's a critical anomaly
+	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak {
+		now := time.Now()
+		asnStr := fmt.Sprintf("AS%d", ev.asn)
+		orgID := ""
+		if e.asnMapping != nil {
+			orgID = e.asnMapping.GetOrgID(ev.asn)
+			if n := e.asnMapping.GetName(ev.asn); n != "" {
+				asnStr += " - " + n
+			}
+		}
+
+		if lastTime, ok := e.criticalCooldown[ev.prefix]; ok && now.Sub(lastTime) < 10*time.Second {
+			// Prefix is on cooldown, but we might still want to update locations for the most recent entry if it matches the ASN/Org
+			if len(e.CriticalStream) > 0 {
+				prev := e.CriticalStream[0]
+				sameOrg := (orgID != "" && orgID == prev.OrgID) || asnStr == prev.ASNStr
+				if prev.Anom == name && sameOrg {
+					// Update locations
+					if !strings.Contains(prev.Locations, ev.cc) {
+						if prev.Locations == "" {
+							prev.Locations = ev.cc
+						} else {
+							prev.Locations += ", " + ev.cc
+						}
+					}
+					// RETROACTIVE UPDATE: If we now have leak details that the previous entry lacked, update it
+					if prev.LeakType == LeakUnknown && ev.leakDetail != nil {
+						prev.LeakType = ev.leakDetail.Type
+						prev.LeakerASN = ev.leakDetail.LeakerASN
+						prev.VictimASN = ev.leakDetail.VictimASN
+					}
+				}
+			}
+		} else {
+			e.criticalCooldown[ev.prefix] = now
+			shouldAdd := true
+			// Even with prefix cooldown, we still avoid spamming the exact same Org/Anom top of stream
+			if len(e.CriticalStream) > 0 {
+				prev := e.CriticalStream[0]
+				sameOrg := (orgID != "" && orgID == prev.OrgID) || asnStr == prev.ASNStr
+				if prev.Anom == name && sameOrg {
+					if !strings.Contains(prev.Locations, ev.cc) {
+						if prev.Locations == "" {
+							prev.Locations = ev.cc
+						} else {
+							prev.Locations += ", " + ev.cc
+						}
+					}
+					shouldAdd = false
+				}
+			}
+
+			if shouldAdd {
+				ce := &CriticalEvent{
+					Timestamp: now,
+					Anom:      name,
+					ASNStr:    asnStr,
+					OrgID:     orgID,
+					Color:     c,
+					Locations: ev.cc,
+				}
+				if ev.leakDetail != nil {
+					ce.LeakType = ev.leakDetail.Type
+					ce.LeakerASN = ev.leakDetail.LeakerASN
+					ce.VictimASN = ev.leakDetail.VictimASN
+				}
+				// Prepend to stream
+				e.CriticalStream = append([]*CriticalEvent{ce}, e.CriticalStream...)
+				// Limit size
+				if len(e.CriticalStream) > 20 {
+					e.CriticalStream = e.CriticalStream[:20]
+				}
+			}
+		}
 	}
 
 	// 6. Update windowed metrics (this drives the dashboard numbers)
-	e.updateWindowedMetrics(eventType, classificationType, prefix, asn)
+	e.updateWindowedMetrics(ev.eventType, ev.classificationType, ev.prefix, ev.asn)
 }
 
 func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
@@ -1401,17 +1539,28 @@ func (e *Engine) getClassificationUIColor(name string) color.RGBA {
 	}
 }
 
-func (e *Engine) updateHierarchicalRates(prefix, name string, c color.RGBA) {
+func (e *Engine) updateHierarchicalRates(prefix, name, cc string, c color.RGBA, ld *LeakDetail) {
 	vi, ok := e.VisualImpact[prefix]
 	if !ok {
-		vi = &VisualImpact{Prefix: prefix}
+		vi = &VisualImpact{Prefix: prefix, CCs: make(map[string]struct{})}
 		e.VisualImpact[prefix] = vi
+	}
+	if vi.CCs == nil {
+		vi.CCs = make(map[string]struct{})
+	}
+	if cc != "" {
+		vi.CCs[cc] = struct{}{}
 	}
 	if name != "" {
 		// Only update classification if it's higher priority than what we have
 		if e.GetPriority(name) >= e.GetPriority(vi.ClassificationName) {
 			vi.ClassificationName = name
 			vi.ClassificationColor = c
+			if ld != nil {
+				vi.LeakType = ld.Type
+				vi.LeakerASN = ld.LeakerASN
+				vi.VictimASN = ld.VictimASN
+			}
 		}
 	}
 }
@@ -1457,11 +1606,23 @@ func (e *Engine) updateWindowedMetrics(eventType EventType, classificationType C
 	}
 }
 
+func (e *Engine) InitAudio() {
+	if e.AudioDir == "" {
+		return
+	}
+	e.audioPlayer = NewAudioPlayer(e.AudioDir, nil, func(song, artist, extra string) {
+		e.CurrentSong = song
+		e.CurrentArtist = artist
+		e.CurrentExtra = extra
+		e.songChangedAt = time.Now()
+	})
+}
+
 func (e *Engine) SetAudioWriter(w io.Writer) {
 	if e.audioPlayer != nil {
 		e.audioPlayer.AudioWriter = w
-	} else {
-		e.audioPlayer = NewAudioPlayer(w, func(song, artist, extra string) {
+	} else if e.AudioDir != "" {
+		e.audioPlayer = NewAudioPlayer(e.AudioDir, w, func(song, artist, extra string) {
 			e.CurrentSong = song
 			e.CurrentArtist = artist
 			e.CurrentExtra = extra
