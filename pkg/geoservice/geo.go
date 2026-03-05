@@ -466,14 +466,10 @@ func (g *GeoService) resolveFinalFallback(ip uint32, bestCC, bestCity string) (l
 		ccNorm := strings.ToUpper(bestCC)
 		g.dataMu.RLock()
 		coords, ok := g.countryCoords[ccNorm]
-		countryName := bestCC
-		if name, okName := g.isoToCountry[ccNorm]; okName {
-			countryName = name
-		}
 		g.dataMu.RUnlock()
 
 		if ok {
-			return float64(coords[0]), float64(coords[1]), countryName, bestCity, ResHubs
+			return float64(coords[0]), float64(coords[1]), bestCC, bestCity, ResUnknown
 		}
 		return 0, 0, bestCC, bestCity, ResUnknown
 	}
@@ -747,7 +743,8 @@ func (g *GeoService) resolveFromCountryHubs(ip uint32, countryCode string) (lat,
 			g.dataMu.RLock()
 			for ck, coords := range g.cityCoords {
 				if ck.cc == countryCode && math.Abs(float64(coords[0])-h.Lat) < 0.01 && math.Abs(float64(coords[1])-h.Lng) < 0.01 {
-					cityName = ck.city
+					// Title case the lowercase city name
+					cityName = strings.Title(ck.city)
 					break
 				}
 			}

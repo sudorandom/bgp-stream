@@ -44,7 +44,6 @@ The classification engine also maps events into Level 2 categorizations (anomali
 
 **Bad (Orange)**
 - **Link Flap:** A prefix experiences a high ratio of withdrawals to announcements (more than 5 withdrawals, with an announcement-to-withdrawal ratio of less than 2.5).
-- **Babbling:** Excessive message volume from a peer for a specific prefix, particularly when the BGP attributes (Path, Community, MED, LocalPref) are completely unchanged.
 - **Next-Hop Flap:** The prefix is announced with at least 5 next-hop changes across multiple distinct next-hops, but with very little change to the actual AS path length.
 - **Aggregator Flap:** Frequent changes (more than 10) in the AGGREGATOR attribute relative to the prefix's uptime.
 

@@ -24,7 +24,7 @@ func runClassificationTest(t *testing.T, name string, expect ClassificationType,
 
 		classify := func(prefix string, ctx *MessageContext) {
 			wIdx := int(utils.HashUint32(p.prefixToIP(prefix)) % uint32(len(p.workers)))
-			if e, ok := p.workers[wIdx].classifier.ClassifyEvent(prefix, ctx.EventType(), ctx); ok {
+			if e, ok := p.workers[wIdx].classifier.ClassifyEvent(prefix, ctx); ok {
 				if lat, lng, cc, city, _ := p.geo(e.ip); cc != "" {
 					p.onEvent(lat, lng, cc, city, e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
 				}
@@ -39,14 +39,6 @@ func runClassificationTest(t *testing.T, name string, expect ClassificationType,
 }
 
 func TestClassification(t *testing.T) {
-	runClassificationTest(t, "Babbling", ClassificationBabbling, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 21; i++ {
-			classify("1.1.1.0/24", &MessageContext{
-				Peer: "peer1", PathStr: "[100 200]", Now: now.Add(time.Duration(i) * time.Second),
-			})
-		}
-	})
-
 	runClassificationTest(t, "Discovery (100 peers)", ClassificationDiscovery, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
 		for i := 0; i < 100; i++ {
 			classify("2.2.2.0/24", &MessageContext{

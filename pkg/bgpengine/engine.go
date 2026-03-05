@@ -24,10 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/biter777/countries"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
 	geojson "github.com/paulmach/go.geojson"
 	"github.com/sudorandom/bgp-stream/pkg/geoservice"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
@@ -95,7 +93,6 @@ var (
 
 	// Keep specific pulse colors for variety but group by tier color in legend
 	ColorLinkFlap = color.RGBA{255, 127, 0, 255}
-	ColorBabbling = color.RGBA{255, 165, 0, 255}
 	ColorOutage   = color.RGBA{255, 50, 50, 255}
 	ColorLeak     = color.RGBA{255, 0, 0, 255}
 	ColorNextHop  = color.RGBA{218, 165, 32, 255}
@@ -131,6 +128,7 @@ type asnGroupKey struct {
 type CriticalEvent struct {
 	Timestamp time.Time
 	Anom      string
+	ASN       uint32
 	ASNStr    string
 	OrgID     string
 	LeakType  LeakType
@@ -185,9 +183,9 @@ type Engine struct {
 	windowNote, windowPeer, windowOpen             int64
 	windowBeacon                                   int64
 
-	windowLinkFlap, windowAggFlap, windowOscill, windowBabbling int64
-	windowHunting, windowTE, windowNextHop, windowOutage        int64
-	windowLeak, windowGlobal                                    int64
+	windowLinkFlap, windowAggFlap, windowOscill          int64
+	windowHunting, windowTE, windowNextHop, windowOutage int64
+	windowLeak, windowGlobal                             int64
 
 	rateNew, rateUpd, rateWith, rateGossip float64
 	rateNote, ratePeer, rateOpen           float64
@@ -203,6 +201,9 @@ type Engine struct {
 	CurrentSong      string
 	CurrentArtist    string
 	CurrentExtra     string
+	lastSong         string
+	lastArtist       string
+	lastExtra        string
 	songChangedAt    time.Time
 	songBuffer       *ebiten.Image
 	artistBuffer     *ebiten.Image
@@ -212,6 +213,7 @@ type Engine struct {
 	trendLinesBuffer *ebiten.Image
 	trendClipBuffer  *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
+	nowPlayingDirty  bool
 
 	trendGridVertices []ebiten.Vertex
 	trendGridIndices  []uint16
@@ -226,6 +228,7 @@ type Engine struct {
 	droppedFrames     atomic.Uint64
 	hubUpdatedAt      time.Time
 	impactUpdatedAt   time.Time
+	streamUpdatedAt   time.Time
 	prefixCounts      []PrefixCount
 
 	VisualHubs map[string]*VisualHub
@@ -303,11 +306,7 @@ type Engine struct {
 	subFace, subMonoFace, extraFace, artistFace *text.GoTextFace
 	titleFace09, titleFace05                    *text.GoTextFace
 	drawOp                                      *ebiten.DrawImageOptions
-	textOp                                      *text.DrawOptions
 	legendRows                                  []legendRow
-	vectorDrawPathOp                            vector.DrawPathOptions
-	vectorFillOp                                vector.FillOptions
-	vectorStrokeOp                              vector.StrokeOptions
 
 	droppedPulses atomic.Uint64
 	droppedQueue  atomic.Uint64
@@ -401,9 +400,9 @@ type MetricSnapshot struct {
 	New, Upd, With, Gossip, Note, Peer, Open int
 	Beacon                                   int
 
-	LinkFlap, AggFlap, Oscill, Babbling int
-	Hunting, TE, NextHop, Outage        int
-	Leak, Attr, Global, Dedupe, Uncat   int
+	LinkFlap, AggFlap, Oscill         int
+	Hunting, TE, NextHop, Outage      int
+	Leak, Attr, Global, Dedupe, Uncat int
 }
 
 type asnGroup struct {
@@ -474,9 +473,6 @@ func NewEngine(width, height int, scale float64) *Engine {
 		asnGroups:              make(map[asnGroupKey]*asnGroup),
 		lastFrameCapturedAt:    time.Now(),
 		drawOp:                 &ebiten.DrawImageOptions{},
-		textOp:                 &text.DrawOptions{},
-		vectorDrawPathOp:       vector.DrawPathOptions{AntiAlias: true},
-		vectorStrokeOp:         vector.StrokeOptions{Width: 3, LineJoin: vector.LineJoinBevel, LineCap: vector.LineCapButt},
 		currentZoom:            1.0,
 		targetZoom:             1.0,
 		currentCX:              float64(width) / 2,
@@ -528,7 +524,6 @@ func NewEngine(width, height int, scale float64) *Engine {
 		{"PATH OSCILLATION", 0, ColorPolicy, ColorUpdUI, func(s MetricSnapshot) int { return s.Oscill }},
 
 		// Column 2: Bad (Orange)
-		{"BABBLING", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.Babbling }},
 		{"AGGREGATOR FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.AggFlap }},
 		{"NEXT-HOP FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.NextHop }},
 		{"LINK FLAP", 0, ColorBad, ColorBad, func(s MetricSnapshot) int { return s.LinkFlap }},
@@ -1098,6 +1093,22 @@ func (e *Engine) updateMetrics() {
 	}
 
 	e.updateBeaconPercent()
+
+	// Cleanup Critical Event Stream (remove entries older than 60s)
+	now := e.Now()
+	activeStream := e.CriticalStream[:0]
+	removedAny := false
+	for _, ce := range e.CriticalStream {
+		if now.Sub(ce.Timestamp) < 60*time.Second {
+			activeStream = append(activeStream, ce)
+		} else {
+			removedAny = true
+		}
+	}
+	if removedAny {
+		e.CriticalStream = activeStream
+		e.streamDirty = true
+	}
 }
 
 func (e *Engine) updateBeaconPercent() {
@@ -1343,6 +1354,26 @@ func (e *Engine) updatePrefixImpact(ev *bgpEvent) {
 	}
 }
 
+func (e *Engine) getBestLocation(prefix, cc, city string, asn uint32) string {
+	if city != "" && cc != "" {
+		return fmt.Sprintf("%s, %s", city, cc)
+	}
+
+	// If we have a country but no city, try to re-resolve the IP to see if we can find a city.
+	// This helps when the current event (like a withdrawal) has sparse geo metadata.
+	if cc != "" && city == "" {
+		ip := e.prefixToIP(prefix)
+		if ip != 0 {
+			_, _, _, resolvedCity, _ := e.GetIPCoords(ip)
+			if resolvedCity != "" {
+				return fmt.Sprintf("%s, %s", resolvedCity, cc)
+			}
+		}
+	}
+
+	return cc
+}
+
 func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string) {
 	// Filter out ASN 0 for outages as requested
 	if ev.classificationType == ClassificationOutage && ev.asn == 0 {
@@ -1359,49 +1390,62 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 		}
 	}
 
-	// Helper to format the incoming location
-	formatLoc := func(cc, city string) string {
-		if city != "" && cc != "" {
-			return fmt.Sprintf("%s, %s", city, cc)
-		}
-		return cc
-	}
-	newLoc := formatLoc(ev.cc, ev.city)
+	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city, ev.asn)
 
+	// Check for duplicates across the entire visible stream
+	var existing *CriticalEvent
+	for _, ce := range e.CriticalStream {
+		if e.isSameEvent(ce, name, ev.asn, orgID, ev.leakDetail) {
+			existing = ce
+			break
+		}
+	}
+
+	if existing != nil {
+		// If we found an existing event, update it in place
+		if e.updateExistingCriticalEvent(existing, ev) {
+			e.updateCriticalEventCacheStrs(existing)
+		}
+		existing.Timestamp = now // Update timestamp to show it's still active/relevant
+		e.streamDirty = true
+		return
+	}
+
+	// Only add a new event if it's not on a per-prefix cooldown
 	if lastTime, ok := e.criticalCooldown[ev.prefix]; ok && now.Sub(lastTime) < 10*time.Second {
-		// Prefix is on cooldown, but we might still want to update locations for the most recent entry if it matches the ASN/Org
-		if len(e.CriticalStream) > 0 {
-			prev := e.CriticalStream[0]
-			if e.isSameEvent(prev, name, asnStr, orgID) {
-				if e.updateExistingCriticalEvent(prev, ev, newLoc) {
-					e.updateCriticalEventCacheStrs(prev)
-					e.streamDirty = true
-				}
-			}
-		}
-	} else {
-		e.criticalCooldown[ev.prefix] = now
-		// Even with prefix cooldown, we still avoid spamming the exact same Org/Anom top of stream
-		if len(e.CriticalStream) > 0 {
-			prev := e.CriticalStream[0]
-			if e.isSameEvent(prev, name, asnStr, orgID) {
-				if e.updateExistingCriticalEvent(prev, ev, newLoc) {
-					e.updateCriticalEventCacheStrs(prev)
-					e.streamDirty = true
-				}
-				return
-			}
-		}
-
-		e.addNewCriticalEvent(ev, c, name, asnStr, orgID, newLoc, now)
+		return
 	}
+
+	e.criticalCooldown[ev.prefix] = now
+	if len(e.CriticalStream) == 0 {
+		e.streamUpdatedAt = now
+	}
+	e.addNewCriticalEvent(ev, c, name, asnStr, orgID, newLoc, now)
 }
 
-func (e *Engine) isSameEvent(ce *CriticalEvent, anomName, asnStr, orgID string) bool {
-	return ce.Anom == anomName && ((orgID != "" && orgID == ce.OrgID) || asnStr == ce.ASNStr)
+func (e *Engine) isSameEvent(ce *CriticalEvent, anomName string, asn uint32, orgID string, ld *LeakDetail) bool {
+	if ce.Anom != anomName {
+		return false
+	}
+
+	// For Route Leaks, we match based on the leak details themselves
+	if anomName == nameRouteLeak && ld != nil {
+		return ce.LeakType == ld.Type && ce.LeakerASN == ld.LeakerASN && ce.VictimASN == ld.VictimASN
+	}
+
+	// For other anomalies (like Outages), match by Origin ASN (if known)
+	if asn != 0 && ce.ASN != 0 && asn == ce.ASN {
+		return true
+	}
+	// Match by Organization (if known)
+	if orgID != "" && ce.OrgID != "" && orgID == ce.OrgID {
+		return true
+	}
+	return false
 }
 
-func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent, newLoc string) bool {
+func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bool {
+	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city, ev.asn)
 	needsUpdate := false
 	// Update locations
 	if newLoc != "" && !strings.Contains(ce.Locations, newLoc) {
@@ -1414,7 +1458,7 @@ func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent, ne
 	}
 
 	// Update IP Impact
-	if ev.classificationType == ClassificationOutage {
+	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak {
 		if ce.ImpactedPrefixes == nil {
 			ce.ImpactedPrefixes = make(map[string]struct{})
 		}
@@ -1439,13 +1483,14 @@ func (e *Engine) addNewCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 	ce := &CriticalEvent{
 		Timestamp:        now,
 		Anom:             name,
+		ASN:              ev.asn,
 		ASNStr:           asnStr,
 		OrgID:            orgID,
 		Color:            c,
 		Locations:        newLoc,
 		ImpactedPrefixes: make(map[string]struct{}),
 	}
-	if ev.classificationType == ClassificationOutage {
+	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak {
 		ce.ImpactedPrefixes[ev.prefix] = struct{}{}
 		ce.ImpactedIPs = utils.GetPrefixSize(ev.prefix)
 	}
@@ -1491,9 +1536,9 @@ func (e *Engine) cacheLeakStrings(ce *CriticalEvent) {
 	}
 	ce.CachedLeakerStr = leakerStr
 
-	victimStr := "  Victim: Unknown"
+	victimStr := "  Impacted: Unknown"
 	if ce.VictimASN != 0 {
-		victimStr = fmt.Sprintf("  Victim: AS%d", ce.VictimASN)
+		victimStr = fmt.Sprintf("  Impacted: AS%d", ce.VictimASN)
 		if e.asnMapping != nil {
 			if n := e.asnMapping.GetName(ce.VictimASN); n != "" {
 				victimStr += " - " + n
@@ -1505,30 +1550,13 @@ func (e *Engine) cacheLeakStrings(ce *CriticalEvent) {
 
 func (e *Engine) cacheOutageStrings(ce *CriticalEvent) {
 	locs := strings.Split(ce.Locations, " | ")
-	displayLocs := make([]string, 0, len(locs))
-	for _, loc := range locs {
-		parts := strings.Split(loc, ", ")
-		if len(parts) >= 2 {
-			city := strings.Join(parts[:len(parts)-1], ", ")
-			cc := parts[len(parts)-1]
-			countryName := countries.ByName(cc).String()
-			if countryName == strUnknown {
-				countryName = cc
-			}
-			displayLocs = append(displayLocs, fmt.Sprintf("%s, %s", city, countryName))
-		} else {
-			countryName := countries.ByName(loc).String()
-			if countryName == strUnknown {
-				countryName = loc
-			}
-			displayLocs = append(displayLocs, countryName)
-		}
+	if len(locs) <= 2 {
+		ce.CachedLocationStr = "  Location: " + ce.Locations
+		return
 	}
-	locStr := "  Location: " + strings.Join(displayLocs, " | ")
-	if len(locStr) > 80 {
-		locStr = locStr[:77] + "..."
-	}
-	ce.CachedLocationStr = locStr
+
+	displayLocs := locs[:2]
+	ce.CachedLocationStr = fmt.Sprintf("  Location: %s | %s (%d more)", displayLocs[0], displayLocs[1], len(locs)-2)
 }
 
 func (e *Engine) cacheImpactStrings(ce *CriticalEvent) {
@@ -1557,41 +1585,39 @@ func (e *Engine) cacheImpactStrings(ce *CriticalEvent) {
 	}
 
 	ce.CachedImpactStr = fmt.Sprintf("  Impact(%s): %s", impactStr, pfxStr)
-	if len(ce.CachedImpactStr) > 80 {
-		ce.CachedImpactStr = ce.CachedImpactStr[:77] + "..."
-	}
 }
 
 func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty, intensity float64, isGlitching bool) {
 	if img == nil {
 		return
 	}
+	op := &ebiten.DrawImageOptions{}
 	if isGlitching && rand.Float64() < intensity {
 		// More aggressive chromatic aberration
 		offset := 8.0 * intensity
 		jx := (rand.Float64() - 0.5) * 12.0 * intensity
 		jy := (rand.Float64() - 0.5) * 4.0 * intensity
 
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Translate(tx+jx+offset, ty+jy)
-		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(1, 0, 0, 0.6)
-		screen.DrawImage(img, e.drawOp)
+		op.GeoM.Reset()
+		op.GeoM.Translate(tx+jx+offset, ty+jy)
+		op.ColorScale.Reset()
+		op.ColorScale.Scale(1, 0, 0, 0.6)
+		screen.DrawImage(img, op)
 
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Translate(tx+jx-offset, ty+jy)
-		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(0, 1, 1, 0.6)
-		screen.DrawImage(img, e.drawOp)
+		op.GeoM.Reset()
+		op.GeoM.Translate(tx+jx-offset, ty+jy)
+		op.ColorScale.Reset()
+		op.ColorScale.Scale(0, 1, 1, 0.6)
+		screen.DrawImage(img, op)
 
 		// Occasional white flash
 		if rand.Float64() < 0.2*intensity {
-			e.drawOp.GeoM.Reset()
-			e.drawOp.GeoM.Translate(tx+jx, ty+jy)
-			e.drawOp.ColorScale.Reset()
-			e.drawOp.ColorScale.Scale(1, 1, 1, 0.3)
-			e.drawOp.Blend = ebiten.BlendLighter
-			screen.DrawImage(img, e.drawOp)
+			op.GeoM.Reset()
+			op.GeoM.Translate(tx+jx, ty+jy)
+			op.ColorScale.Reset()
+			op.ColorScale.Scale(1, 1, 1, 0.3)
+			op.Blend = ebiten.BlendLighter
+			screen.DrawImage(img, op)
 		}
 	}
 
@@ -1602,12 +1628,12 @@ func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty, intensity fl
 		jy = (rand.Float64() - 0.5) * 3.0 * intensity
 		alpha = float32(0.4 + rand.Float64()*0.6)
 	}
-	e.drawOp.GeoM.Reset()
-	e.drawOp.GeoM.Translate(tx+jx, ty+jy)
-	e.drawOp.ColorScale.Reset()
-	e.drawOp.ColorScale.Scale(1, 1, 1, alpha)
-	e.drawOp.Blend = ebiten.BlendSourceOver
-	screen.DrawImage(img, e.drawOp)
+	op.GeoM.Reset()
+	op.GeoM.Translate(tx+jx, ty+jy)
+	op.ColorScale.Reset()
+	op.ColorScale.Scale(1, 1, 1, alpha)
+	op.Blend = ebiten.BlendSourceOver
+	screen.DrawImage(img, op)
 }
 
 func (e *Engine) prefixToIP(p string) uint32 {
@@ -1657,8 +1683,6 @@ func (e *Engine) getClassificationVisuals(classificationType ClassificationType)
 		return ColorPolicy, namePathHunting
 	case ClassificationLinkFlap:
 		return ColorBad, nameLinkFlap
-	case ClassificationBabbling:
-		return ColorBad, nameBabbling
 	case ClassificationAggFlap:
 		return ColorBad, nameAggFlap
 	case ClassificationNextHopOscillation:
@@ -1676,7 +1700,7 @@ func (e *Engine) GetPriority(name string) int {
 	switch name {
 	case nameRouteLeak, nameHardOutage:
 		return 3 // Critical (Red)
-	case nameLinkFlap, nameBabbling, nameNextHopFlap, nameAggFlap:
+	case nameLinkFlap, nameNextHopFlap, nameAggFlap:
 		return 2 // Bad (Orange)
 	case namePolicyChurn, namePathOscillation, namePathHunting:
 		return 1 // Normalish (Purple)
@@ -1689,7 +1713,7 @@ func (e *Engine) getClassificationUIColor(name string) color.RGBA {
 	switch name {
 	case nameRouteLeak, nameHardOutage:
 		return ColorWithUI
-	case nameLinkFlap, nameBabbling, nameNextHopFlap, nameAggFlap:
+	case nameLinkFlap, nameNextHopFlap, nameAggFlap:
 		return ColorBad // Already pretty bright
 	case namePolicyChurn, namePathOscillation, namePathHunting:
 		return ColorUpdUI
@@ -1732,8 +1756,6 @@ func (e *Engine) updateWindowedMetrics(eventType EventType, classificationType C
 		e.windowAggFlap++
 	case ClassificationPathLengthOscillation:
 		e.windowOscill++
-	case ClassificationBabbling:
-		e.windowBabbling++
 	case ClassificationPathHunting:
 		e.windowHunting++
 	case ClassificationPolicyChurn:
@@ -1774,6 +1796,10 @@ func (e *Engine) InitAudio() {
 		e.CurrentArtist = artist
 		e.CurrentExtra = extra
 		e.songChangedAt = time.Now()
+		e.nowPlayingDirty = true
+		e.songBuffer = nil
+		e.artistBuffer = nil
+		e.extraBuffer = nil
 	})
 }
 
@@ -1786,6 +1812,10 @@ func (e *Engine) SetAudioWriter(w io.Writer) {
 			e.CurrentArtist = artist
 			e.CurrentExtra = extra
 			e.songChangedAt = time.Now()
+			e.nowPlayingDirty = true
+			e.songBuffer = nil
+			e.artistBuffer = nil
+			e.extraBuffer = nil
 		})
 	}
 }

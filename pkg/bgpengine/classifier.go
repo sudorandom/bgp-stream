@@ -57,7 +57,6 @@ const (
 	nameLinkFlap        = "Link Flap"
 	nameAggFlap         = "Aggregator Flap"
 	namePathOscillation = "Path Oscillation"
-	nameBabbling        = "Babbling"
 	namePathHunting     = "Path Hunting"
 	namePolicyChurn     = "Policy Churn"
 	nameNextHopFlap     = "Next-Hop Flap"
@@ -71,7 +70,6 @@ const (
 	ClassificationLinkFlap
 	ClassificationAggFlap
 	ClassificationPathLengthOscillation
-	ClassificationBabbling
 	ClassificationPathHunting
 	ClassificationPolicyChurn
 	ClassificationNextHopOscillation
@@ -88,8 +86,6 @@ func (t ClassificationType) String() string {
 		return nameAggFlap
 	case ClassificationPathLengthOscillation:
 		return namePathOscillation
-	case ClassificationBabbling:
-		return nameBabbling
 	case ClassificationPathHunting:
 		return namePathHunting
 	case ClassificationPolicyChurn:
@@ -386,7 +382,7 @@ func (c *Classifier) getPriority(t ClassificationType) int {
 	switch t {
 	case ClassificationRouteLeak, ClassificationOutage:
 		return 3 // Critical
-	case ClassificationLinkFlap, ClassificationBabbling, ClassificationNextHopOscillation, ClassificationAggFlap:
+	case ClassificationLinkFlap, ClassificationNextHopOscillation, ClassificationAggFlap:
 		return 2 // Bad
 	case ClassificationPolicyChurn, ClassificationPathLengthOscillation, ClassificationPathHunting:
 		return 1 // Normal
@@ -625,6 +621,15 @@ func (c *Classifier) isDDoSProvider(asn uint32) bool {
 		1273:   true, // Vodafone (Large Backbone)
 		4637:   true, // Telstra (Large Backbone)
 		197730: true, // Sea-Bone (Large Backbone)
+		3223:   true, // Voxility
+		396998: true, // Path Network
+		57724:  true, // DDoS-Guard
+		197068: true, // Qrator (High Load Lab)
+		34309:  true, // Link11
+		59796:  true, // StormWall
+		8757:   true, // NSFOCUS
+		42649:  true, // Baffin Bay Networks
+		23470:  true, // reliablesite.net
 	}
 	return scrubbers[asn]
 }
@@ -807,10 +812,6 @@ func (c *Classifier) findBadAnomaly(s *prefixStats, elapsed, perPeerRate float64
 		return ClassificationLinkFlap, true
 	}
 
-	// Babbling is the catch-all for "Bad" high volume activity
-	if perPeerRate >= 2.0 && s.totalMsgs >= 20 && s.totalPath == 0 && s.totalComm == 0 && s.totalMed == 0 && s.totalLP == 0 && s.totalAgg == 0 && s.totalHop == 0 {
-		return ClassificationBabbling, true
-	}
 	return ClassificationNone, false
 }
 
@@ -829,9 +830,9 @@ func (c *Classifier) findNormalAnomaly(s *prefixStats, elapsed float64) (Classif
 		return ClassificationPathLengthOscillation, true
 	}
 
-	// Discovery as the catch-all for high volume activity (>= 100 messages)
+	// Discovery as the catch-all for high volume activity (>= 25 messages)
 	// that didn't match any "Bad" anomaly or specific "Normal" pattern.
-	if s.totalMsgs >= 100 {
+	if s.totalMsgs >= 25 {
 		return ClassificationDiscovery, true
 	}
 	return ClassificationNone, false
