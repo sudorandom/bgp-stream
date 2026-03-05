@@ -139,6 +139,9 @@ type CriticalEvent struct {
 	Locations string
 	Color     color.RGBA
 
+	ImpactedIPs      uint64
+	ImpactedPrefixes map[string]struct{}
+
 	// Pre-rendered layout values
 	CachedTypeLabel   string
 	CachedTypeWidth   float64
@@ -146,6 +149,7 @@ type CriticalEvent struct {
 	CachedLeakerStr   string
 	CachedVictimStr   string
 	CachedLocationStr string
+	CachedImpactStr   string
 }
 
 type Engine struct {
@@ -203,19 +207,23 @@ type Engine struct {
 	songBuffer       *ebiten.Image
 	artistBuffer     *ebiten.Image
 	extraBuffer      *ebiten.Image
-	hubsBuffer       *ebiten.Image
 	impactBuffer     *ebiten.Image
 	streamBuffer     *ebiten.Image
 	trendLinesBuffer *ebiten.Image
+	trendClipBuffer  *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
 
 	trendGridVertices []ebiten.Vertex
 	trendGridIndices  []uint16
 
-	hubChangedAt      map[string]time.Time
-	lastHubs          map[string]int
-	hubPosition       map[string]int
+	hubChangedAt map[string]time.Time
+	lastHubs     map[string]int
+	hubPosition  map[string]int
+
 	lastMetricsUpdate time.Time
+	lastTrendUpdate   time.Time
+	lastDrawTime      time.Time
+	droppedFrames     atomic.Uint64
 	hubUpdatedAt      time.Time
 	impactUpdatedAt   time.Time
 	prefixCounts      []PrefixCount
@@ -231,6 +239,8 @@ type Engine struct {
 	ActiveImpacts          []*VisualImpact
 	ActiveASNImpacts       []*ASNImpact
 	CriticalStream         []*CriticalEvent
+	streamDirty            bool
+	impactDirty            bool
 	criticalCooldown       map[string]time.Time
 
 	SeenDB  *utils.DiskTrie
@@ -477,6 +487,7 @@ func NewEngine(width, height int, scale float64) *Engine {
 		tourRegionStayDuration: 10 * time.Second,
 		eventCh:                make(chan *bgpEvent, 250000),
 		criticalCooldown:       make(map[string]time.Time),
+		streamDirty:            true,
 	}
 	e.dataMgr = geoservice.NewDataManager(e.geo)
 	go e.runEventWorker()
@@ -608,9 +619,9 @@ func (e *Engine) LoadRemainingData() error {
 	}
 
 	// 3. Render historical activity if we have both data sources
-	if e.SeenDB != nil {
-		go e.renderHistoricalData()
-	}
+	// if e.SeenDB != nil {
+	// 	go e.renderHistoricalData()
+	// }
 
 	e.asnMapping = utils.NewASNMapping()
 	if err := e.asnMapping.Load(); err != nil {
@@ -653,45 +664,6 @@ func (e *Engine) loadPrefixData() error {
 
 func (e *Engine) GetGeoService() *geoservice.GeoService {
 	return e.geo
-}
-
-func (e *Engine) renderHistoricalData() {
-	if e.bgImage == nil || e.SeenDB == nil {
-		return
-	}
-
-	// Create a copy of the background to draw on
-	bounds := e.bgImage.Bounds()
-	overlay := image.NewRGBA(bounds)
-	dotCol := color.RGBA{100, 100, 100, 40} // Very subtle gray dots
-
-	count := 0
-	if err := e.SeenDB.ForEach(func(k, v []byte) error {
-		// Key is 5 bytes: 4 bytes IP + 1 byte mask
-		if len(k) != 5 {
-			return nil
-		}
-		ip := binary.BigEndian.Uint32(k[:4])
-		lat, lng, _, _, _ := e.geo.GetIPCoords(ip)
-		if lat != 0 || lng != 0 {
-			x, y := e.geo.Project(lat, lng)
-			ix, iy := int(x), int(y)
-			if ix >= 0 && ix < bounds.Dx() && iy >= 0 && iy < bounds.Dy() {
-				overlay.Set(ix, iy, dotCol)
-				count++
-			}
-		}
-		return nil
-	}); err != nil {
-		log.Printf("Error iterating over historical prefixes: %v", err)
-	}
-
-	if count > 0 {
-		log.Printf("Rendered %d historical prefixes onto the map", count)
-		// Composite the historical data onto the background
-		overlayImg := ebiten.NewImageFromImage(overlay)
-		e.bgImage.DrawImage(overlayImg, nil)
-	}
 }
 
 func (e *Engine) drawGrid(img *image.RGBA) {
@@ -983,7 +955,7 @@ func (e *Engine) GetProcessor() *BGPProcessor {
 
 func (e *Engine) UpdatePerformanceMetrics() {
 	now := e.Now()
-	if now.Sub(e.lastPerfLog) < 10*time.Second {
+	if now.Sub(e.lastPerfLog) < 5*time.Second {
 		return
 	}
 	e.lastPerfLog = now
@@ -993,11 +965,15 @@ func (e *Engine) UpdatePerformanceMetrics() {
 	droppedPulses := e.droppedPulses.Swap(0)
 	droppedQueue := e.droppedQueue.Swap(0)
 	droppedStale := e.droppedStale.Swap(0)
+	droppedFrames := e.droppedFrames.Swap(0)
 
-	if tps < 28 || fps < 28 || droppedPulses > 0 || droppedQueue > 0 || droppedStale > 0 {
+	if tps < 28 || fps < 28 || droppedPulses > 0 || droppedQueue > 0 || droppedStale > 0 || droppedFrames > 0 {
 		var sb strings.Builder
 		sb.WriteString("[PERF]")
 		fmt.Fprintf(&sb, " TPS: %.2f, FPS: %.2f", tps, fps)
+		if droppedFrames > 0 {
+			fmt.Fprintf(&sb, ", DroppedFrames: %d", droppedFrames)
+		}
 		if droppedPulses > 0 {
 			fmt.Fprintf(&sb, ", DroppedPulses: %d", droppedPulses)
 		}
@@ -1121,14 +1097,6 @@ func (e *Engine) updateMetrics() {
 		}
 	}
 
-	for p, vi := range e.VisualImpact {
-		vi.DisplayY = vi.TargetY
-		vi.Alpha += (vi.TargetAlpha - vi.Alpha) * 0.2
-		if !vi.Active || vi.Alpha < 0.01 {
-			delete(e.VisualImpact, p)
-		}
-	}
-
 	e.updateBeaconPercent()
 }
 
@@ -1170,6 +1138,14 @@ func (e *Engine) updateActivePulses() {
 }
 
 func (e *Engine) Draw(screen *ebiten.Image) {
+	now := e.Now()
+	if !e.lastDrawTime.IsZero() {
+		if now.Sub(e.lastDrawTime) > 50*time.Millisecond {
+			e.droppedFrames.Add(1)
+		}
+	}
+	e.lastDrawTime = now
+
 	if e.mapImage == nil || e.mapImage.Bounds().Dx() != e.Width || e.mapImage.Bounds().Dy() != e.Height {
 		e.mapImage = ebiten.NewImage(e.Width, e.Height)
 	}
@@ -1180,11 +1156,13 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		e.mapImage.Fill(color.RGBA{8, 10, 15, 255})
 	}
 	e.pulsesMu.Lock()
-	now := e.Now()
+	now = e.Now()
 	e.drawOp.GeoM.Reset()
 	e.drawOp.ColorScale.Reset()
 	e.drawOp.Filter = ebiten.FilterLinear // Use linear for smooth scaling
 	e.drawOp.Blend = ebiten.BlendLighter
+
+	// Batch pulses by image to reduce draw calls
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
 		totalDuration := p.Duration.Seconds()
@@ -1194,39 +1172,31 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		}
 
 		baseAlpha := 0.5
-
 		alpha := (1.0 - progress) * baseAlpha
 		maxRadiusMultiplier := 1.0
 
-		e.drawOp.GeoM.Reset()
-
 		imgW := float64(e.pulseImage.Bounds().Dx())
-		halfW := imgW / 2
 		imgToDraw := e.pulseImage
 
 		if p.IsFlare {
 			imgW = float64(e.flareImage.Bounds().Dx())
-			halfW = imgW / 2
 			imgToDraw = e.flareImage
-
 			maxRadiusMultiplier = 3.0
-
-			// Use sin curve: starts dim, peaks at middle, fades out
-			flareIntensity := math.Sin(progress * math.Pi)       // 0 -> 1 -> 0
-			flareIntensity = math.Pow(flareIntensity, 1.5) * 2.5 // Power curve for dramatic peak, massive boost
-			alpha = flareIntensity                               // Full dramatic pulse effect
+			flareIntensity := math.Sin(progress * math.Pi)
+			flareIntensity = math.Pow(flareIntensity, 1.5) * 2.5
+			alpha = flareIntensity
 		}
 
-		// Flares expand much more dramatically
 		scale := (1 + progress*p.MaxRadius*maxRadiusMultiplier) / imgW * 2.0
+		halfW := imgW / 2
 
+		e.drawOp.GeoM.Reset()
 		e.drawOp.GeoM.Translate(-halfW, -halfW)
 		e.drawOp.GeoM.Scale(scale, scale)
 		e.drawOp.GeoM.Translate(p.X, p.Y)
 
 		r, g, b := float32(p.Color.R)/255.0, float32(p.Color.G)/255.0, float32(p.Color.B)/255.0
 		e.drawOp.ColorScale.Reset()
-		// Re-apply alpha multiplication for premultiplied alpha blending
 		e.drawOp.ColorScale.Scale(r*float32(alpha), g*float32(alpha), b*float32(alpha), float32(alpha))
 		e.mapImage.DrawImage(imgToDraw, e.drawOp)
 	}
@@ -1262,8 +1232,34 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 func (e *Engine) Layout(w, h int) (width, height int) { return e.Width, e.Height }
 
 func (e *Engine) runEventWorker() {
-	for ev := range e.eventCh {
-		e.processEvent(ev)
+	batch := make([]*bgpEvent, 0, 1000)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	for {
+		select {
+		case ev, ok := <-e.eventCh:
+			if !ok {
+				return
+			}
+			batch = append(batch, ev)
+			if len(batch) >= 1000 {
+				e.processEventBatch(batch)
+				batch = batch[:0]
+			}
+		case <-ticker.C:
+			if len(batch) > 0 {
+				e.processEventBatch(batch)
+				batch = batch[:0]
+			}
+		}
+	}
+}
+
+func (e *Engine) processEventBatch(batch []*bgpEvent) {
+	e.metricsMu.Lock()
+	defer e.metricsMu.Unlock()
+
+	for _, ev := range batch {
+		e.processEventLocked(ev)
 	}
 }
 
@@ -1279,46 +1275,10 @@ func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType EventT
 	}
 }
 
-func (e *Engine) processEvent(ev *bgpEvent) {
-	e.metricsMu.Lock()
-	defer e.metricsMu.Unlock()
-
+func (e *Engine) processEventLocked(ev *bgpEvent) {
 	// 1. Track prefix impact (latest bucket)
 	if ev.prefix != "" {
-		if len(e.prefixImpactHistory) > 0 {
-			bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
-			if bucket == nil {
-				bucket = make(map[string]int)
-				e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
-			}
-			bucket[ev.prefix]++
-		}
-		if e.prefixToASN == nil {
-			e.prefixToASN = make(map[string]uint32)
-		}
-		if ev.asn != 0 {
-			e.prefixToASN[ev.prefix] = ev.asn
-		}
-		if utils.IsBeaconPrefix(ev.prefix) {
-			e.windowBeacon++
-		}
-
-		// Track all anomalies and patterns
-		e.prefixToClassification[ev.prefix] = ev.classificationType
-
-		// If this is an announcement, clear any existing Outage classification for this prefix
-		if ev.eventType == EventNew || ev.eventType == EventUpdate || ev.eventType == EventGossip {
-			if prefixes, ok := e.currentAnomalies[ClassificationOutage]; ok {
-				delete(prefixes, ev.prefix)
-			}
-		}
-
-		if actualType, ok := e.prefixToClassification[ev.prefix]; ok {
-			if e.currentAnomalies[actualType] == nil {
-				e.currentAnomalies[actualType] = make(map[string]int)
-			}
-			e.currentAnomalies[actualType][ev.prefix]++
-		}
+		e.updatePrefixImpact(ev)
 	}
 
 	// 2. Track country activity
@@ -1339,147 +1299,270 @@ func (e *Engine) processEvent(ev *bgpEvent) {
 
 	// Record to CriticalStream if it's a critical anomaly
 	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak {
-		now := time.Now()
-		asnStr := fmt.Sprintf("AS%d", ev.asn)
-		orgID := ""
-		if e.asnMapping != nil {
-			orgID = e.asnMapping.GetOrgID(ev.asn)
-			if n := e.asnMapping.GetName(ev.asn); n != "" {
-				asnStr += " - " + n
-			}
-		}
-
-		updateCacheStrs := func(ce *CriticalEvent) {
-			ce.CachedTypeLabel = "[" + strings.ToUpper(ce.Anom) + "]"
-			ce.CachedTypeWidth, _ = text.Measure(ce.CachedTypeLabel, e.subMonoFace, 0)
-
-			ce.CachedFirstLine = ce.ASNStr
-			if ce.Anom == nameRouteLeak && ce.LeakType != LeakUnknown {
-				ce.CachedFirstLine = ce.LeakType.String()
-
-				leakerStr := fmt.Sprintf("  Leaker: AS%d", ce.LeakerASN)
-				if e.asnMapping != nil {
-					if n := e.asnMapping.GetName(ce.LeakerASN); n != "" {
-						leakerStr += " - " + n
-					}
-				}
-				ce.CachedLeakerStr = leakerStr
-
-				victimStr := "  Victim: Unknown"
-				if ce.VictimASN != 0 {
-					victimStr = fmt.Sprintf("  Victim: AS%d", ce.VictimASN)
-					if e.asnMapping != nil {
-						if n := e.asnMapping.GetName(ce.VictimASN); n != "" {
-							victimStr += " - " + n
-						}
-					}
-				}
-				ce.CachedVictimStr = victimStr
-			} else if ce.Anom == nameHardOutage && ce.Locations != "" {
-				locs := strings.Split(ce.Locations, ", ")
-				displayLocs := make([]string, 0, len(locs))
-				for _, loc := range locs {
-					countryName := countries.ByName(loc).String()
-					if countryName == "Unknown" {
-						countryName = loc
-					}
-					displayLocs = append(displayLocs, countryName)
-				}
-				locStr := "  Location: " + strings.Join(displayLocs, ", ")
-				if len(locStr) > 40 {
-					locStr = locStr[:37] + "..."
-				}
-				ce.CachedLocationStr = locStr
-			}
-		}
-
-		// Helper to format the incoming location
-		formatLoc := func(cc, city string) string {
-			if city != "" && cc != "" {
-				return fmt.Sprintf("%s, %s", city, cc)
-			}
-			return cc
-		}
-		newLoc := formatLoc(ev.cc, ev.city)
-
-		if lastTime, ok := e.criticalCooldown[ev.prefix]; ok && now.Sub(lastTime) < 10*time.Second {
-			// Prefix is on cooldown, but we might still want to update locations for the most recent entry if it matches the ASN/Org
-			if len(e.CriticalStream) > 0 {
-				prev := e.CriticalStream[0]
-				sameOrg := (orgID != "" && orgID == prev.OrgID) || asnStr == prev.ASNStr
-				if prev.Anom == name && sameOrg {
-					needsUpdate := false
-					// Update locations
-					if !strings.Contains(prev.Locations, newLoc) {
-						if prev.Locations == "" {
-							prev.Locations = newLoc
-						} else {
-							prev.Locations += " | " + newLoc
-						}
-						needsUpdate = true
-					}
-					// RETROACTIVE UPDATE: If we now have leak details that the previous entry lacked, update it
-					if prev.LeakType == LeakUnknown && ev.leakDetail != nil {
-						prev.LeakType = ev.leakDetail.Type
-						prev.LeakerASN = ev.leakDetail.LeakerASN
-						prev.VictimASN = ev.leakDetail.VictimASN
-						needsUpdate = true
-					}
-					if needsUpdate {
-						updateCacheStrs(prev)
-					}
-				}
-			}
-		} else {
-			e.criticalCooldown[ev.prefix] = now
-			shouldAdd := true
-			// Even with prefix cooldown, we still avoid spamming the exact same Org/Anom top of stream
-			if len(e.CriticalStream) > 0 {
-				prev := e.CriticalStream[0]
-				sameOrg := (orgID != "" && orgID == prev.OrgID) || asnStr == prev.ASNStr
-				if prev.Anom == name && sameOrg {
-					if !strings.Contains(prev.Locations, newLoc) {
-						if prev.Locations == "" {
-							prev.Locations = newLoc
-						} else {
-							prev.Locations += " | " + newLoc
-						}
-						updateCacheStrs(prev)
-					}
-					shouldAdd = false
-				}
-			}
-
-			if shouldAdd {
-				ce := &CriticalEvent{
-					Timestamp: now,
-					Anom:      name,
-					ASNStr:    asnStr,
-					OrgID:     orgID,
-					Color:     c,
-					Locations: newLoc,
-				}
-				if ev.leakDetail != nil {
-					ce.LeakType = ev.leakDetail.Type
-					ce.LeakerASN = ev.leakDetail.LeakerASN
-					ce.VictimASN = ev.leakDetail.VictimASN
-				}
-				updateCacheStrs(ce)
-				// Prepend to stream
-				e.CriticalStream = append([]*CriticalEvent{ce}, e.CriticalStream...)
-				// Limit size
-				if len(e.CriticalStream) > 20 {
-					e.CriticalStream = e.CriticalStream[:20]
-				}
-			}
-		}
+		e.recordToCriticalStream(ev, c, name)
 	}
 
 	// 6. Update windowed metrics (this drives the dashboard numbers)
 	e.updateWindowedMetrics(ev.eventType, ev.classificationType, ev.prefix, ev.asn)
 }
 
-func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, baseAlpha float32, intensity float64, isGlitching bool) {
+func (e *Engine) updatePrefixImpact(ev *bgpEvent) {
+	if len(e.prefixImpactHistory) > 0 {
+		bucket := e.prefixImpactHistory[len(e.prefixImpactHistory)-1]
+		if bucket == nil {
+			bucket = make(map[string]int)
+			e.prefixImpactHistory[len(e.prefixImpactHistory)-1] = bucket
+		}
+		bucket[ev.prefix]++
+	}
+	if e.prefixToASN == nil {
+		e.prefixToASN = make(map[string]uint32)
+	}
+	if ev.asn != 0 {
+		e.prefixToASN[ev.prefix] = ev.asn
+	}
+	if utils.IsBeaconPrefix(ev.prefix) {
+		e.windowBeacon++
+	}
+
+	// Track all anomalies and patterns
+	e.prefixToClassification[ev.prefix] = ev.classificationType
+
+	// If this is an announcement, clear any existing Outage classification for this prefix
+	if ev.eventType == EventNew || ev.eventType == EventUpdate || ev.eventType == EventGossip {
+		if prefixes, ok := e.currentAnomalies[ClassificationOutage]; ok {
+			delete(prefixes, ev.prefix)
+		}
+	}
+
+	if actualType, ok := e.prefixToClassification[ev.prefix]; ok {
+		if e.currentAnomalies[actualType] == nil {
+			e.currentAnomalies[actualType] = make(map[string]int)
+		}
+		e.currentAnomalies[actualType][ev.prefix]++
+	}
+}
+
+func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string) {
+	// Filter out ASN 0 for outages as requested
+	if ev.classificationType == ClassificationOutage && ev.asn == 0 {
+		return
+	}
+
+	now := time.Now()
+	asnStr := fmt.Sprintf("AS%d", ev.asn)
+	orgID := ""
+	if e.asnMapping != nil {
+		orgID = e.asnMapping.GetOrgID(ev.asn)
+		if n := e.asnMapping.GetName(ev.asn); n != "" {
+			asnStr += " - " + n
+		}
+	}
+
+	// Helper to format the incoming location
+	formatLoc := func(cc, city string) string {
+		if city != "" && cc != "" {
+			return fmt.Sprintf("%s, %s", city, cc)
+		}
+		return cc
+	}
+	newLoc := formatLoc(ev.cc, ev.city)
+
+	if lastTime, ok := e.criticalCooldown[ev.prefix]; ok && now.Sub(lastTime) < 10*time.Second {
+		// Prefix is on cooldown, but we might still want to update locations for the most recent entry if it matches the ASN/Org
+		if len(e.CriticalStream) > 0 {
+			prev := e.CriticalStream[0]
+			if e.isSameEvent(prev, name, asnStr, orgID) {
+				if e.updateExistingCriticalEvent(prev, ev, newLoc) {
+					e.updateCriticalEventCacheStrs(prev)
+					e.streamDirty = true
+				}
+			}
+		}
+	} else {
+		e.criticalCooldown[ev.prefix] = now
+		// Even with prefix cooldown, we still avoid spamming the exact same Org/Anom top of stream
+		if len(e.CriticalStream) > 0 {
+			prev := e.CriticalStream[0]
+			if e.isSameEvent(prev, name, asnStr, orgID) {
+				if e.updateExistingCriticalEvent(prev, ev, newLoc) {
+					e.updateCriticalEventCacheStrs(prev)
+					e.streamDirty = true
+				}
+				return
+			}
+		}
+
+		e.addNewCriticalEvent(ev, c, name, asnStr, orgID, newLoc, now)
+	}
+}
+
+func (e *Engine) isSameEvent(ce *CriticalEvent, anomName, asnStr, orgID string) bool {
+	return ce.Anom == anomName && ((orgID != "" && orgID == ce.OrgID) || asnStr == ce.ASNStr)
+}
+
+func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent, newLoc string) bool {
+	needsUpdate := false
+	// Update locations
+	if newLoc != "" && !strings.Contains(ce.Locations, newLoc) {
+		if ce.Locations == "" {
+			ce.Locations = newLoc
+		} else {
+			ce.Locations += " | " + newLoc
+		}
+		needsUpdate = true
+	}
+
+	// Update IP Impact
+	if ev.classificationType == ClassificationOutage {
+		if ce.ImpactedPrefixes == nil {
+			ce.ImpactedPrefixes = make(map[string]struct{})
+		}
+		if _, exists := ce.ImpactedPrefixes[ev.prefix]; !exists {
+			ce.ImpactedPrefixes[ev.prefix] = struct{}{}
+			ce.ImpactedIPs += utils.GetPrefixSize(ev.prefix)
+			needsUpdate = true
+		}
+	}
+
+	// RETROACTIVE UPDATE: If we now have leak details that the previous entry lacked, update it
+	if ce.LeakType == LeakUnknown && ev.leakDetail != nil {
+		ce.LeakType = ev.leakDetail.Type
+		ce.LeakerASN = ev.leakDetail.LeakerASN
+		ce.VictimASN = ev.leakDetail.VictimASN
+		needsUpdate = true
+	}
+	return needsUpdate
+}
+
+func (e *Engine) addNewCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, orgID, newLoc string, now time.Time) {
+	ce := &CriticalEvent{
+		Timestamp:        now,
+		Anom:             name,
+		ASNStr:           asnStr,
+		OrgID:            orgID,
+		Color:            c,
+		Locations:        newLoc,
+		ImpactedPrefixes: make(map[string]struct{}),
+	}
+	if ev.classificationType == ClassificationOutage {
+		ce.ImpactedPrefixes[ev.prefix] = struct{}{}
+		ce.ImpactedIPs = utils.GetPrefixSize(ev.prefix)
+	}
+	if ev.leakDetail != nil {
+		ce.LeakType = ev.leakDetail.Type
+		ce.LeakerASN = ev.leakDetail.LeakerASN
+		ce.VictimASN = ev.leakDetail.VictimASN
+	}
+	e.updateCriticalEventCacheStrs(ce)
+	// Prepend to stream
+	e.CriticalStream = append([]*CriticalEvent{ce}, e.CriticalStream...)
+	e.streamDirty = true
+	// Limit size
+	if len(e.CriticalStream) > 20 {
+		e.CriticalStream = e.CriticalStream[:20]
+	}
+}
+
+func (e *Engine) updateCriticalEventCacheStrs(ce *CriticalEvent) {
+	ce.CachedTypeLabel = "[" + strings.ToUpper(ce.Anom) + "]"
+	ce.CachedTypeWidth, _ = text.Measure(ce.CachedTypeLabel, e.subMonoFace, 0)
+
+	ce.CachedFirstLine = ce.ASNStr
+	if ce.Anom == nameRouteLeak && ce.LeakType != LeakUnknown {
+		e.cacheLeakStrings(ce)
+	} else if ce.Anom == nameHardOutage && ce.Locations != "" {
+		e.cacheOutageStrings(ce)
+	}
+
+	if ce.ImpactedIPs > 0 {
+		e.cacheImpactStrings(ce)
+	}
+}
+
+func (e *Engine) cacheLeakStrings(ce *CriticalEvent) {
+	ce.CachedFirstLine = ce.LeakType.String()
+
+	leakerStr := fmt.Sprintf("  Leaker: AS%d", ce.LeakerASN)
+	if e.asnMapping != nil {
+		if n := e.asnMapping.GetName(ce.LeakerASN); n != "" {
+			leakerStr += " - " + n
+		}
+	}
+	ce.CachedLeakerStr = leakerStr
+
+	victimStr := "  Victim: Unknown"
+	if ce.VictimASN != 0 {
+		victimStr = fmt.Sprintf("  Victim: AS%d", ce.VictimASN)
+		if e.asnMapping != nil {
+			if n := e.asnMapping.GetName(ce.VictimASN); n != "" {
+				victimStr += " - " + n
+			}
+		}
+	}
+	ce.CachedVictimStr = victimStr
+}
+
+func (e *Engine) cacheOutageStrings(ce *CriticalEvent) {
+	locs := strings.Split(ce.Locations, " | ")
+	displayLocs := make([]string, 0, len(locs))
+	for _, loc := range locs {
+		parts := strings.Split(loc, ", ")
+		if len(parts) >= 2 {
+			city := strings.Join(parts[:len(parts)-1], ", ")
+			cc := parts[len(parts)-1]
+			countryName := countries.ByName(cc).String()
+			if countryName == strUnknown {
+				countryName = cc
+			}
+			displayLocs = append(displayLocs, fmt.Sprintf("%s, %s", city, countryName))
+		} else {
+			countryName := countries.ByName(loc).String()
+			if countryName == strUnknown {
+				countryName = loc
+			}
+			displayLocs = append(displayLocs, countryName)
+		}
+	}
+	locStr := "  Location: " + strings.Join(displayLocs, " | ")
+	if len(locStr) > 80 {
+		locStr = locStr[:77] + "..."
+	}
+	ce.CachedLocationStr = locStr
+}
+
+func (e *Engine) cacheImpactStrings(ce *CriticalEvent) {
+	impactStr := ""
+	switch {
+	case ce.ImpactedIPs >= 1000000:
+		impactStr = fmt.Sprintf("%.1fM IPs", float64(ce.ImpactedIPs)/1000000.0)
+	case ce.ImpactedIPs >= 1000:
+		impactStr = fmt.Sprintf("%.1fK IPs", float64(ce.ImpactedIPs)/1000.0)
+	default:
+		impactStr = fmt.Sprintf("%d IPs", ce.ImpactedIPs)
+	}
+
+	prefixes := make([]string, 0, len(ce.ImpactedPrefixes))
+	for p := range ce.ImpactedPrefixes {
+		prefixes = append(prefixes, p)
+	}
+	sort.Strings(prefixes)
+
+	pfxStr := ""
+	if len(prefixes) > 0 {
+		pfxStr = prefixes[0]
+		if len(prefixes) > 1 {
+			pfxStr += fmt.Sprintf(" (%d more)", len(prefixes)-1)
+		}
+	}
+
+	ce.CachedImpactStr = fmt.Sprintf("  Impact(%s): %s", impactStr, pfxStr)
+	if len(ce.CachedImpactStr) > 80 {
+		ce.CachedImpactStr = ce.CachedImpactStr[:77] + "..."
+	}
+}
+
+func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty, intensity float64, isGlitching bool) {
 	if img == nil {
 		return
 	}
@@ -1492,13 +1575,13 @@ func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, base
 		e.drawOp.GeoM.Reset()
 		e.drawOp.GeoM.Translate(tx+jx+offset, ty+jy)
 		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(1, 0, 0, baseAlpha*0.6)
+		e.drawOp.ColorScale.Scale(1, 0, 0, 0.6)
 		screen.DrawImage(img, e.drawOp)
 
 		e.drawOp.GeoM.Reset()
 		e.drawOp.GeoM.Translate(tx+jx-offset, ty+jy)
 		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(0, 1, 1, baseAlpha*0.6)
+		e.drawOp.ColorScale.Scale(0, 1, 1, 0.6)
 		screen.DrawImage(img, e.drawOp)
 
 		// Occasional white flash
@@ -1506,18 +1589,18 @@ func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty float64, base
 			e.drawOp.GeoM.Reset()
 			e.drawOp.GeoM.Translate(tx+jx, ty+jy)
 			e.drawOp.ColorScale.Reset()
-			e.drawOp.ColorScale.Scale(1, 1, 1, baseAlpha*0.3)
+			e.drawOp.ColorScale.Scale(1, 1, 1, 0.3)
 			e.drawOp.Blend = ebiten.BlendLighter
 			screen.DrawImage(img, e.drawOp)
 		}
 	}
 
 	jx, jy := 0.0, 0.0
-	alpha := baseAlpha
+	alpha := float32(1.0)
 	if isGlitching && rand.Float64() < intensity {
 		jx = (rand.Float64() - 0.5) * 6.0 * intensity
 		jy = (rand.Float64() - 0.5) * 3.0 * intensity
-		alpha = float32((0.4 + rand.Float64()*0.6) * float64(baseAlpha))
+		alpha = float32(0.4 + rand.Float64()*0.6)
 	}
 	e.drawOp.GeoM.Reset()
 	e.drawOp.GeoM.Translate(tx+jx, ty+jy)

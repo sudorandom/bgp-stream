@@ -25,7 +25,7 @@ func TestBGPProcessorDeduplication(t *testing.T) {
 	// Simulate receiving a New Announcement
 	p.mu.Lock()
 	p.onEvent(37.0, -122.0, "US", "San Francisco", EventNew, ClassificationNone, "8.8.8.0/24", 0, nil) // Initial discovery
-	
+
 	// Access recentlySeen through a worker
 	wIdx := int(0x08080808 % uint32(len(p.workers)))
 	p.workers[wIdx].recentlySeen.Add(0x08080808, struct {

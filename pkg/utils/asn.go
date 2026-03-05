@@ -202,7 +202,7 @@ func (m *ASNMapping) loadCAIDA() error {
 	if err != nil {
 		return err
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	scanner := bufio.NewScanner(gr)
 	for scanner.Scan() {
@@ -223,46 +223,7 @@ func (m *ASNMapping) loadCAIDA() error {
 			}
 
 			// Unify regional OrgIDs for major providers
-			orgID := entry.OrgID
-			normalizedName := strings.ToUpper(entry.Name)
-			switch {
-			case strings.Contains(orgID, "AKAMAI") || strings.Contains(normalizedName, "AKAMAI"):
-				orgID = "AKAMAI"
-			case strings.Contains(orgID, "CHINATELECOM") || strings.Contains(normalizedName, "CHINATELECOM"):
-				orgID = "CHINATELECOM"
-			case strings.Contains(orgID, "CHINAMOBILE") || strings.Contains(normalizedName, "CHINAMOBILE"):
-				orgID = "CHINAMOBILE"
-			case strings.Contains(orgID, "CHINAUNICOM") || strings.Contains(normalizedName, "CHINAUNICOM"):
-				orgID = "CHINAUNICOM"
-			case strings.Contains(orgID, "GOOGLE") || strings.Contains(normalizedName, "GOOGLE"):
-				orgID = "GOOGLE"
-			case strings.Contains(orgID, "AMAZON") || strings.Contains(normalizedName, "AMAZON"):
-				orgID = "AMAZON"
-			case strings.Contains(orgID, "MICROSOFT") || strings.Contains(normalizedName, "MICROSOFT"):
-				orgID = "MICROSOFT"
-			case strings.Contains(orgID, "CLOUDFLARE") || strings.Contains(normalizedName, "CLOUDFLARE"):
-				orgID = "CLOUDFLARE"
-			case strings.Contains(orgID, "TELSTRA") || strings.Contains(normalizedName, "TELSTRA"):
-				orgID = "TELSTRA"
-			case strings.Contains(orgID, "TATA") || strings.Contains(normalizedName, "TATA"):
-				orgID = "TATA"
-			case strings.Contains(orgID, "LUMEN") || strings.Contains(normalizedName, "LUMEN") || strings.Contains(normalizedName, "LEVEL3") || strings.Contains(normalizedName, "CENTURYLINK"):
-				orgID = "LUMEN"
-			case strings.Contains(orgID, "COGENT") || strings.Contains(normalizedName, "COGENT"):
-				orgID = "COGENT"
-			case strings.Contains(orgID, "VERIZON") || strings.Contains(normalizedName, "VERIZON"):
-				orgID = "VERIZON"
-			case strings.Contains(orgID, "ATT") || strings.Contains(normalizedName, "AT&T") || strings.Contains(normalizedName, "ATT-"):
-				orgID = "ATT"
-			case strings.Contains(orgID, "ORANGE") || strings.Contains(normalizedName, "ORANGE"):
-				orgID = "ORANGE"
-			case strings.Contains(orgID, "TELEFONICA") || strings.Contains(normalizedName, "TELEFONICA"):
-				orgID = "TELEFONICA"
-			case strings.Contains(orgID, "GTT") || strings.Contains(normalizedName, "GTT-"):
-				orgID = "GTT"
-			case strings.Contains(orgID, "NTT") || strings.Contains(normalizedName, "NTT-"):
-				orgID = "NTT"
-			}
+			orgID := m.normalizeOrgID(entry.OrgID, entry.Name)
 
 			info := m.data[uint32(asn)]
 			info.OrgID = orgID
@@ -270,6 +231,48 @@ func (m *ASNMapping) loadCAIDA() error {
 		}
 	}
 	return nil
+}
+
+var orgNormalizationRules = []struct {
+	match string
+	id    string
+}{
+	{"AKAMAI", "AKAMAI"},
+	{"CHINATELECOM", "CHINATELECOM"},
+	{"CHINAMOBILE", "CHINAMOBILE"},
+	{"CHINAUNICOM", "CHINAUNICOM"},
+	{"GOOGLE", "GOOGLE"},
+	{"AMAZON", "AMAZON"},
+	{"MICROSOFT", "MICROSOFT"},
+	{"CLOUDFLARE", "CLOUDFLARE"},
+	{"TELSTRA", "TELSTRA"},
+	{"TATA", "TATA"},
+	{"LUMEN", "LUMEN"},
+	{"LEVEL3", "LUMEN"},
+	{"CENTURYLINK", "LUMEN"},
+	{"COGENT", "COGENT"},
+	{"VERIZON", "VERIZON"},
+	{"ATT", "ATT"},
+	{"AT&T", "ATT"},
+	{"ATT-", "ATT"},
+	{"ORANGE", "ORANGE"},
+	{"TELEFONICA", "TELEFONICA"},
+	{"GTT", "GTT"},
+	{"GTT-", "GTT"},
+	{"NTT", "NTT"},
+	{"NTT-", "NTT"},
+}
+
+func (m *ASNMapping) normalizeOrgID(orgID, name string) string {
+	normalizedName := strings.ToUpper(name)
+	upperOrgID := strings.ToUpper(orgID)
+
+	for _, rule := range orgNormalizationRules {
+		if strings.Contains(upperOrgID, rule.match) || strings.Contains(normalizedName, rule.match) {
+			return rule.id
+		}
+	}
+	return orgID
 }
 
 func (m *ASNMapping) GetOrgID(asn uint32) string {

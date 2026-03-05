@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/osrg/gobgp/v3/pkg/packet/bgp"
@@ -40,20 +41,20 @@ type MRTStream struct {
 	current   *MRTMessage
 }
 
-func readMRTFile(collector string, path string, ch chan *MRTMessage) {
+func readMRTFile(collector, path string, ch chan *MRTMessage) {
 	f, err := os.Open(path)
 	if err != nil {
 		log.Printf("Error opening %s: %v", path, err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gz, err := gzip.NewReader(bufio.NewReader(f))
 	if err != nil {
 		log.Printf("Error opening gzip %s: %v", path, err)
 		return
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	for {
 		header := make([]byte, mrt.MRT_COMMON_HEADER_LEN)
@@ -87,7 +88,7 @@ func readMRTFile(collector string, path string, ch chan *MRTMessage) {
 			subtype := mrt.MRTSubTypeBGP4MP(msg.Header.SubType)
 			if subtype == mrt.MESSAGE || subtype == mrt.MESSAGE_AS4 ||
 				subtype == mrt.MESSAGE_LOCAL || subtype == mrt.MESSAGE_AS4_LOCAL {
-				
+
 				bgp4mp := msg.Body.(*mrt.BGP4MPMessage)
 				ch <- &MRTMessage{
 					Timestamp: msg.Header.GetTime(),
@@ -102,9 +103,9 @@ func readMRTFile(collector string, path string, ch chan *MRTMessage) {
 
 type StreamHeap []*MRTStream
 
-func (h StreamHeap) Len() int           { return len(h) }
-func (h StreamHeap) Less(i, j int) bool { return h[i].current.Timestamp.Before(h[j].current.Timestamp) }
-func (h StreamHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h StreamHeap) Len() int            { return len(h) }
+func (h StreamHeap) Less(i, j int) bool  { return h[i].current.Timestamp.Before(h[j].current.Timestamp) }
+func (h StreamHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
 func (h *StreamHeap) Push(x interface{}) { *h = append(*h, x.(*MRTStream)) }
 func (h *StreamHeap) Pop() interface{} {
 	old := *h
@@ -120,6 +121,39 @@ type WorkerTask struct {
 }
 
 func main() {
+	cfg := parseFlags()
+
+	geo, asnMapping, rpki := setupDependencies()
+	defer func() { _ = geo.Close() }()
+
+	csvWriter, closeCSV := setupCSVWriter(cfg.csvFile)
+	defer closeCSV()
+
+	// Custom TimeProvider (shared, atomic update)
+	var currentTime int64
+	timeProvider := func() time.Time {
+		return time.Unix(currentTime, 0)
+	}
+
+	masterClassifier := bgpengine.NewClassifier(nil, nil, asnMapping, rpki, prefixToIP, nil, timeProvider)
+
+	runReplay(&cfg, timeProvider, &currentTime, masterClassifier, csvWriter)
+
+	// Write Summary
+	writeSummary(cfg.summaryFile, masterClassifier)
+}
+
+type analyzerConfig struct {
+	startTime   time.Time
+	endTime     time.Time
+	rrcs        []string
+	csvFile     string
+	summaryFile string
+	cacheDir    string
+	numWorkers  int
+}
+
+func parseFlags() analyzerConfig {
 	startFlag := flag.String("start", "", "Start time (YYYY-MM-DD HH:mm)")
 	endFlag := flag.String("end", "", "End time (YYYY-MM-DD HH:mm)")
 	defaultRRCs := []string{}
@@ -147,9 +181,18 @@ func main() {
 		log.Fatalf("Invalid end time: %v", err)
 	}
 
-	rrcs := strings.Split(*rrcsFlag, ",")
-	
-	// Setup classifier dependencies
+	return analyzerConfig{
+		startTime:   startTime,
+		endTime:     endTime,
+		rrcs:        strings.Split(*rrcsFlag, ","),
+		csvFile:     *csvFile,
+		summaryFile: *summaryFile,
+		cacheDir:    *cacheDir,
+		numWorkers:  *numWorkers,
+	}
+}
+
+func setupDependencies() (*geoservice.GeoService, *utils.ASNMapping, *utils.RPKIManager) {
 	geo := geoservice.NewGeoService(3840, 2160, 760.0)
 	if err := geo.OpenHintDBs("data", true); err != nil {
 		log.Printf("Warning: failed to open hint databases: %v", err)
@@ -162,54 +205,56 @@ func main() {
 	_ = asnMapping.Load()
 
 	rpki, _ := utils.NewRPKIManager("./data/rpki-vrps.db")
-	
-	// Shared CSV Writer (with mutex)
-	fCsv, err := os.Create(*csvFile)
+	return geo, asnMapping, rpki
+}
+
+func setupCSVWriter(csvFile string) (writer *csv.Writer, closer func()) {
+	fCsv, err := os.Create(csvFile)
 	if err != nil {
 		log.Fatalf("Failed to create CSV file: %v", err)
 	}
-	defer fCsv.Close()
 	csvWriter := csv.NewWriter(fCsv)
-	defer csvWriter.Flush()
-	csvMu := sync.Mutex{}
 	_ = csvWriter.Write([]string{"timestamp", "prefix", "old_type", "new_type", "origin_asn"})
 
-	// Custom TimeProvider (shared, atomic update)
-	var currentTime int64
-	timeProvider := func() time.Time {
-		return time.Unix(currentTime, 0)
+	return csvWriter, func() {
+		csvWriter.Flush()
+		_ = fCsv.Close()
 	}
+}
 
+var csvMu sync.Mutex
+
+func runReplay(cfg *analyzerConfig, timeProvider bgpengine.TimeProvider, currentTime *int64, masterClassifier *bgpengine.Classifier, csvWriter *csv.Writer) {
 	// Sharded Classifier State
-	workers := make([]chan WorkerTask, *numWorkers)
+	workers := make([]chan WorkerTask, cfg.numWorkers)
 	var wg sync.WaitGroup
-	
-	// Master classifier to aggregate stats at the end
-	masterClassifier := bgpengine.NewClassifier(nil, nil, asnMapping, rpki, prefixToIP, nil, timeProvider)
 
-	for i := 0; i < *numWorkers; i++ {
+	asnMapping := masterClassifier.GetASNMapping()
+	rpki := masterClassifier.GetRPKIManager()
+
+	for i := 0; i < cfg.numWorkers; i++ {
 		workers[i] = make(chan WorkerTask, 1000)
 		wg.Add(1)
-		go func(id int, ch chan WorkerTask) {
+		go func(ch chan WorkerTask) {
 			defer wg.Done()
 			// Each worker has its own local state cache to avoid locks
-			localPrefixStates := utils.NewLRUCache[string, *bgpproto.PrefixState](1000000 / *numWorkers)
+			localPrefixStates := utils.NewLRUCache[string, *bgpproto.PrefixState](1000000 / cfg.numWorkers)
 			localClassifier := bgpengine.NewClassifier(nil, nil, asnMapping, rpki, prefixToIP, localPrefixStates, timeProvider)
-			
+
 			for task := range ch {
 				processUpdate(localClassifier, masterClassifier, task.msg, task.update, csvWriter, &csvMu)
 			}
-		}(i, workers[i])
+		}(workers[i])
 	}
 
 	// Prepare MRT Streams (Parallel Readers)
 	h := &StreamHeap{}
 	heap.Init(h)
 
-	for _, rrc := range rrcs {
-		files := getMRTFiles(rrc, startTime, endTime)
+	for _, rrc := range cfg.rrcs {
+		files := getMRTFiles(rrc, cfg.startTime, cfg.endTime)
 		for _, remoteURL := range files {
-			localPath := filepath.Join(*cacheDir, filepath.Base(remoteURL))
+			localPath := filepath.Join(cfg.cacheDir, filepath.Base(remoteURL))
 			if err := downloadFile(remoteURL, localPath); err != nil {
 				log.Printf("Failed to download %s: %v", remoteURL, err)
 				continue
@@ -227,7 +272,7 @@ func main() {
 		}
 	}
 
-	log.Printf("Starting parallel replay with %d workers...", *numWorkers)
+	log.Printf("Starting parallel replay with %d workers...", cfg.numWorkers)
 
 	count := 0
 	lastSecond := int64(0)
@@ -235,59 +280,25 @@ func main() {
 	for h.Len() > 0 {
 		stream := heap.Pop(h).(*MRTStream)
 		msg := stream.current
-		currentTime = msg.Timestamp.Unix()
+		atomic.StoreInt64(currentTime, msg.Timestamp.Unix())
+		ts := atomic.LoadInt64(currentTime)
 
 		if lastSecond == 0 {
-			lastSecond = currentTime
+			lastSecond = ts
 		}
 
-		if currentTime > lastSecond {
+		if ts > lastSecond {
 			if messagesThisSecond > 0 {
 				log.Printf("[%s] Rate: %d msg/s", time.Unix(lastSecond, 0).Format("15:04:05"), messagesThisSecond)
 			}
-			lastSecond = currentTime
+			lastSecond = ts
 			messagesThisSecond = 0
 		}
 		messagesThisSecond++
 
 		if msg.Message.Header.Type == bgp.BGP_MSG_UPDATE {
 			update := msg.Message.Body.(*bgp.BGPUpdate)
-			
-			// Dispatch to workers based on prefix hash
-			
-			// Announcements
-			for _, nlri := range update.NLRI {
-				prefix := nlri.String()
-				ip := prefixToIP(prefix)
-				if ip == 0 && !strings.HasPrefix(prefix, "0.0.0.0") {
-					continue // Ignore IPv6 or invalid
-				}
-				workerID := utils.HashUint32(ip) % uint32(*numWorkers)
-				workers[workerID] <- WorkerTask{
-					msg: msg,
-					update: &bgp.BGPUpdate{
-						PathAttributes: update.PathAttributes,
-						NLRI:           []*bgp.IPAddrPrefix{nlri},
-					},
-				}
-			}
-			
-			// Withdrawals
-			for _, nlri := range update.WithdrawnRoutes {
-				prefix := nlri.String()
-				ip := prefixToIP(prefix)
-				if ip == 0 && !strings.HasPrefix(prefix, "0.0.0.0") {
-					continue // Ignore IPv6 or invalid
-				}
-				workerID := utils.HashUint32(ip) % uint32(*numWorkers)
-				workers[workerID] <- WorkerTask{
-					msg: msg,
-					update: &bgp.BGPUpdate{
-						PathAttributes:  update.PathAttributes,
-						WithdrawnRoutes: []*bgp.IPAddrPrefix{nlri},
-					},
-				}
-			}
+			dispatchUpdate(update, msg, workers, cfg.numWorkers)
 		}
 
 		if next, ok := <-stream.ch; ok {
@@ -299,14 +310,47 @@ func main() {
 	}
 
 	// Close workers and wait
-	for i := 0; i < *numWorkers; i++ {
+	for i := 0; i < cfg.numWorkers; i++ {
 		close(workers[i])
 	}
 	wg.Wait()
-
-	// Write Summary
-	writeSummary(*summaryFile, masterClassifier)
 	log.Printf("Done. Processed %d messages.", count)
+}
+
+func dispatchUpdate(update *bgp.BGPUpdate, msg *MRTMessage, workers []chan WorkerTask, numWorkers int) {
+	// Announcements
+	for _, nlri := range update.NLRI {
+		prefix := nlri.String()
+		ip := prefixToIP(prefix)
+		if ip == 0 && !strings.HasPrefix(prefix, "0.0.0.0") {
+			continue // Ignore IPv6 or invalid
+		}
+		workerID := utils.HashUint32(ip) % uint32(numWorkers)
+		workers[workerID] <- WorkerTask{
+			msg: msg,
+			update: &bgp.BGPUpdate{
+				PathAttributes: update.PathAttributes,
+				NLRI:           []*bgp.IPAddrPrefix{nlri},
+			},
+		}
+	}
+
+	// Withdrawals
+	for _, nlri := range update.WithdrawnRoutes {
+		prefix := nlri.String()
+		ip := prefixToIP(prefix)
+		if ip == 0 && !strings.HasPrefix(prefix, "0.0.0.0") {
+			continue // Ignore IPv6 or invalid
+		}
+		workerID := utils.HashUint32(ip) % uint32(numWorkers)
+		workers[workerID] <- WorkerTask{
+			msg: msg,
+			update: &bgp.BGPUpdate{
+				PathAttributes:  update.PathAttributes,
+				WithdrawnRoutes: []*bgp.IPAddrPrefix{nlri},
+			},
+		}
+	}
 }
 
 func getMRTFiles(rrc string, start, end time.Time) []string {
@@ -325,7 +369,7 @@ func downloadFile(url, path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	log.Printf("Downloading %s...", url)
@@ -333,7 +377,7 @@ func downloadFile(url, path string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
@@ -341,7 +385,7 @@ func downloadFile(url, path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = io.Copy(f, resp.Body)
 	return err
 }
@@ -358,7 +402,7 @@ func prefixToIP(p string) uint32 {
 
 func processUpdate(localClassifier, masterClassifier *bgpengine.Classifier, msg *MRTMessage, update *bgp.BGPUpdate, writer *csv.Writer, csvMu *sync.Mutex) {
 	ctx := &bgpengine.MessageContext{
-		Peer: msg.Collector + ":" + msg.Peer,
+		Peer: msg.Peer,
 		Host: msg.Collector,
 		Now:  msg.Timestamp,
 	}
@@ -372,7 +416,7 @@ func processUpdate(localClassifier, masterClassifier *bgpengine.Classifier, msg 
 				for _, asn := range param.GetAS() {
 					asns = append(asns, fmt.Sprintf("%d", asn))
 					ctx.PathLen++
-					ctx.OriginASN = uint32(asn)
+					ctx.OriginASN = asn
 				}
 			}
 			ctx.PathStr = "[" + strings.Join(asns, " ") + "]"
@@ -414,7 +458,7 @@ func handlePrefix(localClassifier, masterClassifier *bgpengine.Classifier, prefi
 		oldType = bgpengine.ClassificationType(state.ClassifiedType)
 	}
 
-	_, classified := localClassifier.ClassifyEvent(prefix, ctx)
+	_, classified := localClassifier.ClassifyEvent(prefix, ctx.EventType(), ctx)
 
 	if classified {
 		state, _ = localClassifier.GetPrefixState(prefix)
@@ -422,7 +466,7 @@ func handlePrefix(localClassifier, masterClassifier *bgpengine.Classifier, prefi
 
 		if oldType != newType {
 			// Record the classification in the master classifier for the summary
-			masterClassifier.RecordClassification(prefix, state, newType, ctx.Now.Unix(), ctx)
+			masterClassifier.RecordClassification(prefix, state, newType, ctx.Now.Unix(), ctx, ctx.EventType())
 
 			csvMu.Lock()
 			_ = writer.Write([]string{
@@ -444,12 +488,12 @@ func writeSummary(path string, c *bgpengine.Classifier) {
 		log.Printf("Failed to create summary file: %v", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	fmt.Fprintf(f, "BGP Analysis Summary\n")
-	fmt.Fprintf(f, "====================\n\n")
-	fmt.Fprintf(f, "Total Classification Events: %d\n\n", total)
-	fmt.Fprintf(f, "Breakdown:\n")
+	_, _ = fmt.Fprintf(f, "BGP Analysis Summary\n")
+	_, _ = fmt.Fprintf(f, "====================\n\n")
+	_, _ = fmt.Fprintf(f, "Total Classification Events: %d\n\n", total)
+	_, _ = fmt.Fprintf(f, "Breakdown:\n")
 
 	var keys []int
 	for k := range stats {
@@ -459,6 +503,6 @@ func writeSummary(path string, c *bgpengine.Classifier) {
 
 	for _, k := range keys {
 		ct := bgpengine.ClassificationType(k)
-		fmt.Fprintf(f, "  %-20s: %d\n", ct.String(), stats[ct])
+		_, _ = fmt.Fprintf(f, "  %-20s: %d\n", ct.String(), stats[ct])
 	}
 }

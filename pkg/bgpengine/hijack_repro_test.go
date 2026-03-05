@@ -59,7 +59,7 @@ func TestClassifier_HijackReproduction(t *testing.T) {
 		utils.SetASNOrgID(asnMapping, 24203, "")
 		utils.SetASNName(asnMapping, 139994, "XLSmart AS139994")
 		utils.SetASNName(asnMapping, 24203, "XLSmart AS24203")
-		
+
 		s := &prefixStats{
 			uniquePeers: map[string]bool{"p1": true, "p2": true, "p3": true},
 			uniqueHosts: map[string]bool{"h1": true, "h2": true},

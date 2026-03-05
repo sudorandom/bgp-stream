@@ -65,6 +65,8 @@ type BGPProcessor struct {
 	msgCount        atomic.Uint64
 	collectorCounts sync.Map // map[string]*atomic.Uint64
 	lastRateReport  time.Time
+	conns           sync.Map // map[string]*websocket.Conn
+	stopCh          chan struct{}
 	mu              sync.Mutex
 	stopping        atomic.Bool
 }
@@ -86,6 +88,7 @@ func NewBGPProcessor(geo IPCoordsProvider, seenDB, stateDB *utils.DiskTrie, asnM
 		timeProvider:   timeProvider,
 		lastRateReport: time.Now(),
 		workers:        make([]*processorWorker, numWorkers),
+		stopCh:         make(chan struct{}),
 	}
 
 	for i := 0; i < numWorkers; i++ {
@@ -150,17 +153,26 @@ func (p *BGPProcessor) processWorkerWithdrawals(w *processorWorker) {
 }
 
 func (p *BGPProcessor) Close() {
-	p.stopping.Store(true)
+	if !p.stopping.CompareAndSwap(false, true) {
+		return
+	}
+	close(p.stopCh)
+	p.conns.Range(func(key, value interface{}) bool {
+		if c, ok := value.(*websocket.Conn); ok {
+			_ = c.Close()
+		}
+		return true
+	})
 }
 
 func (p *BGPProcessor) isStopping() bool {
 	return p.stopping.Load()
 }
 
-const dedupeWindow = 15 * time.Second
 const withdrawResolutionWindow = 10 * time.Second
 
 func (p *BGPProcessor) Listen() {
+	// RRC00 to RRC26 are the currently active RIS collectors
 	for i := 0; i <= 26; i++ {
 		rrc := fmt.Sprintf("rrc%02d", i)
 		go p.listenToCollector(rrc)
@@ -168,32 +180,61 @@ func (p *BGPProcessor) Listen() {
 }
 
 func (p *BGPProcessor) listenToCollector(rrc string) {
-	backoff := 1 * time.Second
+	backoff := 5 * time.Second
 	for {
 		if p.isStopping() {
 			return
 		}
+
 		c, err := p.connectAndSubscribe(rrc)
 		if err != nil {
-			log.Printf("[%s] Connection error: %v. Retrying in %v...", rrc, err, backoff)
-			time.Sleep(backoff)
+			log.Printf("[%s] RIS-LIVE Connection error: %v. Retrying in %v...", rrc, err, backoff)
+
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-p.stopCh:
+				timer.Stop()
+				return
+			}
+
 			backoff *= 2
-			if backoff > 60*time.Second {
-				backoff = 60 * time.Second
+			if backoff > 5*time.Minute {
+				backoff = 5 * time.Minute
 			}
 			continue
 		}
-		backoff = 1 * time.Second
+
+		// Reset backoff on successful connection
+		backoff = 5 * time.Second
+		p.conns.Store(rrc, c)
 
 		p.runMessageLoop(c, rrc)
+
 		_ = c.Close()
-		time.Sleep(time.Second)
+		p.conns.Delete(rrc)
+
+		if p.isStopping() {
+			return
+		}
+
+		// Wait a bit before reconnecting if the loop exited
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-timer.C:
+		case <-p.stopCh:
+			timer.Stop()
+			return
+		}
 	}
 }
 
 func (p *BGPProcessor) connectAndSubscribe(rrc string) (*websocket.Conn, error) {
 	url := "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream"
-	c, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 15 * time.Second
+
+	c, resp, err := dialer.Dial(url, nil)
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
@@ -204,7 +245,7 @@ func (p *BGPProcessor) connectAndSubscribe(rrc string) (*websocket.Conn, error) 
 		_ = resp.Body.Close()
 	}
 
-	subscribeMsg := fmt.Sprintf(`{"type": "ris_subscribe", "data": {"type": "UPDATE", "host": "%s", "prefix": "0.0.0.0/0", "moreSpecific": true}}`, rrc)
+	subscribeMsg := fmt.Sprintf(`{"type": "ris_subscribe", "data": {"type": "UPDATE", "host": %q, "prefix": "0.0.0.0/0", "moreSpecific": true}}`, rrc)
 	if err := c.WriteMessage(websocket.TextMessage, []byte(subscribeMsg)); err != nil {
 		_ = c.Close()
 		return nil, err
@@ -222,20 +263,52 @@ type pendingEvent struct {
 }
 
 func (p *BGPProcessor) runMessageLoop(c *websocket.Conn, rrc string) {
+	const readWait = 60 * time.Second
+	const pingPeriod = (readWait * 9) / 10
+
+	_ = c.SetReadDeadline(time.Now().Add(readWait))
+	c.SetPongHandler(func(string) error {
+		_ = c.SetReadDeadline(time.Now().Add(readWait))
+		return nil
+	})
+
+	// Start a ping ticker for this connection to keep it alive
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := c.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+					return
+				}
+			case <-done:
+				return
+			case <-p.stopCh:
+				return
+			}
+		}
+	}()
+	defer close(done)
+
 	for {
 		if p.isStopping() {
 			return
 		}
 		_, message, err := c.ReadMessage()
 		if err != nil {
-			log.Printf("[%s] Read error: %v. Reconnecting...", rrc, err)
+			if !p.isStopping() {
+				log.Printf("[%s] Read error: %v. Reconnecting...", rrc, err)
+			}
 			return
 		}
+
 		var msg struct {
 			Type string         `json:"type"`
 			Data RISMessageData `json:"data"`
 		}
-		if json.Unmarshal(message, &msg) != nil {
+		if err := json.Unmarshal(message, &msg); err != nil {
 			continue
 		}
 
@@ -243,14 +316,13 @@ func (p *BGPProcessor) runMessageLoop(c *websocket.Conn, rrc string) {
 			log.Printf("[RIS ERROR %s] %s", rrc, string(message))
 			continue
 		}
-				if msg.Type == "ris_message" {
-					p.msgCount.Add(1)
-					
-					actual, _ := p.collectorCounts.LoadOrStore(rrc, &atomic.Uint64{})
-					actual.(*atomic.Uint64).Add(1)
-		
-					// Dispatch based on prefix. Since one message can have multiple prefixes,			// we might need to send it to multiple workers or split it.
-			// To keep consistency and simplicity, we split it per prefix if they belong to different workers.
+
+		if msg.Type == "ris_message" {
+			p.msgCount.Add(1)
+
+			actual, _ := p.collectorCounts.LoadOrStore(rrc, &atomic.Uint64{})
+			actual.(*atomic.Uint64).Add(1)
+
 			p.dispatchMessage(&msg.Data)
 		}
 	}
@@ -373,11 +445,7 @@ func (p *BGPProcessor) handleRISMessage(w *processorWorker, data *RISMessageData
 		}
 	}
 
-	var events []pendingEvent
 	now := p.timeProvider()
-	events = append(events, p.handleWithdrawals(w, data.Withdrawals, originASN, now)...)
-	events = append(events, p.handleAnnouncements(w, data.Announcements, originASN, now)...)
-
 	ctx := &MessageContext{
 		Peer:       data.Peer,
 		Aggregator: data.Aggregator,
@@ -399,39 +467,14 @@ func (p *BGPProcessor) handleRISMessage(w *processorWorker, data *RISMessageData
 		ctx.CommStr = fmt.Sprintf("%v", data.Community)
 	}
 
-	if len(data.Withdrawals) > 0 {
-		ctx.IsWithdrawal = true
-		ctx.NumPrefixes = len(data.Withdrawals)
-		for _, prefix := range data.Withdrawals {
-			if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
-				events = append(events, e)
-			}
-		}
-	}
-
-	ctx.IsWithdrawal = false
-	for _, ann := range data.Announcements {
-		ctx.NumPrefixes = len(ann.Prefixes)
-		ctx.NextHop = ann.NextHop
-		for _, prefix := range ann.Prefixes {
-			if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
-				events = append(events, e)
-			}
-		}
-	}
-	return events
-}
-
-func (p *BGPProcessor) handleWithdrawals(w *processorWorker, withdrawals []string, originASN uint32, now time.Time) []pendingEvent {
 	var events []pendingEvent
-	for _, prefix := range withdrawals {
+
+	// 1. Process Withdrawals
+	ctx.IsWithdrawal = true
+	ctx.NumPrefixes = len(data.Withdrawals)
+	for _, prefix := range data.Withdrawals {
 		ip := p.prefixToIP(prefix)
 		if ip == 0 {
-			continue
-		}
-
-		if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
-			events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, classificationType: ClassificationNone})
 			continue
 		}
 
@@ -439,74 +482,49 @@ func (p *BGPProcessor) handleWithdrawals(w *processorWorker, withdrawals []strin
 			Time   time.Time
 			Prefix string
 		}{Time: now.Add(withdrawResolutionWindow), Prefix: prefix}
-	}
-	return events
-}
 
-func (p *BGPProcessor) handleAnnouncements(w *processorWorker, announcements []struct {
-	NextHop  string   `json:"next_hop"`
-	Prefixes []string `json:"prefixes"`
-}, originASN uint32, now time.Time) []pendingEvent {
-	var events []pendingEvent
-	for _, ann := range announcements {
+		if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
+			events = append(events, e)
+		}
+	}
+
+	// 2. Process Announcements
+	ctx.IsWithdrawal = false
+	for _, ann := range data.Announcements {
+		ctx.NumPrefixes = len(ann.Prefixes)
+		ctx.NextHop = ann.NextHop
 		for _, prefix := range ann.Prefixes {
-			if e, ok := p.processAnnouncement(w, prefix, originASN, now); ok {
+			ip := p.prefixToIP(prefix)
+			if ip == 0 {
+				continue
+			}
+
+			eventType := EventUpdate
+			if isNew := p.isNewPrefix(prefix); isNew {
+				eventType = EventNew
+			}
+
+			if _, ok := w.pendingWithdrawals[ip]; ok {
+				delete(w.pendingWithdrawals, ip)
+				eventType = EventUpdate
+			}
+
+			if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
+				e.eventType = eventType
 				events = append(events, e)
 			}
 		}
 	}
+
 	return events
 }
 
-func (p *BGPProcessor) processAnnouncement(w *processorWorker, prefix string, originASN uint32, now time.Time) (pendingEvent, bool) {
-	ip := p.prefixToIP(prefix)
-	if ip == 0 {
-		return pendingEvent{}, false
+func (p *BGPProcessor) isNewPrefix(prefix string) bool {
+	if p.seenDB == nil {
+		return true
 	}
-
-	if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
-		w.recentlySeen.Add(ip, struct {
-			Time time.Time
-			Type EventType
-		}{Time: now, Type: EventUpdate})
-		return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventUpdate, classificationType: ClassificationNone}, true
-	}
-
-	if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
-		return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, classificationType: ClassificationNone}, true
-	}
-
-	if _, ok := w.pendingWithdrawals[ip]; ok {
-		delete(w.pendingWithdrawals, ip)
-		w.recentlySeen.Add(ip, struct {
-			Time time.Time
-			Type EventType
-		}{Time: now, Type: EventUpdate})
-		return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventUpdate, classificationType: ClassificationNone}, true
-	}
-
-	return p.handleNewOrUpdate(w, prefix, ip, originASN, now)
-}
-
-func (p *BGPProcessor) handleNewOrUpdate(w *processorWorker, prefix string, ip, originASN uint32, now time.Time) (pendingEvent, bool) {
-	isNew := true
-	if p.seenDB != nil {
-		if val, _ := p.seenDB.Get(prefix); val != nil {
-			isNew = false
-		}
-	}
-
-	eventType := EventUpdate
-	if isNew {
-		eventType = EventNew
-	}
-
-	w.recentlySeen.Add(ip, struct {
-		Time time.Time
-		Type EventType
-	}{Time: now, Type: eventType})
-
-	return pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: eventType, classificationType: ClassificationNone}, true
+	val, _ := p.seenDB.Get(prefix)
+	return val == nil
 }
 
 func (p *BGPProcessor) GetClassificationStats() (stats map[ClassificationType]int, totalEvents int) {

@@ -25,6 +25,22 @@ func IPToUint32(ip net.IP) uint32 {
 	return binary.BigEndian.Uint32(ip)
 }
 
+// GetPrefixSize returns the number of IPs in a CIDR prefix (e.g., /24 returns 256).
+func GetPrefixSize(prefix string) uint64 {
+	parts := strings.Split(prefix, "/")
+	if len(parts) != 2 {
+		return 0
+	}
+	var mask int
+	if _, err := fmt.Sscanf(parts[1], "%d", &mask); err != nil {
+		return 0
+	}
+	if mask < 0 || mask > 32 {
+		return 0
+	}
+	return 1 << (32 - uint32(mask))
+}
+
 // RangeToCIDRs converts an IPv4 range [start, end] into a slice of *net.IPNet.
 func RangeToCIDRs(start, end uint32) []*net.IPNet {
 	var cidrs []*net.IPNet
