@@ -829,9 +829,9 @@ func (c *Classifier) findNormalAnomaly(s *prefixStats, elapsed float64) (Classif
 		return ClassificationPathLengthOscillation, true
 	}
 
-	// Discovery as the catch-all for high volume activity (>= 100 messages)
+	// Discovery as the catch-all for high volume activity (>= 25 messages)
 	// that didn't match any "Bad" anomaly or specific "Normal" pattern.
-	if s.totalMsgs >= 100 {
+	if s.totalMsgs >= 25 {
 		return ClassificationDiscovery, true
 	}
 	return ClassificationNone, false

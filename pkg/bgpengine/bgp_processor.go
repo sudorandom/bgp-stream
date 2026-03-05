@@ -169,6 +169,7 @@ func (p *BGPProcessor) isStopping() bool {
 	return p.stopping.Load()
 }
 
+const dedupeWindow = 15 * time.Second
 const withdrawResolutionWindow = 10 * time.Second
 
 func (p *BGPProcessor) Listen() {
@@ -485,6 +486,16 @@ func (p *BGPProcessor) handleRISMessage(w *processorWorker, data *RISMessageData
 
 		if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
 			events = append(events, e)
+		} else {
+			if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
+				events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, classificationType: ClassificationNone})
+			} else {
+				w.recentlySeen.Add(ip, struct {
+					Time time.Time
+					Type EventType
+				}{Time: now, Type: EventWithdrawal})
+				events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventWithdrawal, classificationType: ClassificationNone})
+			}
 		}
 	}
 
@@ -512,6 +523,26 @@ func (p *BGPProcessor) handleRISMessage(w *processorWorker, data *RISMessageData
 			if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
 				e.eventType = eventType
 				events = append(events, e)
+			} else {
+				if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
+					w.recentlySeen.Add(ip, struct {
+						Time time.Time
+						Type EventType
+					}{Time: now, Type: EventUpdate})
+					events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventUpdate, classificationType: ClassificationNone})
+				} else if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
+					w.recentlySeen.Add(ip, struct {
+						Time time.Time
+						Type EventType
+					}{Time: now, Type: EventGossip})
+					events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, classificationType: ClassificationNone})
+				} else {
+					w.recentlySeen.Add(ip, struct {
+						Time time.Time
+						Type EventType
+					}{Time: now, Type: eventType})
+					events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: eventType, classificationType: ClassificationNone})
+				}
 			}
 		}
 	}
