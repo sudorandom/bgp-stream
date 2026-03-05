@@ -1,7 +1,6 @@
 package bgpengine
 
 import (
-	"fmt"
 	"image/color"
 	"math"
 	"math/rand"
@@ -186,6 +185,19 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 	text.Draw(e.impactBuffer, impactTitle, e.titleFace, e.textOp)
 
 	currentY := localY + 5.0
+	currentY = e.drawASNImpacts(localX, currentY, boxW, fontSize, monoFace)
+	currentY = e.drawPrefixCounts(localX, currentY, boxW, fontSize)
+
+	now := e.Now()
+	isImpactUpdating := now.Sub(e.impactUpdatedAt) < 2*time.Second
+	impactIntensity := 0.0
+	if isImpactUpdating {
+		impactIntensity = 1.0 - (now.Sub(e.impactUpdatedAt).Seconds() / 2.0)
+	}
+	e.drawGlitchImage(screen, e.impactBuffer, hubX-10, impactYBase-fontSize-15, 1.0, impactIntensity, isImpactUpdating)
+}
+
+func (e *Engine) drawASNImpacts(localX, currentY, boxW, fontSize float64, monoFace *text.GoTextFace) float64 {
 	for _, v := range e.ActiveASNImpacts {
 		// Draw ASN header
 		e.textOp.GeoM.Reset()
@@ -223,71 +235,69 @@ func (e *Engine) drawImpacts(screen *ebiten.Image, margin, impactYBase, boxW, im
 		}
 		currentY += 5.0 // Spacer between ASNs
 	}
+	return currentY
+}
 
-	if len(e.prefixCounts) > 0 {
-		// Draw headers for the columns
-		currentY += 10.0
-		col1X, col2X, col3X := localX+5.0, localX+boxW-100.0, localX+boxW-40.0
-		if e.Width > 2000 {
-			col1X, col2X, col3X = localX+10.0, localX+boxW-200.0, localX+boxW-80.0
-		}
+func (e *Engine) drawPrefixCounts(localX, currentY, boxW, fontSize float64) float64 {
+	if len(e.prefixCounts) == 0 {
+		return currentY
+	}
 
+	// Draw headers for the columns
+	currentY += 10.0
+	col1X, col2X, col3X := localX+5.0, localX+boxW-100.0, localX+boxW-40.0
+	if e.Width > 2000 {
+		col1X, col2X, col3X = localX+10.0, localX+boxW-200.0, localX+boxW-80.0
+	}
+
+	e.textOp.ColorScale.Reset()
+	e.textOp.ColorScale.Scale(1, 1, 1, 0.4)
+
+	e.textOp.GeoM.Reset()
+	e.textOp.GeoM.Translate(col1X, currentY)
+	text.Draw(e.impactBuffer, "ANOMALY", e.subMonoFace, e.textOp)
+
+	h1 := "ASNS"
+	hw1, _ := text.Measure(h1, e.subMonoFace, 0)
+	e.textOp.GeoM.Reset()
+	e.textOp.GeoM.Translate(col2X-hw1/2, currentY)
+	text.Draw(e.impactBuffer, h1, e.subMonoFace, e.textOp)
+
+	h2 := "PFXS"
+	hw2, _ := text.Measure(h2, e.subMonoFace, 0)
+	e.textOp.GeoM.Reset()
+	e.textOp.GeoM.Translate(col3X-hw2/2, currentY)
+	text.Draw(e.impactBuffer, h2, e.subMonoFace, e.textOp)
+
+	currentY += fontSize * 0.9
+
+	for _, pc := range e.prefixCounts {
+		// Anomaly Name
+		e.textOp.GeoM.Reset()
+		e.textOp.GeoM.Translate(localX+5, currentY)
 		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, 0.4)
+		e.textOp.ColorScale.ScaleWithColor(pc.Color)
+		text.Draw(e.impactBuffer, pc.Name, e.subMonoFace, e.textOp)
 
+		// ASN Count
+		aw, _ := text.Measure(pc.ASNStr, e.subMonoFace, 0)
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(col1X, currentY)
-		text.Draw(e.impactBuffer, "ANOMALY", e.subMonoFace, e.textOp)
+		e.textOp.GeoM.Translate(col2X-aw/2, currentY)
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.ScaleWithColor(pc.Color)
+		text.Draw(e.impactBuffer, pc.ASNStr, e.subMonoFace, e.textOp)
 
-		h1 := "ASNS"
-		hw1, _ := text.Measure(h1, e.subMonoFace, 0)
+		// Prefix Count
+		pw, _ := text.Measure(pc.CountStr, e.subMonoFace, 0)
 		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(col2X-hw1/2, currentY)
-		text.Draw(e.impactBuffer, h1, e.subMonoFace, e.textOp)
+		e.textOp.GeoM.Translate(col3X-pw/2, currentY)
+		e.textOp.ColorScale.Reset()
+		e.textOp.ColorScale.ScaleWithColor(pc.Color)
+		text.Draw(e.impactBuffer, pc.CountStr, e.subMonoFace, e.textOp)
 
-		h2 := "PFXS"
-		hw2, _ := text.Measure(h2, e.subMonoFace, 0)
-		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(col3X-hw2/2, currentY)
-		text.Draw(e.impactBuffer, h2, e.subMonoFace, e.textOp)
-
-		currentY += fontSize * 0.9
-
-		for _, pc := range e.prefixCounts {
-			// Anomaly Name
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+5, currentY)
-			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.ScaleWithColor(pc.Color)
-			text.Draw(e.impactBuffer, pc.Name, e.subMonoFace, e.textOp)
-
-			// ASN Count
-			aw, _ := text.Measure(pc.ASNStr, e.subMonoFace, 0)
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(col2X-aw/2, currentY)
-			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.ScaleWithColor(pc.Color)
-			text.Draw(e.impactBuffer, pc.ASNStr, e.subMonoFace, e.textOp)
-
-			// Prefix Count
-			pw, _ := text.Measure(pc.CountStr, e.subMonoFace, 0)
-			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(col3X-pw/2, currentY)
-			e.textOp.ColorScale.Reset()
-			e.textOp.ColorScale.ScaleWithColor(pc.Color)
-			text.Draw(e.impactBuffer, pc.CountStr, e.subMonoFace, e.textOp)
-
-			currentY += fontSize * 0.8
-		}
+		currentY += fontSize * 0.8
 	}
-
-	now := e.Now()
-	isImpactUpdating := now.Sub(e.impactUpdatedAt) < 2*time.Second
-	impactIntensity := 0.0
-	if isImpactUpdating {
-		impactIntensity = 1.0 - (now.Sub(e.impactUpdatedAt).Seconds() / 2.0)
-	}
-	e.drawGlitchImage(screen, e.impactBuffer, hubX-10, impactYBase-fontSize-15, 1.0, impactIntensity, isImpactUpdating)
+	return currentY
 }
 
 func (e *Engine) drawNowPlaying(screen *ebiten.Image, margin, boxW, fontSize float64, face *text.GoTextFace) {
@@ -577,11 +587,11 @@ func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, tit
 		gridPath.MoveTo(float32(gx), float32(gy+y))
 		gridPath.LineTo(float32(gx+chartW), float32(gy+y))
 
-		labelStr := fmt.Sprintf("%d", val)
+		labelStr := strconv.Itoa(val)
 		if val >= 1000000 {
-			labelStr = fmt.Sprintf("%dm", val/1000000)
+			labelStr = strconv.Itoa(val/1000000) + "m"
 		} else if val >= 1000 {
-			labelStr = fmt.Sprintf("%dk", val/1000)
+			labelStr = strconv.Itoa(val/1000) + "k"
 		}
 		e.textOp.GeoM.Reset()
 		labelX := gx + chartW + 8
@@ -741,17 +751,10 @@ func (e *Engine) StartMetricsLoop() {
 			e.prefixImpactHistory = append(e.prefixImpactHistory[1:], first)
 
 			// Clear anomalies map for reuse
-			for et, prefixes := range e.currentAnomalies {
-				for p := range prefixes {
-					delete(prefixes, p)
-				}
-				delete(e.currentAnomalies, et)
-			}
+			clear(e.currentAnomalies)
 
 			// Clear country activity map
-			for cc := range e.countryActivity {
-				delete(e.countryActivity, cc)
-			}
+			clear(e.countryActivity)
 		}
 	}
 
@@ -843,7 +846,7 @@ func (e *Engine) updateVisualHubs(uiInterval float64, firstRun bool) {
 		}
 		vh.TargetAlpha = 1.0
 		vh.Rate = current[i].rate
-		vh.RateStr = fmt.Sprintf("%.0f", current[i].rate)
+		vh.RateStr = strconv.FormatFloat(current[i].rate, 'f', 0, 64)
 		vh.RateWidth, _ = text.Measure(vh.RateStr, e.subMonoFace, 0)
 		e.ActiveHubs = append(e.ActiveHubs, vh)
 	}
@@ -948,10 +951,8 @@ func getMaskLen(prefix string) int {
 }
 
 func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
-	// Clear reusable map
-	for k := range e.impactMap {
-		delete(e.impactMap, k)
-	}
+	// Fast clear of map using Go 1.21+ clear built-in if available, otherwise optimized clear
+	clear(e.impactMap)
 
 	for et, prefixes := range e.currentAnomalies {
 		_, name := e.getClassificationVisuals(et)
@@ -995,15 +996,8 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 
 func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 	// Clear reusable structures
-	for k := range e.countMap {
-		delete(e.countMap, k)
-	}
-	for k, m := range e.asnsPerClass {
-		for i := range m {
-			delete(m, i)
-		}
-		delete(e.asnsPerClass, k)
-	}
+	clear(e.countMap)
+	clear(e.asnsPerClass)
 
 	for _, vi := range allImpact {
 		if vi.ClassificationName == "" {
@@ -1055,9 +1049,7 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 
 func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 	// Clear reusable structures
-	for k := range e.asnGroups {
-		delete(e.asnGroups, k)
-	}
+	clear(e.asnGroups)
 
 	for _, vi := range allImpact {
 		prio := e.GetPriority(vi.ClassificationName)
@@ -1073,14 +1065,13 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 		key := asnGroupKey{ASN: asn, Anom: vi.ClassificationName}
 		g, ok := e.asnGroups[key]
 		if !ok {
-			networkName := ""
+			asnStr := strconv.FormatUint(uint64(asn), 10)
 			if e.asnMapping != nil {
-				networkName = e.asnMapping.GetName(asn)
+				if networkName := e.asnMapping.GetName(asn); networkName != "" {
+					asnStr += " - " + networkName
+				}
 			}
-			asnStr := fmt.Sprintf("AS%d", asn)
-			if networkName != "" {
-				asnStr = fmt.Sprintf("AS%d - %s", asn, networkName)
-			}
+			asnStr = "AS" + asnStr
 
 			g = &asnGroup{
 				asnStr:   asnStr,
@@ -1128,7 +1119,7 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 
 		moreStr := ""
 		if moreCount > 0 {
-			moreStr = fmt.Sprintf("(%d more)", moreCount)
+			moreStr = "(" + strconv.Itoa(moreCount) + " more)"
 		}
 
 		anomWidth, _ := text.Measure(g.anom, e.subMonoFace, 0)
@@ -1194,7 +1185,7 @@ func (e *Engine) drawBeaconMetrics(screen *ebiten.Image, x, y, w, h, fontSize, b
 	// 4. Text Label in Center
 	e.textOp.ColorScale.Reset()
 	e.textOp.ColorScale.Scale(1, 1, 1, 0.8)
-	label := fmt.Sprintf("%.0f%%", e.displayBeaconPercent)
+	label := strconv.FormatFloat(e.displayBeaconPercent, 'f', 0, 64) + "%"
 	tw, th := text.Measure(label, e.titleMonoFace, 0)
 	e.textOp.GeoM.Reset()
 	e.textOp.GeoM.Translate(centerX-(tw/2), centerY-(th/2))
