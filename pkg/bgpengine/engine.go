@@ -60,6 +60,7 @@ func (t EventType) String() string {
 type Pulse struct {
 	X, Y      float64
 	StartTime time.Time
+	Duration  time.Duration
 	Color     color.RGBA
 	MaxRadius float64
 	IsFlare   bool
@@ -113,12 +114,12 @@ var (
 )
 
 const (
-	MaxActivePulses      = 15000
-	MaxVisualQueueSize   = 60000
-	DefaultPulsesPerTick = 200
-	BurstPulsesPerTick   = 500
-	VisualQueueThreshold = 10000
-	VisualQueueCull      = 30000
+	MaxActivePulses      = 50000
+	MaxVisualQueueSize   = 300000
+	DefaultPulsesPerTick = 400
+	BurstPulsesPerTick   = 1500
+	VisualQueueThreshold = 20000
+	VisualQueueCull      = 100000
 )
 
 type asnGroupKey struct {
@@ -275,6 +276,7 @@ type Engine struct {
 
 	droppedPulses atomic.Uint64
 	droppedQueue  atomic.Uint64
+	droppedStale  atomic.Uint64
 }
 
 type VisualHub struct {
@@ -867,10 +869,10 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 }
 
 func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...bool) {
-	// De-emphasize Discovery/None pulses (Blue)
-	if c == ColorDiscovery && rand.Float64() > 0.5 {
-		return
-	}
+	// De-emphasize Discovery/None pulses (Blue) - less aggressively now
+	// if c == ColorDiscovery && rand.Float64() > 0.4 {
+	// 	return
+	// }
 	flare := false
 	if len(isFlare) > 0 {
 		flare = isFlare[0]
@@ -878,8 +880,8 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...
 		flare = (c == ColorLeak)
 	}
 
-	lat += (rand.Float64() - 0.5) * 0.8
-	lng += (rand.Float64() - 0.5) * 0.8
+	lat += (rand.Float64() - 0.5) * 1.5
+	lng += (rand.Float64() - 0.5) * 1.5
 	x, y := e.geo.Project(lat, lng)
 	e.pulsesMu.Lock()
 	defer e.pulsesMu.Unlock()
@@ -888,9 +890,9 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...
 		if e.Width > 2000 {
 			baseRad = 12.0
 		}
-		// Discovery pulses are much smaller
+		// Discovery pulses are smaller
 		if c == ColorDiscovery {
-			baseRad *= 0.75
+			baseRad *= 0.65
 		}
 
 		// Use natural log (ln) for slower growth at high counts
@@ -900,7 +902,18 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...
 		if radius > 240 {
 			radius = 240
 		}
-		e.pulses = append(e.pulses, Pulse{X: x, Y: y, StartTime: e.Now(), Color: c, MaxRadius: radius, IsFlare: flare})
+
+		// Randomize duration to prevent synchronized expiration and 'emptying out'
+		duration := 1200*time.Millisecond + time.Duration(rand.Intn(800))*time.Millisecond
+
+		e.pulses = append(e.pulses, Pulse{
+			X: x, Y: y,
+			StartTime: e.Now(),
+			Duration:  duration,
+			Color:     c,
+			MaxRadius: radius,
+			IsFlare:   flare,
+		})
 	} else {
 		e.droppedPulses.Add(1)
 	}
@@ -921,8 +934,9 @@ func (e *Engine) UpdatePerformanceMetrics() {
 	fps := ebiten.ActualFPS()
 	droppedPulses := e.droppedPulses.Swap(0)
 	droppedQueue := e.droppedQueue.Swap(0)
+	droppedStale := e.droppedStale.Swap(0)
 
-	if tps < 28 || fps < 28 || droppedPulses > 0 || droppedQueue > 0 {
+	if tps < 28 || fps < 28 || droppedPulses > 0 || droppedQueue > 0 || droppedStale > 0 {
 		var sb strings.Builder
 		sb.WriteString("[PERF]")
 		fmt.Fprintf(&sb, " TPS: %.2f, FPS: %.2f", tps, fps)
@@ -931,6 +945,9 @@ func (e *Engine) UpdatePerformanceMetrics() {
 		}
 		if droppedQueue > 0 {
 			fmt.Fprintf(&sb, ", DroppedQueue: %d", droppedQueue)
+		}
+		if droppedStale > 0 {
+			fmt.Fprintf(&sb, ", DroppedStale: %d", droppedStale)
 		}
 		if tps < 28 || fps < 28 {
 			sb.WriteString(" (Lag detected)")
@@ -974,8 +991,11 @@ func (e *Engine) updateVisualQueue() {
 		p := e.visualQueue[0]
 		e.visualQueue = e.visualQueue[1:]
 		added++
-		if now.Sub(p.ScheduledTime) < 2*time.Second {
+		// Allow up to 5 seconds of delay during massive spikes before dropping pulses
+		if now.Sub(p.ScheduledTime) < 5*time.Second {
 			e.AddPulse(p.Lat, p.Lng, p.Color, p.Count, p.IsFlare)
+		} else {
+			e.droppedStale.Add(1)
 		}
 	}
 }
@@ -1084,7 +1104,7 @@ func (e *Engine) updateActivePulses() {
 
 	active := e.pulses[:0]
 	for _, p := range e.pulses {
-		if now.Sub(p.StartTime) < 1500*time.Millisecond {
+		if now.Sub(p.StartTime) < p.Duration {
 			active = append(active, p)
 		}
 	}
@@ -1109,7 +1129,7 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 	e.drawOp.Blend = ebiten.BlendLighter
 	for _, p := range e.pulses {
 		elapsed := now.Sub(p.StartTime).Seconds()
-		totalDuration := 1.5
+		totalDuration := p.Duration.Seconds()
 		progress := elapsed / totalDuration
 		if progress > 1.0 {
 			continue
