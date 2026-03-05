@@ -619,11 +619,30 @@ func (c *Classifier) isSibling(asn1, asn2 uint32) bool {
 
 	name1 := c.asnMapping.GetName(asn1)
 	name2 := c.asnMapping.GetName(asn2)
+
+	// Only use heuristic if both names are reasonable length (e.g. not just "A") and both are valid
 	if name1 != "Unknown" && name2 != "Unknown" {
 		n1 := strings.Fields(strings.ToLower(name1))
 		n2 := strings.Fields(strings.ToLower(name2))
+
+		// If the names are exactly the same, they are siblings
+		if strings.ToLower(name1) == strings.ToLower(name2) {
+			return true
+		}
+
 		if len(n1) > 0 && len(n2) > 0 {
-			if n1[0] == n2[0] {
+			w1 := strings.TrimRight(n1[0], ",")
+			w2 := strings.TrimRight(n2[0], ",")
+
+			// Try splitting by hyphen as well
+			if strings.Contains(w1, "-") {
+				w1 = strings.Split(w1, "-")[0]
+			}
+			if strings.Contains(w2, "-") {
+				w2 = strings.Split(w2, "-")[0]
+			}
+
+			if w1 == w2 && len(w1) > 3 { // Ensure the matched word is meaningful
 				return true
 			}
 		}
@@ -674,6 +693,10 @@ func (c *Classifier) hasRouteLeak(ctx *MessageContext) (*LeakDetail, bool) {
 	for i := 0; i < len(path)-2; i++ {
 		p1, p2, p3 := path[i], path[i+1], path[i+2]
 		
+		if c.isSibling(p1, p3) {
+			continue
+		}
+
 		// Hairpin turn: Tier-1 -> Non-Tier-1 -> Tier-1
 		if c.isTier1(p1) && !c.isLargeNetwork(p2) && !c.isCloud(p2) && c.isTier1(p3) {
 			return &LeakDetail{

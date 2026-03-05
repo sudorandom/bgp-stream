@@ -12,21 +12,21 @@ import (
 func runClassificationTest(t *testing.T, name string, expect ClassificationType, steps func(p *BGPProcessor, now time.Time, classify func(prefix string, ctx *MessageContext))) {
 	t.Run(name, func(t *testing.T) {
 		var lastClassification ClassificationType
-		onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
+		onEvent := func(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
 			if classificationType != ClassificationNone {
 				lastClassification = classificationType
 			}
 		}
-		p := NewBGPProcessor(func(uint32) (float64, float64, string, geoservice.ResolutionType) {
-			return 0, 0, "US", geoservice.ResGeoIP
+		p := NewBGPProcessor(func(uint32) (float64, float64, string, string, geoservice.ResolutionType) {
+			return 0, 0, "US", "New York", geoservice.ResGeoIP
 		}, nil, nil, nil, nil, func(string) uint32 { return 0 }, time.Now, onEvent)
 		now := time.Now().Truncate(time.Hour)
 
 		classify := func(prefix string, ctx *MessageContext) {
 			wIdx := int(utils.HashUint32(p.prefixToIP(prefix)) % uint32(len(p.workers)))
 			if e, ok := p.workers[wIdx].classifier.ClassifyEvent(prefix, ctx); ok {
-				if lat, lng, cc, _ := p.geo(e.ip); cc != "" {
-					p.onEvent(lat, lng, cc, e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
+				if lat, lng, cc, city, _ := p.geo(e.ip); cc != "" {
+					p.onEvent(lat, lng, cc, city, e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
 				}
 			}
 		}

@@ -166,7 +166,7 @@ func TestHijackDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var lastAnom ClassificationType
-			onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
+			onEvent := func(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
 				if classificationType != ClassificationNone {
 					lastAnom = classificationType
 				}
@@ -179,8 +179,8 @@ func TestHijackDetection(t *testing.T) {
 			}()
 
 			asnMapping := utils.NewASNMapping()
-			p := NewBGPProcessor(func(uint32) (float64, float64, string, geoservice.ResolutionType) {
-				return 0, 0, "US", geoservice.ResGeoIP
+			p := NewBGPProcessor(func(uint32) (float64, float64, string, string, geoservice.ResolutionType) {
+				return 0, 0, "US", "New York", geoservice.ResGeoIP
 			}, seenDB, nil, asnMapping, rpki, func(string) uint32 { return 0 }, time.Now, onEvent)
 
 			if tt.setup != nil {
@@ -190,7 +190,7 @@ func TestHijackDetection(t *testing.T) {
 			for _, ctx := range tt.updates {
 				wIdx := int(utils.HashUint32(p.prefixToIP(tt.prefix)) % uint32(len(p.workers)))
 				if e, ok := p.workers[wIdx].classifier.ClassifyEvent(tt.prefix, ctx); ok {
-					p.onEvent(0, 0, "US", e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
+					p.onEvent(0, 0, "US", "New York", e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
 				}
 			}
 

@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/biter777/countries"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
@@ -137,6 +138,14 @@ type CriticalEvent struct {
 	VictimASN uint32
 	Locations string
 	Color     color.RGBA
+
+	// Pre-rendered layout values
+	CachedTypeLabel   string
+	CachedTypeWidth   float64
+	CachedFirstLine   string
+	CachedLeakerStr   string
+	CachedVictimStr   string
+	CachedLocationStr string
 }
 
 type Engine struct {
@@ -300,6 +309,7 @@ type Engine struct {
 type bgpEvent struct {
 	lat, lng           float64
 	cc                 string
+	city               string
 	eventType          EventType
 	classificationType ClassificationType
 	prefix             string
@@ -330,6 +340,11 @@ type PrefixCount struct {
 	RateStr  string
 	Color    color.RGBA
 	Priority int
+
+	// Pre-calculated widths
+	RateWidth  float64
+	ASNWidth   float64
+	CountWidth float64
 }
 
 type ASNImpact struct {
@@ -546,9 +561,9 @@ func (e *Engine) InitGeoOnly(readOnly bool) error {
 	return nil
 }
 
-func (e *Engine) GetIPCoords(ip uint32) (lat, lng float64, countryCode string, resType geoservice.ResolutionType) {
+func (e *Engine) GetIPCoords(ip uint32) (lat, lng float64, countryCode, city string, resType geoservice.ResolutionType) {
 	if e.geo == nil {
-		return 0, 0, "", geoservice.ResUnknown
+		return 0, 0, "", "", geoservice.ResUnknown
 	}
 	return e.geo.GetIPCoords(ip)
 }
@@ -657,7 +672,7 @@ func (e *Engine) renderHistoricalData() {
 			return nil
 		}
 		ip := binary.BigEndian.Uint32(k[:4])
-		lat, lng, _, _ := e.geo.GetIPCoords(ip)
+		lat, lng, _, _, _ := e.geo.GetIPCoords(ip)
 		if lat != 0 || lng != 0 {
 			x, y := e.geo.Project(lat, lng)
 			ix, iy := int(x), int(y)
@@ -1252,13 +1267,13 @@ func (e *Engine) runEventWorker() {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
+func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
 	var ld *LeakDetail
 	if len(leakDetail) > 0 {
 		ld = leakDetail[0]
 	}
 	select {
-	case e.eventCh <- &bgpEvent{lat, lng, cc, eventType, classificationType, prefix, asn, ld}:
+	case e.eventCh <- &bgpEvent{lat, lng, cc, city, eventType, classificationType, prefix, asn, ld}:
 	default:
 		// Drop event if engine is too busy
 	}
@@ -1334,25 +1349,84 @@ func (e *Engine) processEvent(ev *bgpEvent) {
 			}
 		}
 
+		updateCacheStrs := func(ce *CriticalEvent) {
+			ce.CachedTypeLabel = "[" + strings.ToUpper(ce.Anom) + "]"
+			ce.CachedTypeWidth, _ = text.Measure(ce.CachedTypeLabel, e.subMonoFace, 0)
+
+			ce.CachedFirstLine = ce.ASNStr
+			if ce.Anom == nameRouteLeak && ce.LeakType != LeakUnknown {
+				ce.CachedFirstLine = ce.LeakType.String()
+
+				leakerStr := fmt.Sprintf("  Leaker: AS%d", ce.LeakerASN)
+				if e.asnMapping != nil {
+					if n := e.asnMapping.GetName(ce.LeakerASN); n != "" {
+						leakerStr += " - " + n
+					}
+				}
+				ce.CachedLeakerStr = leakerStr
+
+				victimStr := "  Victim: Unknown"
+				if ce.VictimASN != 0 {
+					victimStr = fmt.Sprintf("  Victim: AS%d", ce.VictimASN)
+					if e.asnMapping != nil {
+						if n := e.asnMapping.GetName(ce.VictimASN); n != "" {
+							victimStr += " - " + n
+						}
+					}
+				}
+				ce.CachedVictimStr = victimStr
+			} else if ce.Anom == nameHardOutage && ce.Locations != "" {
+				locs := strings.Split(ce.Locations, ", ")
+				displayLocs := make([]string, 0, len(locs))
+				for _, loc := range locs {
+					countryName := countries.ByName(loc).String()
+					if countryName == "Unknown" {
+						countryName = loc
+					}
+					displayLocs = append(displayLocs, countryName)
+				}
+				locStr := "  Location: " + strings.Join(displayLocs, ", ")
+				if len(locStr) > 40 {
+					locStr = locStr[:37] + "..."
+				}
+				ce.CachedLocationStr = locStr
+			}
+		}
+
+		// Helper to format the incoming location
+		formatLoc := func(cc, city string) string {
+			if city != "" && cc != "" {
+				return fmt.Sprintf("%s, %s", city, cc)
+			}
+			return cc
+		}
+		newLoc := formatLoc(ev.cc, ev.city)
+
 		if lastTime, ok := e.criticalCooldown[ev.prefix]; ok && now.Sub(lastTime) < 10*time.Second {
 			// Prefix is on cooldown, but we might still want to update locations for the most recent entry if it matches the ASN/Org
 			if len(e.CriticalStream) > 0 {
 				prev := e.CriticalStream[0]
 				sameOrg := (orgID != "" && orgID == prev.OrgID) || asnStr == prev.ASNStr
 				if prev.Anom == name && sameOrg {
+					needsUpdate := false
 					// Update locations
-					if !strings.Contains(prev.Locations, ev.cc) {
+					if !strings.Contains(prev.Locations, newLoc) {
 						if prev.Locations == "" {
-							prev.Locations = ev.cc
+							prev.Locations = newLoc
 						} else {
-							prev.Locations += ", " + ev.cc
+							prev.Locations += " | " + newLoc
 						}
+						needsUpdate = true
 					}
 					// RETROACTIVE UPDATE: If we now have leak details that the previous entry lacked, update it
 					if prev.LeakType == LeakUnknown && ev.leakDetail != nil {
 						prev.LeakType = ev.leakDetail.Type
 						prev.LeakerASN = ev.leakDetail.LeakerASN
 						prev.VictimASN = ev.leakDetail.VictimASN
+						needsUpdate = true
+					}
+					if needsUpdate {
+						updateCacheStrs(prev)
 					}
 				}
 			}
@@ -1364,12 +1438,13 @@ func (e *Engine) processEvent(ev *bgpEvent) {
 				prev := e.CriticalStream[0]
 				sameOrg := (orgID != "" && orgID == prev.OrgID) || asnStr == prev.ASNStr
 				if prev.Anom == name && sameOrg {
-					if !strings.Contains(prev.Locations, ev.cc) {
+					if !strings.Contains(prev.Locations, newLoc) {
 						if prev.Locations == "" {
-							prev.Locations = ev.cc
+							prev.Locations = newLoc
 						} else {
-							prev.Locations += ", " + ev.cc
+							prev.Locations += " | " + newLoc
 						}
+						updateCacheStrs(prev)
 					}
 					shouldAdd = false
 				}
@@ -1382,13 +1457,14 @@ func (e *Engine) processEvent(ev *bgpEvent) {
 					ASNStr:    asnStr,
 					OrgID:     orgID,
 					Color:     c,
-					Locations: ev.cc,
+					Locations: newLoc,
 				}
 				if ev.leakDetail != nil {
 					ce.LeakType = ev.leakDetail.Type
 					ce.LeakerASN = ev.leakDetail.LeakerASN
 					ce.VictimASN = ev.leakDetail.VictimASN
 				}
+				updateCacheStrs(ce)
 				// Prepend to stream
 				e.CriticalStream = append([]*CriticalEvent{ce}, e.CriticalStream...)
 				// Limit size

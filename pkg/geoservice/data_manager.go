@@ -311,7 +311,7 @@ func (dm *DataManager) handleRIRRange(start, end uint32, cc string, priority int
 	}
 
 	for _, testIP := range ipsToTry {
-		lat, lng, _, _ = dm.geo.GetIPCoords(testIP)
+		lat, lng, _, _, _ = dm.geo.GetIPCoords(testIP)
 		if lat != 0 || lng != 0 {
 			// We found something via our hints or other sources
 			break

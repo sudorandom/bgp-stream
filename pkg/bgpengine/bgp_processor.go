@@ -17,8 +17,8 @@ import (
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
-type BGPEventCallback func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail)
-type IPCoordsProvider func(ip uint32) (float64, float64, string, geoservice.ResolutionType)
+type BGPEventCallback func(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail)
+type IPCoordsProvider func(ip uint32) (float64, float64, string, string, geoservice.ResolutionType)
 type PrefixToIPConverter func(p string) uint32
 type TimeProvider func() time.Time
 
@@ -123,8 +123,8 @@ func (p *BGPProcessor) runWorker(w *processorWorker) {
 			}
 			events := p.handleRISMessage(w, data)
 			for _, e := range events {
-				if lat, lng, cc, _ := p.geo(e.ip); cc != "" {
-					p.onEvent(lat, lng, cc, e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
+				if lat, lng, cc, city, _ := p.geo(e.ip); cc != "" {
+					p.onEvent(lat, lng, cc, city, e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
 				}
 			}
 		case <-ticker.C:
@@ -137,8 +137,8 @@ func (p *BGPProcessor) processWorkerWithdrawals(w *processorWorker) {
 	now := p.timeProvider()
 	for ip, entry := range w.pendingWithdrawals {
 		if now.After(entry.Time) {
-			if lat, lng, cc, _ := p.geo(ip); cc != "" {
-				p.onEvent(lat, lng, cc, EventWithdrawal, ClassificationNone, entry.Prefix, 0, nil)
+			if lat, lng, cc, city, _ := p.geo(ip); cc != "" {
+				p.onEvent(lat, lng, cc, city, EventWithdrawal, ClassificationNone, entry.Prefix, 0, nil)
 				w.recentlySeen.Add(ip, struct {
 					Time time.Time
 					Type EventType

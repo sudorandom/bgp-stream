@@ -57,6 +57,47 @@ func TestClassifier_HasRouteLeak(t *testing.T) {
 	}
 }
 
+func TestClassifier_SiblingRouteLeak(t *testing.T) {
+	m := utils.NewASNMapping()
+
+	// Create scenario where endpoints are siblings but have different ASNs
+	// Example: SPRINT (1239) and SPRINT-B (1240)
+	utils.SetASNName(m, 174, "COGENT")
+	utils.SetASNName(m, 100, "NON-TIER-1")
+	utils.SetASNName(m, 1239, "SPRINT-A")
+	utils.SetASNName(m, 1240, "SPRINT-B")
+
+	utils.SetASNOrgID(m, 174, "ORG-COGENT")
+	utils.SetASNOrgID(m, 100, "ORG-STUB")
+	utils.SetASNOrgID(m, 1239, "ORG-SPRINT")
+	utils.SetASNOrgID(m, 1240, "ORG-SPRINT") // Sibling via OrgID
+
+	c := NewClassifier(nil, nil, m, nil, nil, nil, time.Now)
+
+	// Test 1: Actual Leak between different Orgs
+	ctx1 := &MessageContext{PathStr: "[174 100 1239]"}
+	if _, ok := c.hasRouteLeak(ctx1); !ok {
+		t.Errorf("Expected route leak for [174 100 1239] but got none")
+	}
+
+	// Test 2: Sibling endpoints should NOT be a leak (Traffic Engineering)
+	ctx2 := &MessageContext{PathStr: "[1239 100 1240]"}
+	if _, ok := c.hasRouteLeak(ctx2); ok {
+		t.Errorf("Expected NO route leak for sibling endpoints [1239 100 1240], but one was detected")
+	}
+
+	// Test 3: Sibling via Name Fallback (Hyphen split test)
+	utils.SetASNName(m, 2914, "NTT-AMERICA")
+	utils.SetASNName(m, 2915, "NTT-EUROPE")
+	utils.SetASNOrgID(m, 2914, "ORG-NTT-AM") // Different OrgIDs to test fallback
+	utils.SetASNOrgID(m, 2915, "ORG-NTT-EU")
+
+	ctx3 := &MessageContext{PathStr: "[2914 100 2915]"}
+	if _, ok := c.hasRouteLeak(ctx3); ok {
+		t.Errorf("Expected NO route leak for sibling endpoints (via Name Fallback) [2914 100 2915], but one was detected")
+	}
+}
+
 func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
 	now := time.Now()

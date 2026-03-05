@@ -3,6 +3,7 @@ package utils
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"log"
 	"strconv"
@@ -197,7 +198,13 @@ func (m *ASNMapping) loadCAIDA() error {
 		}
 	}()
 
-	scanner := bufio.NewScanner(r)
+	gr, err := gzip.NewReader(r)
+	if err != nil {
+		return err
+	}
+	defer gr.Close()
+
+	scanner := bufio.NewScanner(gr)
 	for scanner.Scan() {
 		var entry struct {
 			Type  string `json:"type"`

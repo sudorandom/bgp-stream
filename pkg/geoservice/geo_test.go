@@ -40,7 +40,7 @@ func TestGetIPCoords(t *testing.T) {
 		},
 	}
 
-	lat, lng, cc, resType := g.GetIPCoords(0x08080808) // 8.8.8.8
+	lat, lng, cc, _, resType := g.GetIPCoords(0x08080808) // 8.8.8.8
 	if lat == 0 || lng == 0 || cc != "US" {
 		t.Errorf("GetIPCoords(8.8.8.8) = (%f, %f, %s, %s); want SF coordinates and US", lat, lng, cc, resType)
 	}

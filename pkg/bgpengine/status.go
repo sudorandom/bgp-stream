@@ -287,22 +287,15 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 			e.textOp.ColorScale.Reset()
 			cr, cg, cb := float32(ce.Color.R)/255.0, float32(ce.Color.G)/255.0, float32(ce.Color.B)/255.0
 			e.textOp.ColorScale.Scale(cr, cg, cb, 0.9)
-			typeLabel := "[" + strings.ToUpper(ce.Anom) + "]"
-			text.Draw(e.streamBuffer, typeLabel, e.subMonoFace, e.textOp)
-
-			typeW, _ := text.Measure(typeLabel, e.subMonoFace, 0)
+			text.Draw(e.streamBuffer, ce.CachedTypeLabel, e.subMonoFace, e.textOp)
 
 			// Draw ASN (or Leak Type if it's a route leak)
 			e.textOp.GeoM.Reset()
-			e.textOp.GeoM.Translate(localX+typeW+10, currentY)
+			e.textOp.GeoM.Translate(localX+ce.CachedTypeWidth+10, currentY)
 			e.textOp.ColorScale.Reset()
 			e.textOp.ColorScale.Scale(1, 1, 1, 0.8)
 
-			firstLineDetail := ce.ASNStr
-			if ce.Anom == nameRouteLeak && ce.LeakType != LeakUnknown {
-				firstLineDetail = ce.LeakType.String()
-			}
-			text.Draw(e.streamBuffer, firstLineDetail, e.subMonoFace, e.textOp)
+			text.Draw(e.streamBuffer, ce.CachedFirstLine, e.subMonoFace, e.textOp)
 
 			currentY += fontSize * 1.1
 
@@ -315,30 +308,26 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 				e.textOp.ColorScale.Scale(1, 0.8, 0, 0.7) // Golden yellow
 
 				// Leaker
-				leakerStr := fmt.Sprintf("  Leaker: AS%d", ce.LeakerASN)
-				if e.asnMapping != nil {
-					if name := e.asnMapping.GetName(ce.LeakerASN); name != "" {
-						leakerStr += " - " + name
-					}
-				}
 				e.textOp.GeoM.Reset()
 				e.textOp.GeoM.Translate(localX+5, currentY)
-				text.Draw(e.streamBuffer, leakerStr, e.subMonoFace, e.textOp)
+				text.Draw(e.streamBuffer, ce.CachedLeakerStr, e.subMonoFace, e.textOp)
 				currentY += fontSize * 1.0
 
 				// Victim
-				victimStr := "  Victim: Unknown"
-				if ce.VictimASN != 0 {
-					victimStr = fmt.Sprintf("  Victim: AS%d", ce.VictimASN)
-					if e.asnMapping != nil {
-						if name := e.asnMapping.GetName(ce.VictimASN); name != "" {
-							victimStr += " - " + name
-						}
-					}
-				}
 				e.textOp.GeoM.Reset()
 				e.textOp.GeoM.Translate(localX+5, currentY)
-				text.Draw(e.streamBuffer, victimStr, e.subMonoFace, e.textOp)
+				text.Draw(e.streamBuffer, ce.CachedVictimStr, e.subMonoFace, e.textOp)
+				currentY += fontSize * 1.0
+			} else if ce.Anom == nameHardOutage && ce.CachedLocationStr != "" {
+				if currentY+fontSize > boxH {
+					break
+				}
+				e.textOp.ColorScale.Reset()
+				e.textOp.ColorScale.Scale(1, 0.8, 0, 0.7) // Golden yellow
+
+				e.textOp.GeoM.Reset()
+				e.textOp.GeoM.Translate(localX+5, currentY)
+				text.Draw(e.streamBuffer, ce.CachedLocationStr, e.subMonoFace, e.textOp)
 				currentY += fontSize * 1.0
 			}
 
@@ -794,23 +783,17 @@ func (e *Engine) StartMetricsLoop() {
 
 			// Rotate prefix impact history and clear for reuse
 			first := e.prefixImpactHistory[0]
-			for k := range first {
-				delete(first, k)
-			}
+			clear(first)
 			e.prefixImpactHistory = append(e.prefixImpactHistory[1:], first)
 
 			// Clear anomalies map for reuse
-			for et, prefixes := range e.currentAnomalies {
-				for p := range prefixes {
-					delete(prefixes, p)
-				}
-				delete(e.currentAnomalies, et)
+			for _, prefixes := range e.currentAnomalies {
+				clear(prefixes)
 			}
+			clear(e.currentAnomalies)
 
 			// Clear country activity map
-			for cc := range e.countryActivity {
-				delete(e.countryActivity, cc)
-			}
+			clear(e.countryActivity)
 		}
 	}
 
@@ -1008,9 +991,7 @@ func getMaskLen(prefix string) int {
 
 func (e *Engine) gatherActiveImpacts(uiInterval float64) []*VisualImpact {
 	// Clear reusable map
-	for k := range e.impactMap {
-		delete(e.impactMap, k)
-	}
+	clear(e.impactMap)
 
 	for et, prefixes := range e.currentAnomalies {
 		_, name := e.getClassificationVisuals(et)
@@ -1054,15 +1035,11 @@ func (e *Engine) activateTopImpacts(allImpact []*VisualImpact) {
 
 func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 	// Clear reusable structures
-	for k := range e.countMap {
-		delete(e.countMap, k)
+	clear(e.countMap)
+	for _, m := range e.asnsPerClass {
+		clear(m)
 	}
-	for k, m := range e.asnsPerClass {
-		for i := range m {
-			delete(m, i)
-		}
-		delete(e.asnsPerClass, k)
-	}
+	clear(e.asnsPerClass)
 
 	for _, vi := range allImpact {
 		if vi.ClassificationName == "" {
@@ -1101,6 +1078,12 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 		pc.ASNStr = strconv.Itoa(pc.ASNCount)
 		pc.CountStr = strconv.Itoa(pc.Count)
 		pc.RateStr = fmt.Sprintf("%.0f", pc.Rate)
+
+		// Pre-measure widths for rendering
+		pc.RateWidth, _ = text.Measure(pc.RateStr, e.subMonoFace, 0)
+		pc.ASNWidth, _ = text.Measure(pc.ASNStr, e.subMonoFace, 0)
+		pc.CountWidth, _ = text.Measure(pc.CountStr, e.subMonoFace, 0)
+
 		e.prefixCounts = append(e.prefixCounts, *pc)
 	}
 
@@ -1117,9 +1100,7 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 
 func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 	// Clear reusable structures
-	for k := range e.asnGroups {
-		delete(e.asnGroups, k)
-	}
+	clear(e.asnGroups)
 
 	for _, vi := range allImpact {
 		prio := e.GetPriority(vi.ClassificationName)
