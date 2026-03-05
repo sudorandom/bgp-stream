@@ -3,7 +3,9 @@ package bgpengine
 import (
 	"encoding/binary"
 	"encoding/json"
+	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -68,10 +70,10 @@ func TestHijackDetection(t *testing.T) {
 			prefix: "1.1.1.0/24",
 			updates: []*MessageContext{
 				{Peer: "p1", Host: "rrc00", OriginASN: 666, Now: now},
-				{Peer: "p2", Host: "rrc00", OriginASN: 666, Now: now.Add(time.Second)},
-				{Peer: "p3", Host: "rrc01", OriginASN: 666, Now: now.Add(2 * time.Second)},
-				{Peer: "p4", Host: "rrc01", OriginASN: 666, Now: now.Add(3 * time.Second)},
-				{Peer: "p5", Host: "rrc02", OriginASN: 666, Now: now.Add(4 * time.Second)},
+				{Peer: "p2", Host: "rrc01", OriginASN: 666, Now: now.Add(time.Second)},
+				{Peer: "p3", Host: "rrc02", OriginASN: 666, Now: now.Add(2 * time.Second)},
+				{Peer: "p4", Host: "rrc03", OriginASN: 666, Now: now.Add(3 * time.Second)},
+				{Peer: "p5", Host: "rrc04", OriginASN: 666, Now: now.Add(4 * time.Second)},
 			},
 			expectAnom: ClassificationRouteLeak,
 			setup: func(p *BGPProcessor) {
@@ -112,7 +114,8 @@ func TestHijackDetection(t *testing.T) {
 			setup: func(p *BGPProcessor) {
 				asnBytes := make([]byte, 4)
 				binary.BigEndian.PutUint32(asnBytes, 666)
-				_ = p.seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
+				_, ipNet, _ := net.ParseCIDR("1.1.1.0/24")
+				_ = p.seenDB.Insert(ipNet, asnBytes)
 			},
 		},
 		{
@@ -155,7 +158,6 @@ func TestHijackDetection(t *testing.T) {
 			expectAnom: ClassificationNone,
 			setup: func(p *BGPProcessor) {
 				// Use the actual Load() which now includes hardcoded China Telecom siblings
-				p.asnMapping = utils.NewASNMapping()
 				_ = p.asnMapping.Load()
 			},
 		},
@@ -164,31 +166,31 @@ func TestHijackDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var lastAnom ClassificationType
-			onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+			onEvent := func(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
 				if classificationType != ClassificationNone {
 					lastAnom = classificationType
 				}
 			}
 
-			seenDBPath := "test-seen-hijack.db"
-			_ = os.RemoveAll(seenDBPath)
+			seenDBPath := filepath.Join(t.TempDir(), "test-seen-hijack.db")
 			seenDB, _ := utils.OpenDiskTrie(seenDBPath)
 			defer func() {
 				_ = seenDB.Close()
-				_ = os.RemoveAll(seenDBPath)
 			}()
 
-			p := NewBGPProcessor(func(uint32) (float64, float64, string, geoservice.ResolutionType) {
-				return 0, 0, "US", geoservice.ResGeoIP
-			}, seenDB, nil, nil, rpki, func(string) uint32 { return 0 }, time.Now, onEvent)
+			asnMapping := utils.NewASNMapping()
+			p := NewBGPProcessor(func(uint32) (float64, float64, string, string, geoservice.ResolutionType) {
+				return 0, 0, "US", "New York", geoservice.ResGeoIP
+			}, seenDB, nil, asnMapping, rpki, func(string) uint32 { return 0 }, time.Now, onEvent)
 
 			if tt.setup != nil {
 				tt.setup(p)
 			}
 
 			for _, ctx := range tt.updates {
-				if e, ok := p.classifier.classifyEvent(tt.prefix, ctx); ok {
-					p.onEvent(0, 0, "US", e.eventType, e.classificationType, e.prefix, e.asn)
+				wIdx := int(utils.HashUint32(p.prefixToIP(tt.prefix)) % uint32(len(p.workers)))
+				if e, ok := p.workers[wIdx].classifier.ClassifyEvent(tt.prefix, ctx); ok {
+					p.onEvent(0, 0, "US", "New York", e.EventType, e.ClassificationType, e.Prefix, e.ASN, e.LeakDetail)
 				}
 			}
 

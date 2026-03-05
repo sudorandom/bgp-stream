@@ -30,6 +30,7 @@ require (
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/jezek/xgb v1.1.1 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
+	github.com/osrg/gobgp/v3 v3.37.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect

@@ -166,3 +166,28 @@ func (m *RPKIManager) Validate(prefix string, originASN uint32) (RPKIStatus, err
 	}
 	return RPKIInvalidASN, nil
 }
+
+func (m *RPKIManager) GetExpectedASN(prefix string) uint32 {
+	_, ipNet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		return 0
+	}
+
+	vals, err := m.trie.LookupAll(ipNet.IP)
+	if err != nil || len(vals) == 0 {
+		return 0
+	}
+
+	for _, val := range vals {
+		var vrps []VRP
+		if err := json.Unmarshal(val, &vrps); err != nil {
+			continue
+		}
+
+		for _, vrp := range vrps {
+			return vrp.ASN // Returns the first matching VRP's ASN
+		}
+	}
+
+	return 0
+}

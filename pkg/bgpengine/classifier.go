@@ -13,13 +13,50 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type LeakType int
+
+const (
+	LeakUnknown LeakType = iota
+	LeakHairpin
+	LeakLateral
+	LeakProviderToPeer
+	LeakPeerToProvider
+	LeakReOrigination
+)
+
+const (
+	strUnknown = "Unknown"
+)
+
+func (t LeakType) String() string {
+	switch t {
+	case LeakHairpin:
+		return "Hairpin Turn"
+	case LeakLateral:
+		return "Lateral Infection"
+	case LeakProviderToPeer:
+		return "Provider to Peer"
+	case LeakPeerToProvider:
+		return "Peer to Provider"
+	case LeakReOrigination:
+		return "Prefix Re-Origination"
+	default:
+		return strUnknown
+	}
+}
+
+type LeakDetail struct {
+	Type      LeakType
+	LeakerASN uint32
+	VictimASN uint32
+}
+
 type ClassificationType int
 
 const (
 	nameLinkFlap        = "Link Flap"
 	nameAggFlap         = "Aggregator Flap"
 	namePathOscillation = "Path Oscillation"
-	nameBabbling        = "Babbling"
 	namePathHunting     = "Path Hunting"
 	namePolicyChurn     = "Policy Churn"
 	nameNextHopFlap     = "Next-Hop Flap"
@@ -33,7 +70,6 @@ const (
 	ClassificationLinkFlap
 	ClassificationAggFlap
 	ClassificationPathLengthOscillation
-	ClassificationBabbling
 	ClassificationPathHunting
 	ClassificationPolicyChurn
 	ClassificationNextHopOscillation
@@ -50,8 +86,6 @@ func (t ClassificationType) String() string {
 		return nameAggFlap
 	case ClassificationPathLengthOscillation:
 		return namePathOscillation
-	case ClassificationBabbling:
-		return nameBabbling
 	case ClassificationPathHunting:
 		return namePathHunting
 	case ClassificationPolicyChurn:
@@ -136,9 +170,13 @@ func NewClassifier(seenDB, stateDB *utils.DiskTrie, asnMapping *utils.ASNMapping
 	}
 }
 
-func (c *Classifier) classifyEvent(prefix string, ctx *MessageContext) (pendingEvent, bool) {
+func (c *Classifier) GetPrefixState(prefix string) (*bgpproto.PrefixState, bool) {
+	return c.prefixStates.Get(prefix)
+}
+
+func (c *Classifier) ClassifyEvent(prefix string, ctx *MessageContext) (PendingEvent, bool) {
 	if strings.Contains(prefix, ":") {
-		return pendingEvent{}, false
+		return PendingEvent{}, false
 	}
 	state, ok := c.prefixStates.Get(prefix)
 	if !ok {
@@ -171,6 +209,7 @@ func (c *Classifier) classifyEvent(prefix string, ctx *MessageContext) (pendingE
 	if ctx.IsWithdrawal {
 		bucket.Withdrawals++
 	} else {
+		// We always update peer attributes for consensus tracking
 		c.updateAnnouncementStats(state, bucket, ctx)
 		if c.rpki != nil && ctx.OriginASN != 0 {
 			status, err := c.rpki.Validate(prefix, ctx.OriginASN)
@@ -195,12 +234,21 @@ func (c *Classifier) classifyEvent(prefix string, ctx *MessageContext) (pendingE
 			ClassificationType(state.ClassifiedType) != ClassificationPathHunting &&
 			ClassificationType(state.ClassifiedType) != ClassificationPathLengthOscillation {
 			// If it's a Normal anomaly, we still allow upgrade to Bad/Critical
-			return pendingEvent{
-				ip:                 c.prefixToIP(prefix),
-				prefix:             prefix,
-				asn:                ctx.OriginASN,
-				eventType:          ctx.EventType(),
-				classificationType: ClassificationType(state.ClassifiedType),
+			var ld *LeakDetail
+			if state.LeakType != 0 {
+				ld = &LeakDetail{
+					Type:      LeakType(state.LeakType),
+					LeakerASN: state.LeakerAsn,
+					VictimASN: state.VictimAsn,
+				}
+			}
+			return PendingEvent{
+				IP:                 c.prefixToIP(prefix),
+				Prefix:             prefix,
+				ASN:                ctx.OriginASN,
+				EventType:          ctx.EventType(),
+				ClassificationType: ClassificationType(state.ClassifiedType),
+				LeakDetail:         ld,
 			}, true
 		}
 	}
@@ -239,31 +287,7 @@ func (c *Classifier) updateAnnouncementStats(state *bgpproto.PrefixState, bucket
 	}
 
 	if last, ok := state.PeerLastAttrs[peer]; ok {
-		if ctx.PathStr != last.Path {
-			bucket.PathChanges++
-		}
-		if ctx.CommStr != last.Communities {
-			bucket.CommunityChanges++
-		}
-		if ctx.NextHop != last.NextHop {
-			bucket.NextHopChanges++
-		}
-		if ctx.Aggregator != last.Aggregator {
-			bucket.AggregatorChanges++
-		}
-		if ctx.Med != last.Med {
-			bucket.MedChanges++
-		}
-		if ctx.LocalPref != last.LocalPref {
-			bucket.LocalPrefChanges++
-		}
-		if int32(ctx.PathLen) != last.LastPathLen && last.LastPathLen != 0 {
-			if int32(ctx.PathLen) > last.LastPathLen {
-				bucket.PathLengthIncreases++
-			} else {
-				bucket.PathLengthDecreases++
-			}
-		}
+		c.compareAndUpdateBucketStats(bucket, last, ctx)
 	}
 
 	state.PeerLastAttrs[peer] = &bgpproto.LastAttrs{
@@ -280,7 +304,35 @@ func (c *Classifier) updateAnnouncementStats(state *bgpproto.PrefixState, bucket
 	}
 }
 
-func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixState, ctx *MessageContext) (pendingEvent, bool) {
+func (c *Classifier) compareAndUpdateBucketStats(bucket *bgpproto.StatsBucket, last *bgpproto.LastAttrs, ctx *MessageContext) {
+	if ctx.PathStr != last.Path {
+		bucket.PathChanges++
+	}
+	if ctx.CommStr != last.Communities {
+		bucket.CommunityChanges++
+	}
+	if ctx.NextHop != last.NextHop {
+		bucket.NextHopChanges++
+	}
+	if ctx.Aggregator != last.Aggregator {
+		bucket.AggregatorChanges++
+	}
+	if ctx.Med != last.Med {
+		bucket.MedChanges++
+	}
+	if ctx.LocalPref != last.LocalPref {
+		bucket.LocalPrefChanges++
+	}
+	if int32(ctx.PathLen) != last.LastPathLen && last.LastPathLen != 0 {
+		if int32(ctx.PathLen) > last.LastPathLen {
+			bucket.PathLengthIncreases++
+		} else {
+			bucket.PathLengthDecreases++
+		}
+	}
+}
+
+func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixState, ctx *MessageContext) (PendingEvent, bool) {
 	stats := c.aggregateRecentBuckets(state, ctx.Now, ctx.OriginASN)
 
 	elapsed := float64(ctx.Now.Unix() - stats.earliestTS)
@@ -293,35 +345,44 @@ func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixSt
 
 	// Ensure we have seen enough messages over a small time window to classify
 	if elapsed < 120 && stats.totalMsgs < 5 {
-		return pendingEvent{}, false
+		return PendingEvent{}, false
 	}
 
-	eventType, classified := c.findClassification(prefix, state, &stats, elapsed, ctx)
+	anomType, leakDetail, classified := c.findClassification(prefix, &stats, elapsed, ctx)
 
 	if classified {
 		if state.ClassifiedType != 0 {
-			if c.getPriority(eventType) <= c.getPriority(ClassificationType(state.ClassifiedType)) {
+			if c.getPriority(anomType) <= c.getPriority(ClassificationType(state.ClassifiedType)) {
 				// We already have a classification of equal or higher priority
 				// Just return the event for the current classification
-				return pendingEvent{
-					ip:                 c.prefixToIP(prefix),
-					prefix:             prefix,
-					asn:                ctx.OriginASN,
-					eventType:          ctx.EventType(),
-					classificationType: ClassificationType(state.ClassifiedType),
+				var ld *LeakDetail
+				if state.LeakType != 0 {
+					ld = &LeakDetail{
+						Type:      LeakType(state.LeakType),
+						LeakerASN: state.LeakerAsn,
+						VictimASN: state.VictimAsn,
+					}
+				}
+				return PendingEvent{
+					IP:                 c.prefixToIP(prefix),
+					Prefix:             prefix,
+					ASN:                ctx.OriginASN,
+					EventType:          ctx.EventType(),
+					ClassificationType: ClassificationType(state.ClassifiedType),
+					LeakDetail:         ld,
 				}, true
 			}
 		}
-		return c.recordClassification(prefix, state, eventType, ctx.Now.Unix(), ctx), true
+		return c.RecordClassification(prefix, state, anomType, ctx.Now.Unix(), ctx, leakDetail), true
 	}
-	return pendingEvent{}, false
+	return PendingEvent{}, false
 }
 
 func (c *Classifier) getPriority(t ClassificationType) int {
 	switch t {
 	case ClassificationRouteLeak, ClassificationOutage:
 		return 3 // Critical
-	case ClassificationLinkFlap, ClassificationBabbling, ClassificationNextHopOscillation, ClassificationAggFlap:
+	case ClassificationLinkFlap, ClassificationNextHopOscillation, ClassificationAggFlap:
 		return 2 // Bad
 	case ClassificationPolicyChurn, ClassificationPathLengthOscillation, ClassificationPathHunting:
 		return 1 // Normal
@@ -384,29 +445,23 @@ func (c *Classifier) aggregateRecentBuckets(state *bgpproto.PrefixState, now tim
 	return s
 }
 
-func (c *Classifier) findClassification(prefix string, state *bgpproto.PrefixState, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, bool) {
-	numPeers := float64(len(state.PeerLastAttrs))
-	if numPeers == 0 {
-		numPeers = 1
-	}
-	perPeerRate := float64(s.totalMsgs) / numPeers
-
+func (c *Classifier) findClassification(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
 	// 1. Critical
-	if et, ok := c.findCriticalAnomaly(prefix, s, elapsed, ctx); ok {
-		return et, true
+	if et, ld, ok := c.findCriticalAnomaly(prefix, s, elapsed, ctx); ok {
+		return et, ld, true
 	}
 
 	// 2. Bad
-	if et, ok := c.findBadAnomaly(s, elapsed, perPeerRate); ok {
-		return et, true
+	if et, ok := c.findBadAnomaly(s, elapsed); ok {
+		return et, nil, true
 	}
 
 	// 3. Normal / Policy
 	if et, ok := c.findNormalAnomaly(s, elapsed); ok {
-		return et, true
+		return et, nil, true
 	}
 
-	return ClassificationNone, false
+	return ClassificationNone, nil, false
 }
 
 func (c *Classifier) getHistoricalASN(prefix string) uint32 {
@@ -420,55 +475,109 @@ func (c *Classifier) getHistoricalASN(prefix string) uint32 {
 	return binary.BigEndian.Uint32(val)
 }
 
-func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, bool) {
+func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
 	if s.totalWith >= 3 && s.totalAnn == 0 && elapsed > 60 {
-		return ClassificationOutage, true
+		return ClassificationOutage, nil, true
 	}
 
 	peerCount := len(s.uniquePeers)
 	hostCount := len(s.uniqueHosts)
 
-	// 1. RPKI Validation Check (The Signal)
-	if ctx.OriginASN != 0 && utils.RPKIStatus(ctx.LastRpkiStatus) == utils.RPKIInvalidASN {
-		isDDoS := c.isDDoSProvider(ctx.OriginASN)
-
-		// Historical Origin Check (The Filter)
-		historicalASN := c.getHistoricalASN(prefix)
-		isTransition := historicalASN != 0 && historicalASN != ctx.OriginASN
-
-		if !isDDoS {
-			// HIGH SIGNAL HIJACK:
-			// - RPKI Invalid: ASN
-			// - Origin has changed from what we saw historically
-			// - Seen across 3+ peers and 2+ RIPE collectors
-			if isTransition && peerCount >= 3 && hostCount >= 2 {
-				log.Printf("[!!! HIJACK TRANSITION !!!] Prefix: %s, New Origin: AS%d, Prev Origin: AS%d, RPKI: InvalidASN, Consensus: %d peers/%d hosts",
-					prefix, ctx.OriginASN, historicalASN, peerCount, hostCount)
-				return ClassificationRouteLeak, true
-			}
-
-			// MEDIUM SIGNAL: New prefix (never seen before) that is RPKI invalid
-			// We require more evidence for these as they are often just first-time seen misconfigs
-			if historicalASN == 0 && peerCount >= 5 && hostCount >= 3 {
-				log.Printf("[!!! HIJACK NEW PREFIX !!!] Prefix: %s, Origin: AS%d, RPKI: InvalidASN, Consensus: %d peers/%d hosts",
-					prefix, ctx.OriginASN, peerCount, hostCount)
-				return ClassificationRouteLeak, true
-			}
-		}
+	// 1. Hijack Detection (RPKI Signal)
+	if anom, ld, ok := c.detectHijack(prefix, peerCount, hostCount, ctx); ok {
+		return anom, ld, true
 	}
 
-	// 2. AS Path Valley-Free Check (The Heuristic)
-	if segment, ok := c.hasRouteLeak(ctx); ok {
-		// Consensus requirement for path violations to filter out terminal edge/collector leaks.
-		// If we see a Tier-1 -> Stub -> Tier-1 path from multiple vantage points,
-		// it is highly likely to be a real traffic-impacting leak.
+	// 2. Route Leak Detection (AS Path Heuristic)
+	if anom, ld, ok := c.detectRouteLeak(prefix, peerCount, hostCount, ctx); ok {
+		return anom, ld, true
+	}
+
+	return ClassificationNone, nil, false
+}
+
+func (c *Classifier) detectHijack(prefix string, peerCount, hostCount int, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
+	if ctx.OriginASN == 0 || utils.RPKIStatus(ctx.LastRpkiStatus) != utils.RPKIInvalidASN {
+		return ClassificationNone, nil, false
+	}
+
+	if c.isDDoSProvider(ctx.OriginASN) {
+		return ClassificationNone, nil, false
+	}
+
+	// Historical Origin Check (The Filter)
+	historicalASN := c.getHistoricalASN(prefix)
+	expectedASN := historicalASN
+	if expectedASN == 0 && c.rpki != nil {
+		expectedASN = c.rpki.GetExpectedASN(prefix)
+	}
+
+	// Transition Hijack (Highest Signal)
+	isTransition := historicalASN != 0 && historicalASN != ctx.OriginASN
+	if isTransition {
+		if c.isSibling(ctx.OriginASN, historicalASN) {
+			return ClassificationNone, nil, false
+		}
+
 		if peerCount >= 3 && hostCount >= 2 {
-			c.logRouteLeak(prefix, segment)
-			return ClassificationRouteLeak, true
+			nameNew := strUnknown
+			namePrev := strUnknown
+			if c.asnMapping != nil {
+				nameNew = c.asnMapping.GetName(ctx.OriginASN)
+				namePrev = c.asnMapping.GetName(historicalASN)
+			}
+			log.Printf("[!!! HIJACK TRANSITION !!!] Prefix: %s, New Origin: AS%d (%s), Prev Origin: AS%d (%s), RPKI: InvalidASN, Consensus: %d peers/%d hosts",
+				prefix, ctx.OriginASN, nameNew, historicalASN, namePrev, peerCount, hostCount)
+			return ClassificationRouteLeak, &LeakDetail{
+				Type:      LeakReOrigination,
+				LeakerASN: ctx.OriginASN,
+				VictimASN: historicalASN,
+			}, true
 		}
 	}
 
-	return ClassificationNone, false
+	// New Prefix Hijack (RPKI Invalid but never seen before)
+	if historicalASN == 0 {
+		if expectedASN != 0 && c.isSibling(ctx.OriginASN, expectedASN) {
+			return ClassificationNone, nil, false
+		}
+
+		// Require VERY high consensus for brand new prefixes being invalid
+		if peerCount >= 15 && hostCount >= 5 {
+			nameLeaker := strUnknown
+			nameVictim := strUnknown
+			if c.asnMapping != nil {
+				nameLeaker = c.asnMapping.GetName(ctx.OriginASN)
+				if expectedASN != 0 {
+					nameVictim = c.asnMapping.GetName(expectedASN)
+				}
+			}
+			log.Printf("[!!! HIJACK NEW PREFIX !!!] Prefix: %s, Origin: AS%d (%s), RPKI: InvalidASN, Expected Origin: AS%d (%s), Consensus: %d peers/%d hosts",
+				prefix, ctx.OriginASN, nameLeaker, expectedASN, nameVictim, peerCount, hostCount)
+			return ClassificationRouteLeak, &LeakDetail{
+				Type:      LeakReOrigination,
+				LeakerASN: ctx.OriginASN,
+				VictimASN: expectedASN,
+			}, true
+		}
+	}
+
+	return ClassificationNone, nil, false
+}
+
+func (c *Classifier) detectRouteLeak(prefix string, peerCount, hostCount int, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
+	ld, ok := c.hasRouteLeak(ctx)
+	if !ok {
+		return ClassificationNone, nil, false
+	}
+
+	// Consensus requirement for path violations to filter out terminal edge/collector leaks.
+	if peerCount >= 3 && hostCount >= 2 {
+		c.logRouteLeak(prefix, ld)
+		return ClassificationRouteLeak, ld, true
+	}
+
+	return ClassificationNone, nil, false
 }
 
 func (c *Classifier) isDDoSProvider(asn uint32) bool {
@@ -492,6 +601,7 @@ func (c *Classifier) isDDoSProvider(asn uint32) bool {
 		22822:  true, // LinkedIn
 		13238:  true, // Yandex
 		2906:   true, // Netflix
+		262287: true, // Latitude.sh
 		6939:   true, // Hurricane Electric (Large Backbone)
 		174:    true, // Cogent (Large Backbone)
 		2914:   true, // NTT (Large Backbone)
@@ -505,18 +615,74 @@ func (c *Classifier) isDDoSProvider(asn uint32) bool {
 		1273:   true, // Vodafone (Large Backbone)
 		4637:   true, // Telstra (Large Backbone)
 		197730: true, // Sea-Bone (Large Backbone)
+		3223:   true, // Voxility
+		396998: true, // Path Network
+		57724:  true, // DDoS-Guard
+		197068: true, // Qrator (High Load Lab)
+		34309:  true, // Link11
+		59796:  true, // StormWall
+		8757:   true, // NSFOCUS
+		42649:  true, // Baffin Bay Networks
+		23470:  true, // reliablesite.net
 	}
 	return scrubbers[asn]
 }
 
-func (c *Classifier) hasRouteLeak(ctx *MessageContext) ([3]uint32, bool) {
+func (c *Classifier) isSibling(asn1, asn2 uint32) bool {
+	if asn1 == asn2 {
+		return true
+	}
+	if c.asnMapping == nil {
+		return false
+	}
+
+	org1 := c.asnMapping.GetOrgID(asn1)
+	org2 := c.asnMapping.GetOrgID(asn2)
+	if org1 != "" && org1 == org2 {
+		return true
+	}
+
+	name1 := c.asnMapping.GetName(asn1)
+	name2 := c.asnMapping.GetName(asn2)
+
+	// Only use heuristic if both names are reasonable length (e.g. not just "A") and both are valid
+	if name1 != strUnknown && name2 != strUnknown {
+		n1 := strings.Fields(strings.ToLower(name1))
+		n2 := strings.Fields(strings.ToLower(name2))
+
+		// If the names are exactly the same, they are siblings
+		if strings.EqualFold(name1, name2) {
+			return true
+		}
+
+		if len(n1) > 0 && len(n2) > 0 {
+			w1 := strings.TrimRight(n1[0], ",")
+			w2 := strings.TrimRight(n2[0], ",")
+
+			// Try splitting by hyphen as well
+			if strings.Contains(w1, "-") {
+				w1 = strings.Split(w1, "-")[0]
+			}
+			if strings.Contains(w2, "-") {
+				w2 = strings.Split(w2, "-")[0]
+			}
+
+			if w1 == w2 && len(w1) > 3 { // Ensure the matched word is meaningful
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Classifier) hasRouteLeak(ctx *MessageContext) (*LeakDetail, bool) {
 	if ctx.PathStr == "" {
-		return [3]uint32{}, false
+		return nil, false
 	}
 	// Basic path parser (path is stored as string "[1 2 3]")
 	fields := strings.Fields(strings.Trim(ctx.PathStr, "[]"))
 	if len(fields) < 3 {
-		return [3]uint32{}, false
+		return nil, false
 	}
 
 	rawPath := make([]uint32, 0, len(fields))
@@ -531,62 +697,84 @@ func (c *Classifier) hasRouteLeak(ctx *MessageContext) ([3]uint32, bool) {
 	// Many large providers (like Telstra AS1221 and AS4637) use multiple ASNs for internal routing.
 	// Transitioning between sibling ASNs is not a route leak.
 	if len(rawPath) < 2 {
-		return [3]uint32{}, false
+		return nil, false
 	}
 
 	path := make([]uint32, 0, len(rawPath))
 	path = append(path, rawPath[0])
-	lastOrgID := ""
-	if c.asnMapping != nil {
-		lastOrgID = c.asnMapping.GetOrgID(rawPath[0])
-	}
 
 	for i := 1; i < len(rawPath); i++ {
-		currentASN := rawPath[i]
-		currentOrgID := ""
-		if c.asnMapping != nil {
-			currentOrgID = c.asnMapping.GetOrgID(currentASN)
-		}
-
-		// Only add if it's a different ASN AND not a sibling ASN
-		if currentASN != rawPath[i-1] {
-			if currentOrgID == "" || currentOrgID != lastOrgID {
-				path = append(path, currentASN)
-				lastOrgID = currentOrgID
-			}
+		// Only add if it's NOT a sibling ASN to the last one added
+		if !c.isSibling(rawPath[i], path[len(path)-1]) {
+			path = append(path, rawPath[i])
 		}
 	}
 
 	if len(path) < 3 {
-		return [3]uint32{}, false
+		return nil, false
 	}
 
-	// 2. Valley-free violation check on collapsed path: Tier-1 -> Non-Tier-1/Non-Cloud -> Tier-1
+	// 2. Valley-free violation check on collapsed path
 	for i := 0; i < len(path)-2; i++ {
-		if c.isTier1(path[i]) && !c.isTier1(path[i+1]) && !c.isCloud(path[i+1]) && c.isTier1(path[i+2]) {
-			return [3]uint32{path[i], path[i+1], path[i+2]}, true
+		p1, p2, p3 := path[i], path[i+1], path[i+2]
+
+		if c.isSibling(p1, p3) {
+			continue
+		}
+
+		// Hairpin turn: Tier-1 -> Non-Tier-1 -> Tier-1
+		if c.isTier1(p1) && !c.isLargeNetwork(p2) && !c.isCloud(p2) && c.isTier1(p3) {
+			return &LeakDetail{
+				Type:      LeakHairpin,
+				LeakerASN: p2,
+				VictimASN: p3,
+			}, true
+		}
+
+		// lateral infection: Peer -> Stub -> Peer
+		// (Using isLargeNetwork as a proxy for "network with peering relationships")
+		// If both ends are large and middle is small, it's potentially a leak.
+		// We'll refine this by checking if they are not clouds.
+		if !c.isLargeNetwork(p2) && !c.isCloud(p2) {
+			if c.isLargeNetwork(p1) && c.isLargeNetwork(p3) {
+				return &LeakDetail{Type: LeakLateral, LeakerASN: p2, VictimASN: p3}, true
+			}
 		}
 	}
 
-	return [3]uint32{}, false
+	// 3. Provider-to-Peer / Peer-to-Provider (Heuristics)
+	// These require more complex relationship data than we have here,
+	// but we can catch some via AS-Path length increases and Tier-1 presence.
+	return nil, false
 }
 
-func (c *Classifier) logRouteLeak(prefix string, segment [3]uint32) {
-	pathStrs := make([]string, 3)
-	for i, asn := range segment {
-		name := "Unknown"
-		if c.asnMapping != nil {
-			name = c.asnMapping.GetName(asn)
+func (c *Classifier) logRouteLeak(prefix string, ld *LeakDetail) {
+	nameLeaker := strUnknown
+	nameVictim := strUnknown
+	if c.asnMapping != nil {
+		nameLeaker = c.asnMapping.GetName(ld.LeakerASN)
+		if ld.VictimASN != 0 {
+			nameVictim = c.asnMapping.GetName(ld.VictimASN)
 		}
-		pathStrs[i] = fmt.Sprintf("AS%d (%s)", asn, name)
 	}
-	log.Printf("[!!! ROUTE LEAK !!!] Prefix: %s, Path Segment: %s", prefix, strings.Join(pathStrs, " -> "))
+	log.Printf("[!!! ROUTE LEAK (%s) !!!] Prefix: %s, Leaker: AS%d (%s), Victim: AS%d (%s)",
+		ld.Type.String(), prefix, ld.LeakerASN, nameLeaker, ld.VictimASN, nameVictim)
 }
 
 func (c *Classifier) isTier1(asn uint32) bool {
 	switch asn {
 	case 209, 701, 702, 1239, 1299, 2828, 2914, 3257, 3320, 3356, 3491, 3549, 3561, 5511, 6453, 6461, 6762, 6830, 7018, 12956: // Global Tier-1s
 		return true
+	default:
+		return false
+	}
+}
+
+func (c *Classifier) isLargeNetwork(asn uint32) bool {
+	if c.isTier1(asn) {
+		return true
+	}
+	switch asn {
 	case 174, 6939, 9002, 1273, 4637, 7922, 4134, 4809, 4837, 7473, 9808: // Major Regional/National Backbones
 		return true
 	default:
@@ -603,7 +791,7 @@ func (c *Classifier) isCloud(asn uint32) bool {
 	}
 }
 
-func (c *Classifier) findBadAnomaly(s *prefixStats, elapsed, perPeerRate float64) (ClassificationType, bool) {
+func (c *Classifier) findBadAnomaly(s *prefixStats, elapsed float64) (ClassificationType, bool) {
 	isAggFlap := s.totalAgg >= 10 && float64(s.totalAgg)/elapsed > 0.05
 	isNextHopOsc := len(s.uniqueHops) > 1 && s.totalHop >= 10 && s.totalPath <= 2
 	isLinkFlap := s.totalWith >= 5 && float64(s.totalAnn)/float64(s.totalWith) < 2.0
@@ -618,10 +806,6 @@ func (c *Classifier) findBadAnomaly(s *prefixStats, elapsed, perPeerRate float64
 		return ClassificationLinkFlap, true
 	}
 
-	// Babbling is the catch-all for "Bad" high volume activity
-	if perPeerRate >= 2.0 && s.totalMsgs >= 20 && s.totalPath == 0 && s.totalComm == 0 && s.totalMed == 0 && s.totalLP == 0 && s.totalAgg == 0 && s.totalHop == 0 {
-		return ClassificationBabbling, true
-	}
 	return ClassificationNone, false
 }
 
@@ -640,22 +824,30 @@ func (c *Classifier) findNormalAnomaly(s *prefixStats, elapsed float64) (Classif
 		return ClassificationPathLengthOscillation, true
 	}
 
-	// Discovery as the catch-all for high volume activity (>= 100 messages)
+	// Discovery as the catch-all for high volume activity (>= 25 messages)
 	// that didn't match any "Bad" anomaly or specific "Normal" pattern.
-	if s.totalMsgs >= 100 {
+	if s.totalMsgs >= 25 {
 		return ClassificationDiscovery, true
 	}
 	return ClassificationNone, false
 }
 
-func (c *Classifier) recordClassification(prefix string, state *bgpproto.PrefixState, eventType ClassificationType, now int64, ctx *MessageContext) pendingEvent {
+func (c *Classifier) GetRPKIManager() *utils.RPKIManager {
+	return c.rpki
+}
+
+func (c *Classifier) GetASNMapping() *utils.ASNMapping {
+	return c.asnMapping
+}
+
+func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixState, anomType ClassificationType, now int64, ctx *MessageContext, leakDetail ...*LeakDetail) PendingEvent {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.classificationStats[eventType]++
-	if c.classificationUniquePrefixes[eventType] == nil {
-		c.classificationUniquePrefixes[eventType] = make(map[string]struct{})
+	c.classificationStats[anomType]++
+	if c.classificationUniquePrefixes[anomType] == nil {
+		c.classificationUniquePrefixes[anomType] = make(map[string]struct{})
 	}
-	c.classificationUniquePrefixes[eventType][prefix] = struct{}{}
+	c.classificationUniquePrefixes[anomType][prefix] = struct{}{}
 	c.totalClassificationEvents++
 
 	// Get an origin ASN for visualization
@@ -666,17 +858,39 @@ func (c *Classifier) recordClassification(prefix string, state *bgpproto.PrefixS
 			break
 		}
 	}
+	if originASN == 0 {
+		originASN = ctx.OriginASN
+	}
 
 	// Record that this prefix is now classified
-	state.ClassifiedType = int32(eventType)
+	state.ClassifiedType = int32(anomType)
 	state.ClassifiedTimeTs = now
 
-	return pendingEvent{
-		ip:                 c.prefixToIP(prefix),
-		prefix:             prefix,
-		asn:                originASN,
-		eventType:          ctx.EventType(),
-		classificationType: eventType,
+	var ld *LeakDetail
+	if len(leakDetail) > 0 {
+		ld = leakDetail[0]
+	}
+
+	if ld != nil {
+		state.LeakType = int32(ld.Type)
+		state.LeakerAsn = ld.LeakerASN
+		state.VictimAsn = ld.VictimASN
+	}
+
+	// Persist state if we have a stateDB
+	if c.stateDB != nil {
+		if data, err := proto.Marshal(state); err == nil {
+			_ = c.stateDB.Put(prefix, data)
+		}
+	}
+
+	return PendingEvent{
+		IP:                 c.prefixToIP(prefix),
+		Prefix:             prefix,
+		ASN:                originASN,
+		EventType:          ctx.EventType(),
+		ClassificationType: anomType,
+		LeakDetail:         ld,
 	}
 }
 

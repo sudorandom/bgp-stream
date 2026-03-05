@@ -249,11 +249,6 @@ func (s *Stats) analyze() []string {
 		results = append(results, "Path Hunting (Router is exploring alternative paths after a failure)")
 	}
 
-	// 6. Babbling
-	if msgRate > 2.0 {
-		results = append(results, "Babbling (Excessive update rate detected)")
-	}
-
 	return results
 }
 

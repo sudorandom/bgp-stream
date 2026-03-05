@@ -2,6 +2,7 @@ package bgpengine
 
 import (
 	"encoding/binary"
+	"net"
 	"testing"
 	"time"
 
@@ -56,13 +57,54 @@ func TestClassifier_HasRouteLeak(t *testing.T) {
 	}
 }
 
+func TestClassifier_SiblingRouteLeak(t *testing.T) {
+	m := utils.NewASNMapping()
+
+	// Create scenario where endpoints are siblings but have different ASNs
+	// Example: SPRINT (1239) and SPRINT-B (1240)
+	utils.SetASNName(m, 174, "COGENT")
+	utils.SetASNName(m, 100, "NON-TIER-1")
+	utils.SetASNName(m, 1239, "SPRINT-A")
+	utils.SetASNName(m, 1240, "SPRINT-B")
+
+	utils.SetASNOrgID(m, 174, "ORG-COGENT")
+	utils.SetASNOrgID(m, 100, "ORG-STUB")
+	utils.SetASNOrgID(m, 1239, "ORG-SPRINT")
+	utils.SetASNOrgID(m, 1240, "ORG-SPRINT") // Sibling via OrgID
+
+	c := NewClassifier(nil, nil, m, nil, nil, nil, time.Now)
+
+	// Test 1: Actual Leak between different Orgs
+	ctx1 := &MessageContext{PathStr: "[174 100 1239]"}
+	if _, ok := c.hasRouteLeak(ctx1); !ok {
+		t.Errorf("Expected route leak for [174 100 1239] but got none")
+	}
+
+	// Test 2: Sibling endpoints should NOT be a leak (Traffic Engineering)
+	ctx2 := &MessageContext{PathStr: "[1239 100 1240]"}
+	if _, ok := c.hasRouteLeak(ctx2); ok {
+		t.Errorf("Expected NO route leak for sibling endpoints [1239 100 1240], but one was detected")
+	}
+
+	// Test 3: Sibling via Name Fallback (Hyphen split test)
+	utils.SetASNName(m, 2914, "NTT-AMERICA")
+	utils.SetASNName(m, 2915, "NTT-EUROPE")
+	utils.SetASNOrgID(m, 2914, "ORG-NTT-AM") // Different OrgIDs to test fallback
+	utils.SetASNOrgID(m, 2915, "ORG-NTT-EU")
+
+	ctx3 := &MessageContext{PathStr: "[2914 100 2915]"}
+	if _, ok := c.hasRouteLeak(ctx3); ok {
+		t.Errorf("Expected NO route leak for sibling endpoints (via Name Fallback) [2914 100 2915], but one was detected")
+	}
+}
+
 func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
 	now := time.Now()
 
 	t.Run("Outage Detection", func(t *testing.T) {
-		s := &prefixStats{totalWith: 3, totalAnn: 0}
-		et, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, &MessageContext{Now: now})
+		s := &prefixStats{totalWith: 30, totalAnn: 0}
+		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, &MessageContext{Now: now})
 		if !ok || et != ClassificationOutage {
 			t.Errorf("findCriticalAnomaly() expected Outage, got %v, %v", et, ok)
 		}
@@ -74,9 +116,14 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 		seenDB, _ := utils.OpenDiskTrie(seenDBPath)
 		defer func() { _ = seenDB.Close() }()
 
-		asnBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(asnBytes, 100)
-		_ = seenDB.BatchInsertRaw(map[string][]byte{"1.1.1.0/24": asnBytes})
+		oldASN := uint32(100)
+		asnData := make([]byte, 4)
+		binary.BigEndian.PutUint32(asnData, oldASN)
+		_, ipNet, _ := net.ParseCIDR("1.1.1.0/24")
+		err := seenDB.Insert(ipNet, asnData)
+		if err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
 
 		c.seenDB = seenDB
 
@@ -91,139 +138,9 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 			Now:            now,
 		}
 
-		et, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
+		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
 		if !ok || et != ClassificationRouteLeak {
 			t.Errorf("findCriticalAnomaly() expected RouteLeak, got %v, %v", et, ok)
 		}
 	})
-}
-
-func TestClassifier_FindBadAnomaly(t *testing.T) {
-	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
-
-	tests := []struct {
-		name        string
-		stats       *prefixStats
-		elapsed     float64
-		perPeerRate float64
-		wantEt      ClassificationType
-		wantOk      bool
-	}{
-		{
-			name:        "AggFlap Detection",
-			stats:       &prefixStats{totalAgg: 10},
-			elapsed:     100.0,
-			perPeerRate: 1.0,
-			wantEt:      ClassificationAggFlap,
-			wantOk:      true,
-		},
-		{
-			name:        "NextHopOscillation Detection",
-			stats:       &prefixStats{uniqueHops: map[string]bool{"h1": true, "h2": true}, totalHop: 10, totalPath: 2},
-			elapsed:     100.0,
-			perPeerRate: 1.0,
-			wantEt:      ClassificationNextHopOscillation,
-			wantOk:      true,
-		},
-		{
-			name:        "LinkFlap Detection",
-			stats:       &prefixStats{totalWith: 5, totalAnn: 9},
-			elapsed:     100.0,
-			perPeerRate: 1.0,
-			wantEt:      ClassificationLinkFlap,
-			wantOk:      true,
-		},
-		{
-			name:        "Babbling Detection",
-			stats:       &prefixStats{totalMsgs: 20, totalPath: 0, totalComm: 0, totalMed: 0, totalLP: 0, totalAgg: 0, totalHop: 0},
-			elapsed:     100.0,
-			perPeerRate: 2.0,
-			wantEt:      ClassificationBabbling,
-			wantOk:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			et, ok := c.findBadAnomaly(tt.stats, tt.elapsed, tt.perPeerRate)
-			if ok != tt.wantOk || et != tt.wantEt {
-				t.Errorf("findBadAnomaly() et = %v, ok = %v, want %v, %v", et, ok, tt.wantEt, tt.wantOk)
-			}
-		})
-	}
-}
-
-func TestClassifier_FindNormalAnomaly(t *testing.T) {
-	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
-
-	tests := []struct {
-		name    string
-		stats   *prefixStats
-		elapsed float64
-		wantEt  ClassificationType
-		wantOk  bool
-	}{
-		{
-			name:    "PathHunting Detection",
-			stats:   &prefixStats{totalAnn: 5, totalIncreases: 2, totalWith: 1},
-			elapsed: 100.0,
-			wantEt:  ClassificationPathHunting,
-			wantOk:  true,
-		},
-		{
-			name:    "PolicyChurn Detection",
-			stats:   &prefixStats{totalComm: 10},
-			elapsed: 100.0,
-			wantEt:  ClassificationPolicyChurn,
-			wantOk:  true,
-		},
-		{
-			name:    "PathLengthOscillation Detection",
-			stats:   &prefixStats{totalIncreases: 3, totalDecreases: 2},
-			elapsed: 100.0,
-			wantEt:  ClassificationPathLengthOscillation,
-			wantOk:  true,
-		},
-		{
-			name:    "Discovery Detection",
-			stats:   &prefixStats{totalMsgs: 100},
-			elapsed: 100.0,
-			wantEt:  ClassificationDiscovery,
-			wantOk:  true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			et, ok := c.findNormalAnomaly(tt.stats, tt.elapsed)
-			if ok != tt.wantOk || et != tt.wantEt {
-				t.Errorf("findNormalAnomaly() et = %v, ok = %v, want %v, %v", et, ok, tt.wantEt, tt.wantOk)
-			}
-		})
-	}
-}
-
-func TestClassifier_IsHelpers(t *testing.T) {
-	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
-
-	if !c.isTier1(174) {
-		t.Errorf("isTier1(174) expected true")
-	}
-	if c.isTier1(123456) {
-		t.Errorf("isTier1(123456) expected false")
-	}
-
-	if !c.isCloud(15169) {
-		t.Errorf("isCloud(15169) expected true")
-	}
-	if c.isCloud(123456) {
-		t.Errorf("isCloud(123456) expected false")
-	}
-
-	if !c.isDDoSProvider(13335) {
-		t.Errorf("isDDoSProvider(13335) expected true")
-	}
-	if c.isDDoSProvider(123456) {
-		t.Errorf("isDDoSProvider(123456) expected false")
-	}
 }

@@ -332,26 +332,27 @@ const (
 type cacheEntry struct {
 	Lat, Lng float64
 	CC       string
+	City     string
 	ResType  ResolutionType
 }
 
-func (g *GeoService) GetIPCoords(ip uint32) (lat, lng float64, countryCode string, resType ResolutionType) {
+func (g *GeoService) GetIPCoords(ip uint32) (lat, lng float64, countryCode, city string, resType ResolutionType) {
 	g.cacheMu.Lock()
 	if c, ok := g.prefixToCityCache[ip]; ok {
 		g.cacheMu.Unlock()
 		g.metrics.CacheHits.Add(1)
 		g.incrementSourceMetric(c.ResType)
-		return c.Lat, c.Lng, c.CC, c.ResType
+		return c.Lat, c.Lng, c.CC, c.City, c.ResType
 	}
 	g.cacheMu.Unlock()
 
-	lat, lng, countryCode, resType = g.resolveIP(ip)
+	lat, lng, countryCode, city, resType = g.resolveIP(ip)
 	g.incrementSourceMetric(resType)
 
 	// Always cache, even if 0,0, to prevent expensive re-resolution of unknown IPs
-	g.updateCityCache(ip, lat, lng, countryCode, resType)
+	g.updateCityCache(ip, lat, lng, countryCode, city, resType)
 
-	return lat, lng, countryCode, resType
+	return lat, lng, countryCode, city, resType
 }
 
 func (g *GeoService) incrementSourceMetric(resType ResolutionType) {
@@ -375,94 +376,105 @@ func (g *GeoService) incrementSourceMetric(resType ResolutionType) {
 	}
 }
 
-func (g *GeoService) resolveIP(ip uint32) (lat, lng float64, countryCode string, resType ResolutionType) {
+func (g *GeoService) resolveIP(ip uint32) (lat, lng float64, countryCode, city string, resType ResolutionType) {
+	// Metadata holders for fallbacks
+	var bestCC, bestCity string
+
+	updateMetadata := func(cc, cty string) {
+		if cc != "" && bestCC == "" {
+			bestCC = cc
+		}
+		if cty != "" && bestCity == "" {
+			bestCity = cty
+		}
+	}
+
 	// Stage 0: Custom Hints (Explicit overrides)
-	if lat, lng, cc, ok := g.resolveFromHints(g.customHints, ip); ok {
-		return lat, lng, cc, ResCustom
+	if lat, lng, cc, cty, ok := g.resolveFromHints(g.customHints, ip); ok {
+		return lat, lng, cc, cty, ResCustom
+	} else {
+		updateMetadata(cc, cty)
 	}
 
 	// Stage 1: MMDB Hints (Pre-processed MMDB files)
-	if lat, lng, cc, ok := g.resolveFromHints(g.mmdbHints, ip); ok {
-		return lat, lng, cc, ResMMDB
+	if lat, lng, cc, cty, ok := g.resolveFromHints(g.mmdbHints, ip); ok {
+		return lat, lng, cc, cty, ResMMDB
+	} else {
+		updateMetadata(cc, cty)
 	}
 
 	// Stage 2: Direct MMDB (Runtime loaded files)
-	if lat, lng, cc, _, ok := g.resolveFromMMDBs(ip); ok {
-		return lat, lng, cc, ResGeoIP
+	if lat, lng, cc, cty, ok := g.resolveFromMMDBs(ip); ok {
+		return lat, lng, cc, cty, ResGeoIP
+	} else {
+		updateMetadata(cc, cty)
 	}
 
 	// Stage 3: Cloud Trie (Highest priority, very specific)
-	if lat, lng, cc, ok := g.resolveFromCloudTrie(ip); ok {
-		return lat, lng, cc, ResCloud
+	if lat, lng, cc, cty, ok := g.resolveFromCloudTrie(ip); ok {
+		return lat, lng, cc, cty, ResCloud
+	} else {
+		updateMetadata(cc, cty)
 	}
 
-	// Define metadata holders for fallbacks
-	var bestCC string
-
 	// Stage 4: PeeringDB Hints (Infrastructure)
-	if lat, lng, cc, ok := g.resolveFromHints(g.peeringHints, ip); ok {
-		return lat, lng, cc, ResPeering
-	} else if cc != "" {
-		bestCC = cc
+	if lat, lng, cc, cty, ok := g.resolveFromHints(g.peeringHints, ip); ok {
+		return lat, lng, cc, cty, ResPeering
+	} else {
+		updateMetadata(cc, cty)
 	}
 
 	// Stage 5: RIPE WHOIS hints (Background loaded)
-	if lat, lng, cc, ok := g.resolveFromHints(g.ripeHints, ip); ok {
-		return lat, lng, cc, ResWHOIS
-	} else if cc != "" {
-		if bestCC == "" {
-			bestCC = cc
-		}
+	if lat, lng, cc, cty, ok := g.resolveFromHints(g.ripeHints, ip); ok {
+		return lat, lng, cc, cty, ResWHOIS
+	} else {
+		updateMetadata(cc, cty)
 	}
 
 	// Stage 6: RIR-indexed data
-	if lat, lng, cc, _, ok := g.resolveFromRIRInternal(ip); ok {
-		return lat, lng, cc, ResRIR
-	} else if cc != "" {
-		if bestCC == "" {
-			bestCC = cc
-		}
+	if lat, lng, cc, cty, ok := g.resolveFromRIRInternal(ip); ok {
+		return lat, lng, cc, cty, ResRIR
+	} else {
+		updateMetadata(cc, cty)
 	}
 
 	// Stage 7: RIR-indexed hub data (Country only)
-	if cc, city, ok := g.resolveFromHubsInternal(ip); ok {
-		if city != "" && cc != "" {
-			if l, ln, _ := g.ResolveCityToCoords(city, cc); l != 0 || ln != 0 {
-				return l, ln, cc, ResHubs
+	if cc, cty, ok := g.resolveFromHubsInternal(ip); ok {
+		if cty != "" && cc != "" {
+			if l, ln, _ := g.ResolveCityToCoords(cty, cc); l != 0 || ln != 0 {
+				return l, ln, cc, cty, ResHubs
 			}
 		}
-		if bestCC == "" {
-			bestCC = cc
-		}
+		updateMetadata(cc, cty)
 	}
 
-	return g.resolveFinalFallback(ip, bestCC)
+	lat2, lng2, cc2, city2, resT2 := g.resolveFinalFallback(ip, bestCC, bestCity)
+	return lat2, lng2, cc2, city2, resT2
 }
 
-func (g *GeoService) resolveFinalFallback(ip uint32, bestCC string) (lat, lng float64, countryCode string, resType ResolutionType) {
+func (g *GeoService) resolveFinalFallback(ip uint32, bestCC, bestCity string) (lat, lng float64, countryCode, city string, resType ResolutionType) {
 	if bestCC != "" {
-		l, ln, ccName := g.resolveFromCountryHubs(ip, bestCC)
+		l, ln, ccName, cityName := g.resolveFromCountryHubs(ip, bestCC)
 		if l != 0 || ln != 0 {
-			return l, ln, ccName, ResHubs
+			if cityName == "" {
+				cityName = bestCity
+			}
+			return l, ln, ccName, cityName, ResHubs
 		}
 
 		// Absolute final fallback: Country center
 		ccNorm := strings.ToUpper(bestCC)
 		g.dataMu.RLock()
 		coords, ok := g.countryCoords[ccNorm]
-		countryName := bestCC
-		if name, okName := g.isoToCountry[ccNorm]; okName {
-			countryName = name
-		}
 		g.dataMu.RUnlock()
 
 		if ok {
-			return float64(coords[0]), float64(coords[1]), countryName, ResHubs
+			return float64(coords[0]), float64(coords[1]), bestCC, bestCity, ResUnknown
 		}
-		return 0, 0, bestCC, ResUnknown
+		return 0, 0, bestCC, bestCity, ResUnknown
 	}
 
-	return 0, 0, "", ResUnknown
+	return 0, 0, "", "", ResUnknown
 }
 
 func (g *GeoService) resolveFromMMDBs(ip uint32) (lat, lng float64, cc, city string, ok bool) {
@@ -599,21 +611,22 @@ func (g *GeoService) ExtractCoords(record map[string]interface{}) (lat, lng floa
 	return 0, 0, false
 }
 
-func (g *GeoService) resolveFromHints(trie *utils.DiskTrie, ip uint32) (lat, lng float64, cc string, ok bool) {
+func (g *GeoService) resolveFromHints(trie *utils.DiskTrie, ip uint32) (lat, lng float64, cc, city string, ok bool) {
 	h, ok := g.lookupHint(trie, ip)
 	if !ok {
-		return 0, 0, "", false
+		return 0, 0, "", "", false
 	}
 	cc = g.SanitizeCC(h.CC)
+	city = h.City
 	if h.Lat != 0 || h.Lng != 0 {
-		return float64(h.Lat), float64(h.Lng), cc, true
+		return float64(h.Lat), float64(h.Lng), cc, city, true
 	}
 	if h.City != "" && cc != "" {
 		if l, ln, _ := g.ResolveCityToCoords(h.City, cc); l != 0 || ln != 0 {
-			return l, ln, cc, true
+			return l, ln, cc, city, true
 		}
 	}
-	return 0, 0, cc, false
+	return 0, 0, cc, city, false
 }
 
 func (g *GeoService) resolveFromRIRInternal(ip uint32) (lat, lng float64, cc, city string, ok bool) {
@@ -687,13 +700,13 @@ func (g *GeoService) AsFloat(v interface{}) (float64, bool) {
 	return 0, false
 }
 
-func (g *GeoService) resolveFromCloudTrie(ip uint32) (lat, lng float64, cc string, ok bool) {
+func (g *GeoService) resolveFromCloudTrie(ip uint32) (lat, lng float64, cc, city string, ok bool) {
 	if g.cloudHints == nil {
-		return 0, 0, "", false
+		return 0, 0, "", "", false
 	}
 	val, _, err := g.cloudHints.LookupUint32(ip)
 	if err != nil || val == nil {
-		return 0, 0, "", false
+		return 0, 0, "", "", false
 	}
 
 	loc := string(val)
@@ -703,16 +716,16 @@ func (g *GeoService) resolveFromCloudTrie(ip uint32) (lat, lng float64, cc strin
 		lat, lng, cc = g.ResolveCityToCoords(city, countryCode)
 		if lat != 0 || lng != 0 {
 			g.metrics.CloudHits.Add(1)
-			return lat, lng, cc, true
+			return lat, lng, cc, city, true
 		}
-		return 0, 0, countryCode, false
+		return 0, 0, countryCode, city, false
 	}
-	return 0, 0, "", false
+	return 0, 0, "", "", false
 }
 
-func (g *GeoService) resolveFromCountryHubs(ip uint32, countryCode string) (lat, lng float64, cc string) {
+func (g *GeoService) resolveFromCountryHubs(ip uint32, countryCode string) (lat, lng float64, cc, city string) {
 	if countryCode == "" {
-		return 0, 0, ""
+		return 0, 0, "", ""
 	}
 	g.dataMu.RLock()
 	hubs := g.countryHubs[countryCode]
@@ -721,16 +734,30 @@ func (g *GeoService) resolveFromCountryHubs(ip uint32, countryCode string) (lat,
 		h := utils.HashUint32(ip)
 		r := (float64(h) / float64(0xFFFFFFFF)) * hubs[len(hubs)-1].CumulativeWeight
 		for _, h := range hubs {
-			if h.CumulativeWeight >= r {
-				g.metrics.HubHits.Add(1)
-				return h.Lat, h.Lng, countryCode
+			if h.CumulativeWeight < r {
+				continue
 			}
+			g.metrics.HubHits.Add(1)
+			// Find city name for these coords if possible
+			cityName := ""
+			g.dataMu.RLock()
+			for ck, coords := range g.cityCoords {
+				if ck.cc == countryCode && math.Abs(float64(coords[0])-h.Lat) < 0.01 && math.Abs(float64(coords[1])-h.Lng) < 0.01 {
+					// Title case the lowercase city name
+					if ck.city != "" {
+						cityName = strings.ToUpper(ck.city[:1]) + ck.city[1:]
+					}
+					break
+				}
+			}
+			g.dataMu.RUnlock()
+			return h.Lat, h.Lng, countryCode, cityName
 		}
 	}
-	return 0, 0, countryCode
+	return 0, 0, countryCode, ""
 }
 
-func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc string, resType ResolutionType) {
+func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc, city string, resType ResolutionType) {
 	g.cacheMu.Lock()
 	defer g.cacheMu.Unlock()
 	if len(g.prefixToCityCache) > 200000 {
@@ -738,11 +765,11 @@ func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc string, res
 		g.prefixToCityCache = make(map[uint32]cacheEntry)
 		g.metrics.CacheResets.Add(1)
 	}
-	g.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc, ResType: resType}
+	g.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc, City: city, ResType: resType}
 }
 
 type GeoResolver interface {
-	GetIPCoords(ip uint32) (lat, lng float64, countryCode string, resType ResolutionType)
+	GetIPCoords(ip uint32) (lat, lng float64, countryCode, city string, resType ResolutionType)
 }
 
 func (g *GeoService) ResolveCityToCoords(city, cc string) (lat, lng float64, countryCode string) {

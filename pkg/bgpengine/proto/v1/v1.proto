@@ -3,40 +3,76 @@ package bgp.v1;
 option go_package = "github.com/sudorandom/bgp-stream/pkg/bgpengine/proto/v1;bgpproto";
 
 message StatsBucket {
+    // Number of BGP announcement messages received in this window
     int32 announcements = 1;
+    // Number of BGP withdrawal messages received in this window
     int32 withdrawals = 2;
+    // Total number of BGP messages (announcements + withdrawals)
     int32 total_messages = 3;
+    // Count of messages where the AS path attribute changed
     int32 path_changes = 4;
+    // Count of messages where the BGP communities attribute changed
     int32 community_changes = 5;
+    // Count of messages where the BGP next-hop attribute changed
     int32 next_hop_changes = 6;
+    // Count of messages where the BGP aggregator attribute changed
     int32 aggregator_changes = 7;
+    // Count of announcements where the AS path length increased
     int32 path_length_increases = 8;
+    // Count of announcements where the AS path length decreased
     int32 path_length_decreases = 9;
+    // Count of messages where the Multi-Exit Discriminator (MED) attribute changed
     int32 med_changes = 10;
+    // Count of messages where the Local Preference attribute changed
     int32 local_pref_changes = 11;
 }
 
 message LastAttrs {
+    // The last seen AS path as a space-separated string of ASNs
     string path = 1;
+    // The last seen BGP communities as a formatted string
     string communities = 2;
+    // The last seen BGP next-hop IP address
     string next_hop = 3;
+    // The last seen BGP aggregator attribute
     string aggregator = 4;
+    // Length of the last seen AS path
     int32 last_path_len = 5;
+    // Originating ASN of the last seen announcement
     uint32 origin_asn = 6;
+    // Multi-Exit Discriminator (MED) value
     int32 med = 7;
+    // Local Preference value
     int32 local_pref = 8;
+    // Unix timestamp (seconds) of the last update received from this peer
     int64 last_update_ts = 9;
+    // Identity of the collector host (RRC) that received the update
     string host = 10;
 }
 
 message PrefixState {
-    map<int64, StatsBucket> buckets = 1; // timestamp (minute-aligned) -> bucket
+    // Map of minute-aligned Unix timestamps to statistical buckets
+    map<int64, StatsBucket> buckets = 1;
+    // Map of peer IP addresses to their most recent BGP attributes
     map<string, LastAttrs> peer_last_attrs = 2;
+    // Unix timestamp (seconds) of the most recent update for this prefix
     int64 last_update_ts = 3;
+    // Unix timestamp (seconds) when tracking began for this prefix
     int64 start_time_ts = 4;
+    // Flag indicating if this prefix has been counted in uncategorized metrics
     bool uncategorized_counted = 5;
+    // The current anomaly classification type (enum value)
     int32 classified_type = 6;
+    // Unix timestamp (seconds) when the current classification was assigned
     int64 classified_time_ts = 7;
+    // Last known RPKI validation status
     int32 last_rpki_status = 8;
+    // Last known originating ASN (used for hijack/transition detection)
     uint32 last_origin_asn = 9;
+    // Type of route leak detected (enum value)
+    int32 leak_type = 10;
+    // ASN identified as the source of a route leak
+    uint32 leaker_asn = 11;
+    // ASN identified as the victim of a route leak or hijack
+    uint32 victim_asn = 12;
 }

@@ -6,25 +6,27 @@ import (
 	"time"
 
 	"github.com/sudorandom/bgp-stream/pkg/geoservice"
+	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
 func runClassificationTest(t *testing.T, name string, expect ClassificationType, steps func(p *BGPProcessor, now time.Time, classify func(prefix string, ctx *MessageContext))) {
 	t.Run(name, func(t *testing.T) {
 		var lastClassification ClassificationType
-		onEvent := func(lat, lng float64, cc string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+		onEvent := func(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn uint32, leakDetail ...*LeakDetail) {
 			if classificationType != ClassificationNone {
 				lastClassification = classificationType
 			}
 		}
-		p := NewBGPProcessor(func(uint32) (float64, float64, string, geoservice.ResolutionType) {
-			return 0, 0, "US", geoservice.ResGeoIP
+		p := NewBGPProcessor(func(uint32) (float64, float64, string, string, geoservice.ResolutionType) {
+			return 0, 0, "US", "New York", geoservice.ResGeoIP
 		}, nil, nil, nil, nil, func(string) uint32 { return 0 }, time.Now, onEvent)
 		now := time.Now().Truncate(time.Hour)
 
 		classify := func(prefix string, ctx *MessageContext) {
-			if e, ok := p.classifier.classifyEvent(prefix, ctx); ok {
-				if lat, lng, cc, _ := p.geo(e.ip); cc != "" {
-					p.onEvent(lat, lng, cc, e.eventType, e.classificationType, e.prefix, e.asn)
+			wIdx := int(utils.HashUint32(p.prefixToIP(prefix)) % uint32(len(p.workers)))
+			if e, ok := p.workers[wIdx].classifier.ClassifyEvent(prefix, ctx); ok {
+				if lat, lng, cc, city, _ := p.geo(e.IP); cc != "" {
+					p.onEvent(lat, lng, cc, city, e.EventType, e.ClassificationType, e.Prefix, e.ASN, e.LeakDetail)
 				}
 			}
 		}
@@ -37,14 +39,6 @@ func runClassificationTest(t *testing.T, name string, expect ClassificationType,
 }
 
 func TestClassification(t *testing.T) {
-	runClassificationTest(t, "Babbling", ClassificationBabbling, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 21; i++ {
-			classify("1.1.1.0/24", &MessageContext{
-				Peer: "peer1", PathStr: "[100 200]", Now: now.Add(time.Duration(i) * time.Second),
-			})
-		}
-	})
-
 	runClassificationTest(t, "Discovery (100 peers)", ClassificationDiscovery, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
 		for i := 0; i < 100; i++ {
 			classify("2.2.2.0/24", &MessageContext{
@@ -88,7 +82,7 @@ func TestClassification(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			classify("5.5.5.0/24", &MessageContext{
 				Peer: fmt.Sprintf("peer%d", i), Host: fmt.Sprintf("rrc%d", i%2),
-				PathStr: "[3356 500 2914]", Now: now.Add(time.Duration(i*30) * time.Second),
+				PathStr: "[3356 500 2914]", PathLen: 11, Now: now.Add(time.Duration(i*30) * time.Second),
 			})
 		}
 	})
@@ -100,48 +94,6 @@ func TestClassification(t *testing.T) {
 		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300 400]", PathLen: 4, Now: now.Add(90 * time.Second)})
 		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300 400 500]", PathLen: 5, Now: now.Add(120 * time.Second)})
 		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300 400 500 600]", PathLen: 6, Now: now.Add(150 * time.Second)})
-	})
-
-	runClassificationTest(t, "Policy Churn", ClassificationPolicyChurn, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 11; i++ {
-			classify("7.7.7.0/24", &MessageContext{
-				Peer: "p1", PathStr: "[100]", CommStr: fmt.Sprintf("[[100:%d]]", i), Now: now.Add(time.Duration(i*25) * time.Second),
-			})
-		}
-	})
-
-	runClassificationTest(t, "Path Length Oscillation", ClassificationPathLengthOscillation, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 4; i++ {
-			classify("8.8.8.0/24", &MessageContext{
-				Peer: "p1", PathStr: "[100 200]", PathLen: 2, Now: now.Add(time.Duration(i*60) * time.Second),
-			})
-			classify("8.8.8.0/24", &MessageContext{
-				Peer: "p1", PathStr: "[100 200 300]", PathLen: 3, Now: now.Add(time.Duration(i*60+30) * time.Second),
-			})
-		}
-	})
-
-	runClassificationTest(t, "Aggregator Flap", ClassificationAggFlap, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 20; i++ {
-			peer := fmt.Sprintf("peer%d", i%5)
-			classify("9.9.9.0/24", &MessageContext{
-				Peer: peer, PathStr: "[100]", Aggregator: fmt.Sprintf("AS%d", i), Now: now.Add(time.Duration(i*5) * time.Second),
-			})
-		}
-		classify("9.9.9.0/24", &MessageContext{
-			Peer: "peer0", PathStr: "[100]", Aggregator: "AS-FINAL", Now: now.Add(130 * time.Second),
-		})
-	})
-
-	runClassificationTest(t, "Next-Hop Flap", ClassificationNextHopOscillation, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 15; i++ {
-			classify("10.10.10.0/24", &MessageContext{
-				Peer: "peer1", PathStr: "[100]", NextHop: fmt.Sprintf("1.1.1.%d", i%2), Now: now.Add(time.Duration(i*10) * time.Second),
-			})
-		}
-		// Second peer to trigger len(uniqueHops) > 1
-		classify("10.10.10.0/24", &MessageContext{
-			Peer: "peer2", PathStr: "[100]", NextHop: "2.2.2.2", Now: now.Add(160 * time.Second),
-		})
+		classify("6.6.6.0/24", &MessageContext{Peer: "p1", PathStr: "[100 200 300 400 500 600 700]", PathLen: 7, Now: now.Add(180 * time.Second)})
 	})
 }

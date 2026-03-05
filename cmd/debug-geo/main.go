@@ -76,11 +76,12 @@ func main() {
 			return
 		}
 		ipUint := utils.IPToUint32(parsedIP)
-		lat, lng, cc, resType := geo.GetIPCoords(ipUint)
+		lat, lng, cc, city, resType := geo.GetIPCoords(ipUint)
 
 		fmt.Printf("IP: %s\n", s)
 		fmt.Printf("  Coords:     %f, %f\n", lat, lng)
 		fmt.Printf("  Country:    %s\n", cc)
+		fmt.Printf("  City:       %s\n", city)
 		fmt.Printf("  Resolution: %s\n", resType)
 		fmt.Println("--------------------------------")
 	}

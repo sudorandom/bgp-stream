@@ -121,21 +121,20 @@ func (e *Engine) DrawPIP(screen *ebiten.Image) {
 	// Draw PIP background and border
 	borderPadding := 2.0
 	if e.whitePixel != nil {
+		op := &ebiten.DrawImageOptions{}
 		// Draw border
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Scale(pipW+borderPadding*2, pipH+borderPadding*2)
-		e.drawOp.GeoM.Translate(localX-borderPadding, localY-borderPadding)
-		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(0.2, 0.25, 0.3, 0.8) // Dark bluish border
-		e.pipImage.DrawImage(e.whitePixel, e.drawOp)
+		op.GeoM.Scale(pipW+borderPadding*2, pipH+borderPadding*2)
+		op.GeoM.Translate(localX-borderPadding, localY-borderPadding)
+		op.ColorScale.Scale(0.2, 0.25, 0.3, 0.8) // Dark bluish border
+		e.pipImage.DrawImage(e.whitePixel, op)
 
 		// Draw black background
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Scale(pipW, pipH)
-		e.drawOp.GeoM.Translate(localX, localY)
-		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(0, 0, 0, 1.0)
-		e.pipImage.DrawImage(e.whitePixel, e.drawOp)
+		op.GeoM.Reset()
+		op.GeoM.Scale(pipW, pipH)
+		op.GeoM.Translate(localX, localY)
+		op.ColorScale.Reset()
+		op.ColorScale.Scale(0, 0, 0, 1.0)
+		e.pipImage.DrawImage(e.whitePixel, op)
 	}
 
 	// Draw PIP content (the full map)
@@ -154,43 +153,46 @@ func (e *Engine) DrawPIP(screen *ebiten.Image) {
 	piw, pih := vw*pipScale, vh*pipScale
 
 	if e.whitePixel != nil {
+		op := &ebiten.DrawImageOptions{}
 		// Red border for the viewport indicator
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Scale(piw, 2)
-		e.drawOp.GeoM.Translate(pix, piy)
-		e.drawOp.ColorScale.Reset()
-		e.drawOp.ColorScale.Scale(1, 0, 0, 0.9) // Red
-		e.pipImage.DrawImage(e.whitePixel, e.drawOp)
+		op.GeoM.Scale(piw, 2)
+		op.GeoM.Translate(pix, piy)
+		op.ColorScale.Scale(1, 0, 0, 0.9) // Red
+		e.pipImage.DrawImage(e.whitePixel, op)
 
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Scale(piw, 2)
-		e.drawOp.GeoM.Translate(pix, piy+pih-2)
-		e.pipImage.DrawImage(e.whitePixel, e.drawOp)
+		op.GeoM.Reset()
+		op.GeoM.Scale(piw, 2)
+		op.GeoM.Translate(pix, piy+pih-2)
+		op.ColorScale.Reset()
+		op.ColorScale.Scale(1, 0, 0, 0.9) // Red
+		e.pipImage.DrawImage(e.whitePixel, op)
 
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Scale(2, pih)
-		e.drawOp.GeoM.Translate(pix, piy)
-		e.pipImage.DrawImage(e.whitePixel, e.drawOp)
+		op.GeoM.Reset()
+		op.GeoM.Scale(2, pih)
+		op.GeoM.Translate(pix, piy)
+		op.ColorScale.Reset()
+		op.ColorScale.Scale(1, 0, 0, 0.9) // Red
+		e.pipImage.DrawImage(e.whitePixel, op)
 
-		e.drawOp.GeoM.Reset()
-		e.drawOp.GeoM.Scale(2, pih)
-		e.drawOp.GeoM.Translate(pix+piw-2, piy)
-		e.pipImage.DrawImage(e.whitePixel, e.drawOp)
+		op.GeoM.Reset()
+		op.GeoM.Scale(2, pih)
+		op.GeoM.Translate(pix+piw-2, piy)
+		op.ColorScale.Reset()
+		op.ColorScale.Scale(1, 0, 0, 0.9) // Red
+		e.pipImage.DrawImage(e.whitePixel, op)
 	}
 
 	// Add region label below PIP
 	if e.tourRegionIndex >= 0 && e.tourRegionIndex < len(regions) {
 		regionName := regions[e.tourRegionIndex].name
-		e.textOp.GeoM.Reset()
-		e.textOp.GeoM.Translate(localX, localY+pipH+5)
-		e.textOp.ColorScale.Reset()
-		e.textOp.ColorScale.Scale(1, 1, 1, 0.7)
-		text.Draw(e.pipImage, regionName, e.titleMonoFace, e.textOp)
+		textOp := &text.DrawOptions{}
+		textOp.GeoM.Translate(localX, localY+pipH+5)
+		textOp.ColorScale.Scale(1, 1, 1, 0.7)
+		text.Draw(e.pipImage, regionName, e.titleMonoFace, textOp)
 	}
 
 	// Now draw the pipImage to the screen stably
-	e.drawOp.GeoM.Reset()
-	e.drawOp.GeoM.Translate(x, y)
-	e.drawOp.ColorScale.Reset()
-	screen.DrawImage(e.pipImage, e.drawOp)
+	opScreen := &ebiten.DrawImageOptions{}
+	opScreen.GeoM.Translate(x, y)
+	screen.DrawImage(e.pipImage, opScreen)
 }

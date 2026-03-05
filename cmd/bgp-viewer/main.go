@@ -41,6 +41,7 @@ var (
 	hideUI             *bool   = flag.Bool("hide-ui", false, "Hide all UI elements")
 	videoPath          *string = flag.String("video", "", "Path to save recorded video (implies -hide-ui and -tps 30)")
 	videoDelay                 = flag.Duration("video-delay", 8*time.Second, "Delay before starting video recording")
+	audioDir           *string = flag.String("audio-dir", "", "Directory containing MP3 files for background music")
 	mmdbFiles          multiFlag
 )
 
@@ -71,6 +72,7 @@ func initEngine() *bgpengine.Engine {
 	engine.VideoPath = *videoPath
 	engine.VideoStartDelay = *videoDelay
 	engine.MMDBFiles = mmdbFiles
+	engine.AudioDir = *audioDir
 
 	// Initialize video writer if requested
 	if engine.VideoPath != "" {
@@ -78,6 +80,9 @@ func initEngine() *bgpengine.Engine {
 			log.Fatalf("Fatal: Failed to initialize video writer: %v", err)
 		}
 	}
+
+	// Initialize audio if a directory is provided
+	engine.InitAudio()
 
 	// If audio-fd is provided, use it for streaming audio
 	if *audioFd != -1 {

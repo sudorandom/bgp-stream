@@ -3,9 +3,9 @@ package utils
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -53,25 +53,36 @@ func (m *ASNMapping) loadCustomOrgs() {
 	// Hardcoded known associations that are often missed or split in CAIDA
 	knownSiblings := map[uint32]string{
 		// China Telecom / CTGNet / CN2
-		23764: "CHINATELECOM",
-		4809:  "CHINATELECOM",
-		4134:  "CHINATELECOM",
-		4812:  "CHINATELECOM",
+		23764:  "CHINATELECOM",
+		4809:   "CHINATELECOM",
+		4134:   "CHINATELECOM",
+		4812:   "CHINATELECOM",
+		4811:   "CHINATELECOM",
+		4813:   "CHINATELECOM",
+		4816:   "CHINATELECOM",
+		139203: "CHINATELECOM",
+		36678:  "CHINATELECOM",
 
 		// China Mobile
 		58453: "CHINAMOBILE",
 		58807: "CHINAMOBILE",
 		9808:  "CHINAMOBILE",
 		9242:  "CHINAMOBILE",
+		56040: "CHINAMOBILE",
+		56041: "CHINAMOBILE",
+		56042: "CHINAMOBILE",
 
 		// China Unicom
 		4837:  "CHINAUNICOM",
 		9929:  "CHINAUNICOM",
 		10010: "CHINAUNICOM",
+		17622: "CHINAUNICOM",
+		18398: "CHINAUNICOM",
 
 		// Telstra
-		1221: "TELSTRA",
-		4637: "TELSTRA",
+		1221:   "TELSTRA",
+		4637:   "TELSTRA",
+		137409: "TELSTRA",
 
 		// NTT
 		2914:  "NTT",
@@ -79,10 +90,12 @@ func (m *ASNMapping) loadCustomOrgs() {
 		2516:  "NTT",
 		2907:  "NTT",
 		7682:  "NTT",
+		17451: "NTT",
 
 		// Tata
-		6453: "TATA",
-		4755: "TATA",
+		6453:  "TATA",
+		4755:  "TATA",
+		17488: "TATA",
 
 		// GTT
 		3257:  "GTT",
@@ -96,6 +109,8 @@ func (m *ASNMapping) loadCustomOrgs() {
 		209:   "LUMEN",
 		3549:  "LUMEN",
 		22561: "LUMEN",
+		286:   "LUMEN",
+		2828:  "LUMEN",
 
 		// Zayo
 		6461:  "ZAYO",
@@ -110,11 +125,11 @@ func (m *ASNMapping) loadCustomOrgs() {
 		702:   "VERIZON",
 		703:   "VERIZON",
 		18451: "VERIZON",
-		2828:  "VERIZON",
 
 		// AT&T
 		7018: "ATT",
 		2686: "ATT",
+		7132: "ATT",
 
 		// Orange / OpenTransit
 		5511: "ORANGE",
@@ -127,27 +142,46 @@ func (m *ASNMapping) loadCustomOrgs() {
 		3326:  "TELEFONICA",
 		33667: "TELEFONICA",
 		13489: "TELEFONICA",
+
+		// Cogent
+		174: "COGENT",
+
+		// Hurricane Electric
+		6939: "HE",
+
+		// Cloudflare
+		13335: "CLOUDFLARE",
+
+		// Google
+		15169: "GOOGLE",
+		36040: "GOOGLE",
+
+		// Amazon
+		16509: "AMAZON",
+		14618: "AMAZON",
+
+		// Microsoft
+		8075:  "MICROSOFT",
+		12076: "MICROSOFT",
+
+		// Akamai
+		20940: "AKAMAI",
+		16625: "AKAMAI",
+		12241: "AKAMAI",
+		34164: "AKAMAI",
+		35994: "AKAMAI",
+		35993: "AKAMAI",
+		18631: "AKAMAI",
+		18715: "AKAMAI",
+
+		// Fastly
+		54113: "FASTLY",
 	}
 
 	for asn, orgID := range knownSiblings {
 		info := m.data[asn]
 		info.OrgID = orgID
 		m.data[asn] = info
-	}
-
-	// Also try to load from a local file if users want to maintain their own
-	if data, err := os.ReadFile("./data/custom_orgs.json"); err == nil {
-		var localMapping map[string]string
-		if err := json.Unmarshal(data, &localMapping); err == nil {
-			for asnStr, orgID := range localMapping {
-				if asn, err := strconv.ParseUint(asnStr, 10, 32); err == nil {
-					info := m.data[uint32(asn)]
-					info.OrgID = orgID
-					m.data[uint32(asn)] = info
-				}
-			}
-			log.Printf("Loaded %d custom ASN-Org associations from ./data/custom_orgs.json", len(localMapping))
-		}
 	}
 }
 
@@ -164,24 +198,81 @@ func (m *ASNMapping) loadCAIDA() error {
 		}
 	}()
 
-	scanner := bufio.NewScanner(r)
+	gr, err := gzip.NewReader(r)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = gr.Close() }()
+
+	scanner := bufio.NewScanner(gr)
 	for scanner.Scan() {
 		var entry struct {
 			Type  string `json:"type"`
-			ASN   uint32 `json:"asn"`
-			OrgID string `json:"org_id"`
+			ASN   string `json:"asn"`
+			OrgID string `json:"organizationId"`
+			Name  string `json:"name"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
 
-		if entry.Type == "as" && entry.ASN != 0 && entry.OrgID != "" {
-			info := m.data[entry.ASN]
-			info.OrgID = entry.OrgID
-			m.data[entry.ASN] = info
+		if entry.Type == "ASN" && entry.ASN != "" && entry.OrgID != "" {
+			asn, err := strconv.ParseUint(entry.ASN, 10, 32)
+			if err != nil {
+				continue
+			}
+
+			// Unify regional OrgIDs for major providers
+			orgID := m.normalizeOrgID(entry.OrgID, entry.Name)
+
+			info := m.data[uint32(asn)]
+			info.OrgID = orgID
+			m.data[uint32(asn)] = info
 		}
 	}
 	return nil
+}
+
+var orgNormalizationRules = []struct {
+	match string
+	id    string
+}{
+	{"AKAMAI", "AKAMAI"},
+	{"CHINATELECOM", "CHINATELECOM"},
+	{"CHINAMOBILE", "CHINAMOBILE"},
+	{"CHINAUNICOM", "CHINAUNICOM"},
+	{"GOOGLE", "GOOGLE"},
+	{"AMAZON", "AMAZON"},
+	{"MICROSOFT", "MICROSOFT"},
+	{"CLOUDFLARE", "CLOUDFLARE"},
+	{"TELSTRA", "TELSTRA"},
+	{"TATA", "TATA"},
+	{"LUMEN", "LUMEN"},
+	{"LEVEL3", "LUMEN"},
+	{"CENTURYLINK", "LUMEN"},
+	{"COGENT", "COGENT"},
+	{"VERIZON", "VERIZON"},
+	{"ATT", "ATT"},
+	{"AT&T", "ATT"},
+	{"ATT-", "ATT"},
+	{"ORANGE", "ORANGE"},
+	{"TELEFONICA", "TELEFONICA"},
+	{"GTT", "GTT"},
+	{"GTT-", "GTT"},
+	{"NTT", "NTT"},
+	{"NTT-", "NTT"},
+}
+
+func (m *ASNMapping) normalizeOrgID(orgID, name string) string {
+	normalizedName := strings.ToUpper(name)
+	upperOrgID := strings.ToUpper(orgID)
+
+	for _, rule := range orgNormalizationRules {
+		if strings.Contains(upperOrgID, rule.match) || strings.Contains(normalizedName, rule.match) {
+			return rule.id
+		}
+	}
+	return orgID
 }
 
 func (m *ASNMapping) GetOrgID(asn uint32) string {
@@ -195,6 +286,13 @@ func (m *ASNMapping) GetOrgID(asn uint32) string {
 func SetASNOrgID(m *ASNMapping, asn uint32, orgID string) {
 	info := m.data[asn]
 	info.OrgID = orgID
+	m.data[asn] = info
+}
+
+// SetASNName is a test helper to manually set name for an ASN.
+func SetASNName(m *ASNMapping, asn uint32, name string) {
+	info := m.data[asn]
+	info.Name = name
 	m.data[asn] = info
 }
 
