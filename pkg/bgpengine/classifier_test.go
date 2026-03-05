@@ -43,7 +43,22 @@ func TestClassifier_HasRouteLeak(t *testing.T) {
 			pathStr: "[174 15169 1239]",
 			wantOk:  false,
 		},
+		{
+			name:    "No Leak (Same Sibling ASN)",
+			pathStr: "[174 4637 1221 1239]", // 4637 and 1221 are siblings (TELSTRA)
+			wantOk:  false,
+		},
+		{
+			name:    "Route Leak (Different Sibling ASN)",
+			pathStr: "[174 4637 100 1239]",
+			wantOk:  true,
+		},
 	}
+
+	c.asnMapping = utils.NewASNMapping()
+	utils.SetASNOrgID(c.asnMapping, 4637, "TELSTRA")
+	utils.SetASNOrgID(c.asnMapping, 1221, "TELSTRA")
+	utils.SetASNOrgID(c.asnMapping, 100, "OTHER")
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

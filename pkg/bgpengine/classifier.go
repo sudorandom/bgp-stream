@@ -550,10 +550,11 @@ func (c *Classifier) hasRouteLeak(ctx *MessageContext) ([3]uint32, bool) {
 
 		// Only add if it's a different ASN AND not a sibling ASN
 		if currentASN != rawPath[i-1] {
-			if currentOrgID == "" || currentOrgID != lastOrgID {
+			// If we have no org ID, or the org IDs are different, we keep it
+			if currentOrgID == "" || lastOrgID == "" || currentOrgID != lastOrgID {
 				path = append(path, currentASN)
-				lastOrgID = currentOrgID
 			}
+			lastOrgID = currentOrgID
 		}
 	}
 

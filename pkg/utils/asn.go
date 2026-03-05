@@ -167,18 +167,22 @@ func (m *ASNMapping) loadCAIDA() error {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		var entry struct {
-			Type  string `json:"type"`
-			ASN   uint32 `json:"asn"`
-			OrgID string `json:"org_id"`
+			Type           string `json:"type"`
+			ASN            string `json:"asn"`
+			OrganizationId string `json:"organizationId"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
 
-		if entry.Type == "as" && entry.ASN != 0 && entry.OrgID != "" {
-			info := m.data[entry.ASN]
-			info.OrgID = entry.OrgID
-			m.data[entry.ASN] = info
+		if strings.EqualFold(entry.Type, "ASN") && entry.ASN != "" && entry.OrganizationId != "" {
+			asn, err := strconv.ParseUint(entry.ASN, 10, 32)
+			if err != nil {
+				continue
+			}
+			info := m.data[uint32(asn)]
+			info.OrgID = entry.OrganizationId
+			m.data[uint32(asn)] = info
 		}
 	}
 	return nil

@@ -1089,7 +1089,48 @@ func (e *Engine) activateVisualAnomalies(allImpact []*VisualImpact) {
 			g.maxCount = vi.Count
 		}
 
-		g.prefixes = append(g.prefixes, vi.Prefix)
+		// Only append prefix to prefixes if it's not Outage
+		// Or if it's an Outage we add the extra location info here
+		// But let's check what the structure has. We only have prefix here
+		if vi.ClassificationName == nameHardOutage {
+			// Find country/city for this prefix via e.prefixToLocation etc.
+			// The original request: "For Outages events, location information should be added, similar to the extra information that route leaks have. Show the location in a new line, similar to route leaks. Both city and country should be included."
+			// We can append a new "fake" prefix that contains the location to be rendered on the next line
+			g.prefixes = append(g.prefixes, vi.Prefix)
+
+			ip := e.prefixToIP(vi.Prefix)
+			if _, _, cc, _ := e.GetIPCoords(ip); cc != "" {
+				locationStr := ""
+
+				// If we can get a city name from the GeoService for this IP, let's append it
+				city := e.geo.GetCityForIP(ip)
+
+				if city != "" {
+					locationStr = city
+				}
+
+				countryName := countries.ByName(cc).String()
+				if countryName == "Unknown" {
+					countryName = cc
+				}
+
+				if locationStr != "" {
+					locationStr += ", " + countryName
+				} else {
+					locationStr = countryName
+				}
+
+				if locationStr != "" {
+					g.prefixes = append(g.prefixes, "  └ "+locationStr)
+				}
+			}
+		} else if vi.ClassificationName == nameRouteLeak {
+			g.prefixes = append(g.prefixes, vi.Prefix)
+			// Wait, the test says route leaks ALREADY have extra information? Let me check where that's added.
+			// Actually, Route Leaks have a path segment logged, but does it show in the UI?
+		} else {
+			g.prefixes = append(g.prefixes, vi.Prefix)
+		}
 	}
 
 	// Sort ASNs by priority and then by prefix count

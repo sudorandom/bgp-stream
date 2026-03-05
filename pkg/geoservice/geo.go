@@ -333,6 +333,7 @@ type cacheEntry struct {
 	Lat, Lng float64
 	CC       string
 	ResType  ResolutionType
+	City     string
 }
 
 func (g *GeoService) GetIPCoords(ip uint32) (lat, lng float64, countryCode string, resType ResolutionType) {
@@ -348,10 +349,45 @@ func (g *GeoService) GetIPCoords(ip uint32) (lat, lng float64, countryCode strin
 	lat, lng, countryCode, resType = g.resolveIP(ip)
 	g.incrementSourceMetric(resType)
 
-	// Always cache, even if 0,0, to prevent expensive re-resolution of unknown IPs
-	g.updateCityCache(ip, lat, lng, countryCode, resType)
+	// In order to cache the city as well, we try to get it during normal resolution,
+	// but resolveIP currently doesn't return the city.
+	// For performance, we just cache an empty city for now. If GetCityForIP is called,
+	// it will do a separate resolution and can update it.
+	// We'll leave it as "" here.
+	g.updateCityCache(ip, lat, lng, countryCode, "", resType)
 
 	return lat, lng, countryCode, resType
+}
+
+func (g *GeoService) GetCityForIP(ip uint32) string {
+	g.cacheMu.Lock()
+	if c, ok := g.prefixToCityCache[ip]; ok {
+		if c.City != "" {
+			g.cacheMu.Unlock()
+			return c.City
+		}
+	}
+	g.cacheMu.Unlock()
+
+	// If not in cache or no city cached, resolve it
+	_, _, _, city, _ := g.resolveFromMMDBs(ip)
+	if city == "" {
+		_, _, _, city, _ = g.resolveFromRIRInternal(ip)
+		if city == "" {
+			_, city, _ = g.resolveFromHubsInternal(ip)
+		}
+	}
+
+	if city != "" {
+		g.cacheMu.Lock()
+		if c, ok := g.prefixToCityCache[ip]; ok {
+			c.City = city
+			g.prefixToCityCache[ip] = c
+		}
+		g.cacheMu.Unlock()
+	}
+
+	return city
 }
 
 func (g *GeoService) incrementSourceMetric(resType ResolutionType) {
@@ -730,7 +766,7 @@ func (g *GeoService) resolveFromCountryHubs(ip uint32, countryCode string) (lat,
 	return 0, 0, countryCode
 }
 
-func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc string, resType ResolutionType) {
+func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc string, city string, resType ResolutionType) {
 	g.cacheMu.Lock()
 	defer g.cacheMu.Unlock()
 	if len(g.prefixToCityCache) > 200000 {
@@ -738,7 +774,7 @@ func (g *GeoService) updateCityCache(ip uint32, lat, lng float64, cc string, res
 		g.prefixToCityCache = make(map[uint32]cacheEntry)
 		g.metrics.CacheResets.Add(1)
 	}
-	g.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc, ResType: resType}
+	g.prefixToCityCache[ip] = cacheEntry{Lat: lat, Lng: lng, CC: cc, ResType: resType, City: city}
 }
 
 type GeoResolver interface {
