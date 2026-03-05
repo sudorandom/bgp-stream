@@ -22,19 +22,21 @@ type IPCoordsProvider func(ip uint32) (float64, float64, string, string, geoserv
 type PrefixToIPConverter func(p string) uint32
 type TimeProvider func() time.Time
 
+type RISAnnouncement struct {
+	NextHop  string   `json:"next_hop"`
+	Prefixes []string `json:"prefixes"`
+}
+
 type RISMessageData struct {
-	Announcements []struct {
-		NextHop  string   `json:"next_hop"`
-		Prefixes []string `json:"prefixes"`
-	} `json:"announcements"`
-	Withdrawals []string          `json:"withdrawals"`
-	Path        []json.RawMessage `json:"path"`
-	Community   [][]interface{}   `json:"community"`
-	Aggregator  string            `json:"aggregator"`
-	Peer        string            `json:"peer"`
-	Host        string            `json:"host"`
-	Med         int32             `json:"med"`
-	LocalPref   int32             `json:"local_pref"`
+	Announcements []RISAnnouncement `json:"announcements"`
+	Withdrawals   []string          `json:"withdrawals"`
+	Path          []json.RawMessage `json:"path"`
+	Community     [][]interface{}   `json:"community"`
+	Aggregator    string            `json:"aggregator"`
+	Peer          string            `json:"peer"`
+	Host          string            `json:"host"`
+	Med           int32             `json:"med"`
+	LocalPref     int32             `json:"local_pref"`
 }
 
 type processorWorker struct {
@@ -126,8 +128,8 @@ func (p *BGPProcessor) runWorker(w *processorWorker) {
 			}
 			events := p.handleRISMessage(w, data)
 			for _, e := range events {
-				if lat, lng, cc, city, _ := p.geo(e.ip); cc != "" {
-					p.onEvent(lat, lng, cc, city, e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
+				if lat, lng, cc, city, _ := p.geo(e.IP); cc != "" {
+					p.onEvent(lat, lng, cc, city, e.EventType, e.ClassificationType, e.Prefix, e.ASN, e.LeakDetail)
 				}
 			}
 		case <-ticker.C:
@@ -249,13 +251,13 @@ func (p *BGPProcessor) connectAndSubscribeAll() (*websocket.Conn, error) {
 	return c, nil
 }
 
-type pendingEvent struct {
-	ip                 uint32
-	prefix             string
-	asn                uint32
-	eventType          EventType
-	classificationType ClassificationType
-	leakDetail         *LeakDetail
+type PendingEvent struct {
+	IP                 uint32
+	Prefix             string
+	ASN                uint32
+	EventType          EventType
+	ClassificationType ClassificationType
+	LeakDetail         *LeakDetail
 }
 
 func (p *BGPProcessor) runMessageLoop(c *websocket.Conn, rrc string) {
@@ -440,7 +442,90 @@ func (p *BGPProcessor) ReportProcessorMetrics() {
 	p.lastRateReport = now
 }
 
-func (p *BGPProcessor) handleRISMessage(w *processorWorker, data *RISMessageData) []pendingEvent {
+func (p *BGPProcessor) handleWithdrawals(w *processorWorker, withdrawals []string, ctx *MessageContext, now time.Time, originASN uint32) []PendingEvent {
+	var events []PendingEvent
+	ctx.IsWithdrawal = true
+	ctx.NumPrefixes = len(withdrawals)
+	for _, prefix := range withdrawals {
+		ip := p.prefixToIP(prefix)
+		if ip == 0 {
+			continue
+		}
+
+		w.pendingWithdrawals[ip] = struct {
+			Time   time.Time
+			Prefix string
+		}{Time: now.Add(withdrawResolutionWindow), Prefix: prefix}
+
+		if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
+			events = append(events, e)
+		} else {
+			if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
+				events = append(events, PendingEvent{IP: ip, Prefix: prefix, ASN: originASN, EventType: EventGossip, ClassificationType: ClassificationNone})
+			} else {
+				w.recentlySeen.Add(ip, struct {
+					Time time.Time
+					Type EventType
+				}{Time: now, Type: EventWithdrawal})
+				events = append(events, PendingEvent{IP: ip, Prefix: prefix, ASN: originASN, EventType: EventWithdrawal, ClassificationType: ClassificationNone})
+			}
+		}
+	}
+	return events
+}
+
+func (p *BGPProcessor) handleAnnouncements(w *processorWorker, announcements []RISAnnouncement, ctx *MessageContext, now time.Time, originASN uint32) []PendingEvent {
+	var events []PendingEvent
+	ctx.IsWithdrawal = false
+	for _, ann := range announcements {
+		ctx.NumPrefixes = len(ann.Prefixes)
+		ctx.NextHop = ann.NextHop
+		for _, prefix := range ann.Prefixes {
+			ip := p.prefixToIP(prefix)
+			if ip == 0 {
+				continue
+			}
+
+			eventType := EventUpdate
+			if isNew := p.isNewPrefix(prefix); isNew {
+				eventType = EventNew
+			}
+
+			if _, ok := w.pendingWithdrawals[ip]; ok {
+				delete(w.pendingWithdrawals, ip)
+				eventType = EventUpdate
+			}
+
+			if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
+				e.EventType = eventType
+				events = append(events, e)
+			} else {
+				if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
+					w.recentlySeen.Add(ip, struct {
+						Time time.Time
+						Type EventType
+					}{Time: now, Type: EventUpdate})
+					events = append(events, PendingEvent{IP: ip, Prefix: prefix, ASN: originASN, EventType: EventUpdate, ClassificationType: ClassificationNone})
+				} else if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
+					w.recentlySeen.Add(ip, struct {
+						Time time.Time
+						Type EventType
+					}{Time: now, Type: EventGossip})
+					events = append(events, PendingEvent{IP: ip, Prefix: prefix, ASN: originASN, EventType: EventGossip, ClassificationType: ClassificationNone})
+				} else {
+					w.recentlySeen.Add(ip, struct {
+						Time time.Time
+						Type EventType
+					}{Time: now, Type: eventType})
+					events = append(events, PendingEvent{IP: ip, Prefix: prefix, ASN: originASN, EventType: eventType, ClassificationType: ClassificationNone})
+				}
+			}
+		}
+	}
+	return events
+}
+
+func (p *BGPProcessor) handleRISMessage(w *processorWorker, data *RISMessageData) []PendingEvent {
 	var originASN uint32
 	if len(data.Path) > 0 {
 		last := data.Path[len(data.Path)-1]
@@ -472,83 +557,16 @@ func (p *BGPProcessor) handleRISMessage(w *processorWorker, data *RISMessageData
 		ctx.CommStr = fmt.Sprintf("%v", data.Community)
 	}
 
-	var events []pendingEvent
+	var events []PendingEvent
 
 	// 1. Process Withdrawals
-	ctx.IsWithdrawal = true
-	ctx.NumPrefixes = len(data.Withdrawals)
-	for _, prefix := range data.Withdrawals {
-		ip := p.prefixToIP(prefix)
-		if ip == 0 {
-			continue
-		}
-
-		w.pendingWithdrawals[ip] = struct {
-			Time   time.Time
-			Prefix string
-		}{Time: now.Add(withdrawResolutionWindow), Prefix: prefix}
-
-		if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
-			events = append(events, e)
-		} else {
-			if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
-				events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, classificationType: ClassificationNone})
-			} else {
-				w.recentlySeen.Add(ip, struct {
-					Time time.Time
-					Type EventType
-				}{Time: now, Type: EventWithdrawal})
-				events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventWithdrawal, classificationType: ClassificationNone})
-			}
-		}
+	if len(data.Withdrawals) > 0 {
+		events = append(events, p.handleWithdrawals(w, data.Withdrawals, ctx, now, originASN)...)
 	}
 
 	// 2. Process Announcements
-	ctx.IsWithdrawal = false
-	for _, ann := range data.Announcements {
-		ctx.NumPrefixes = len(ann.Prefixes)
-		ctx.NextHop = ann.NextHop
-		for _, prefix := range ann.Prefixes {
-			ip := p.prefixToIP(prefix)
-			if ip == 0 {
-				continue
-			}
-
-			eventType := EventUpdate
-			if isNew := p.isNewPrefix(prefix); isNew {
-				eventType = EventNew
-			}
-
-			if _, ok := w.pendingWithdrawals[ip]; ok {
-				delete(w.pendingWithdrawals, ip)
-				eventType = EventUpdate
-			}
-
-			if e, ok := w.classifier.ClassifyEvent(prefix, ctx); ok {
-				e.eventType = eventType
-				events = append(events, e)
-			} else {
-				if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && last.Type == EventWithdrawal {
-					w.recentlySeen.Add(ip, struct {
-						Time time.Time
-						Type EventType
-					}{Time: now, Type: EventUpdate})
-					events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventUpdate, classificationType: ClassificationNone})
-				} else if last, ok := w.recentlySeen.Get(ip); ok && now.Sub(last.Time) < dedupeWindow && (last.Type == EventNew || last.Type == EventUpdate || last.Type == EventGossip) {
-					w.recentlySeen.Add(ip, struct {
-						Time time.Time
-						Type EventType
-					}{Time: now, Type: EventGossip})
-					events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: EventGossip, classificationType: ClassificationNone})
-				} else {
-					w.recentlySeen.Add(ip, struct {
-						Time time.Time
-						Type EventType
-					}{Time: now, Type: eventType})
-					events = append(events, pendingEvent{ip: ip, prefix: prefix, asn: originASN, eventType: eventType, classificationType: ClassificationNone})
-				}
-			}
-		}
+	if len(data.Announcements) > 0 {
+		events = append(events, p.handleAnnouncements(w, data.Announcements, ctx, now, originASN)...)
 	}
 
 	return events

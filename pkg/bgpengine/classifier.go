@@ -174,9 +174,9 @@ func (c *Classifier) GetPrefixState(prefix string) (*bgpproto.PrefixState, bool)
 	return c.prefixStates.Get(prefix)
 }
 
-func (c *Classifier) ClassifyEvent(prefix string, ctx *MessageContext) (pendingEvent, bool) {
+func (c *Classifier) ClassifyEvent(prefix string, ctx *MessageContext) (PendingEvent, bool) {
 	if strings.Contains(prefix, ":") {
-		return pendingEvent{}, false
+		return PendingEvent{}, false
 	}
 	state, ok := c.prefixStates.Get(prefix)
 	if !ok {
@@ -242,13 +242,13 @@ func (c *Classifier) ClassifyEvent(prefix string, ctx *MessageContext) (pendingE
 					VictimASN: state.VictimAsn,
 				}
 			}
-			return pendingEvent{
-				ip:                 c.prefixToIP(prefix),
-				prefix:             prefix,
-				asn:                ctx.OriginASN,
-				eventType:          ctx.EventType(),
-				classificationType: ClassificationType(state.ClassifiedType),
-				leakDetail:         ld,
+			return PendingEvent{
+				IP:                 c.prefixToIP(prefix),
+				Prefix:             prefix,
+				ASN:                ctx.OriginASN,
+				EventType:          ctx.EventType(),
+				ClassificationType: ClassificationType(state.ClassifiedType),
+				LeakDetail:         ld,
 			}, true
 		}
 	}
@@ -332,7 +332,7 @@ func (c *Classifier) compareAndUpdateBucketStats(bucket *bgpproto.StatsBucket, l
 	}
 }
 
-func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixState, ctx *MessageContext) (pendingEvent, bool) {
+func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixState, ctx *MessageContext) (PendingEvent, bool) {
 	stats := c.aggregateRecentBuckets(state, ctx.Now, ctx.OriginASN)
 
 	elapsed := float64(ctx.Now.Unix() - stats.earliestTS)
@@ -345,10 +345,10 @@ func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixSt
 
 	// Ensure we have seen enough messages over a small time window to classify
 	if elapsed < 120 && stats.totalMsgs < 5 {
-		return pendingEvent{}, false
+		return PendingEvent{}, false
 	}
 
-	anomType, leakDetail, classified := c.findClassification(prefix, state, &stats, elapsed, ctx)
+	anomType, leakDetail, classified := c.findClassification(prefix, &stats, elapsed, ctx)
 
 	if classified {
 		if state.ClassifiedType != 0 {
@@ -363,19 +363,19 @@ func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixSt
 						VictimASN: state.VictimAsn,
 					}
 				}
-				return pendingEvent{
-					ip:                 c.prefixToIP(prefix),
-					prefix:             prefix,
-					asn:                ctx.OriginASN,
-					eventType:          ctx.EventType(),
-					classificationType: ClassificationType(state.ClassifiedType),
-					leakDetail:         ld,
+				return PendingEvent{
+					IP:                 c.prefixToIP(prefix),
+					Prefix:             prefix,
+					ASN:                ctx.OriginASN,
+					EventType:          ctx.EventType(),
+					ClassificationType: ClassificationType(state.ClassifiedType),
+					LeakDetail:         ld,
 				}, true
 			}
 		}
 		return c.RecordClassification(prefix, state, anomType, ctx.Now.Unix(), ctx, leakDetail), true
 	}
-	return pendingEvent{}, false
+	return PendingEvent{}, false
 }
 
 func (c *Classifier) getPriority(t ClassificationType) int {
@@ -445,20 +445,14 @@ func (c *Classifier) aggregateRecentBuckets(state *bgpproto.PrefixState, now tim
 	return s
 }
 
-func (c *Classifier) findClassification(prefix string, state *bgpproto.PrefixState, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
-	numPeers := float64(len(state.PeerLastAttrs))
-	if numPeers == 0 {
-		numPeers = 1
-	}
-	perPeerRate := float64(s.totalMsgs) / numPeers
-
+func (c *Classifier) findClassification(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
 	// 1. Critical
 	if et, ld, ok := c.findCriticalAnomaly(prefix, s, elapsed, ctx); ok {
 		return et, ld, true
 	}
 
 	// 2. Bad
-	if et, ok := c.findBadAnomaly(s, elapsed, perPeerRate); ok {
+	if et, ok := c.findBadAnomaly(s, elapsed); ok {
 		return et, nil, true
 	}
 
@@ -797,7 +791,7 @@ func (c *Classifier) isCloud(asn uint32) bool {
 	}
 }
 
-func (c *Classifier) findBadAnomaly(s *prefixStats, elapsed, perPeerRate float64) (ClassificationType, bool) {
+func (c *Classifier) findBadAnomaly(s *prefixStats, elapsed float64) (ClassificationType, bool) {
 	isAggFlap := s.totalAgg >= 10 && float64(s.totalAgg)/elapsed > 0.05
 	isNextHopOsc := len(s.uniqueHops) > 1 && s.totalHop >= 10 && s.totalPath <= 2
 	isLinkFlap := s.totalWith >= 5 && float64(s.totalAnn)/float64(s.totalWith) < 2.0
@@ -846,7 +840,7 @@ func (c *Classifier) GetASNMapping() *utils.ASNMapping {
 	return c.asnMapping
 }
 
-func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixState, anomType ClassificationType, now int64, ctx *MessageContext, leakDetail ...*LeakDetail) pendingEvent {
+func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixState, anomType ClassificationType, now int64, ctx *MessageContext, leakDetail ...*LeakDetail) PendingEvent {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.classificationStats[anomType]++
@@ -890,13 +884,13 @@ func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixS
 		}
 	}
 
-	return pendingEvent{
-		ip:                 c.prefixToIP(prefix),
-		prefix:             prefix,
-		asn:                originASN,
-		eventType:          ctx.EventType(),
-		classificationType: anomType,
-		leakDetail:         ld,
+	return PendingEvent{
+		IP:                 c.prefixToIP(prefix),
+		Prefix:             prefix,
+		ASN:                originASN,
+		EventType:          ctx.EventType(),
+		ClassificationType: anomType,
+		LeakDetail:         ld,
 	}
 }
 

@@ -190,7 +190,7 @@ func TestHijackDetection(t *testing.T) {
 			for _, ctx := range tt.updates {
 				wIdx := int(utils.HashUint32(p.prefixToIP(tt.prefix)) % uint32(len(p.workers)))
 				if e, ok := p.workers[wIdx].classifier.ClassifyEvent(tt.prefix, ctx); ok {
-					p.onEvent(0, 0, "US", "New York", e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
+					p.onEvent(0, 0, "US", "New York", e.EventType, e.ClassificationType, e.Prefix, e.ASN, e.LeakDetail)
 				}
 			}
 

@@ -201,9 +201,6 @@ type Engine struct {
 	CurrentSong      string
 	CurrentArtist    string
 	CurrentExtra     string
-	lastSong         string
-	lastArtist       string
-	lastExtra        string
 	songChangedAt    time.Time
 	songBuffer       *ebiten.Image
 	artistBuffer     *ebiten.Image
@@ -1354,7 +1351,7 @@ func (e *Engine) updatePrefixImpact(ev *bgpEvent) {
 	}
 }
 
-func (e *Engine) getBestLocation(prefix, cc, city string, asn uint32) string {
+func (e *Engine) getBestLocation(prefix, cc, city string) string {
 	if city != "" && cc != "" {
 		return fmt.Sprintf("%s, %s", city, cc)
 	}
@@ -1390,7 +1387,7 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 		}
 	}
 
-	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city, ev.asn)
+	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city)
 
 	// Check for duplicates across the entire visible stream
 	var existing *CriticalEvent
@@ -1445,7 +1442,7 @@ func (e *Engine) isSameEvent(ce *CriticalEvent, anomName string, asn uint32, org
 }
 
 func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bool {
-	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city, ev.asn)
+	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city)
 	needsUpdate := false
 	// Update locations
 	if newLoc != "" && !strings.Contains(ce.Locations, newLoc) {

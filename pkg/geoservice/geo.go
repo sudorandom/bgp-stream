@@ -744,7 +744,9 @@ func (g *GeoService) resolveFromCountryHubs(ip uint32, countryCode string) (lat,
 			for ck, coords := range g.cityCoords {
 				if ck.cc == countryCode && math.Abs(float64(coords[0])-h.Lat) < 0.01 && math.Abs(float64(coords[1])-h.Lng) < 0.01 {
 					// Title case the lowercase city name
-					cityName = strings.Title(ck.city)
+					if ck.city != "" {
+						cityName = strings.ToUpper(ck.city[:1]) + ck.city[1:]
+					}
 					break
 				}
 			}

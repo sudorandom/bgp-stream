@@ -25,8 +25,8 @@ func runClassificationTest(t *testing.T, name string, expect ClassificationType,
 		classify := func(prefix string, ctx *MessageContext) {
 			wIdx := int(utils.HashUint32(p.prefixToIP(prefix)) % uint32(len(p.workers)))
 			if e, ok := p.workers[wIdx].classifier.ClassifyEvent(prefix, ctx); ok {
-				if lat, lng, cc, city, _ := p.geo(e.ip); cc != "" {
-					p.onEvent(lat, lng, cc, city, e.eventType, e.classificationType, e.prefix, e.asn, e.leakDetail)
+				if lat, lng, cc, city, _ := p.geo(e.IP); cc != "" {
+					p.onEvent(lat, lng, cc, city, e.EventType, e.ClassificationType, e.Prefix, e.ASN, e.LeakDetail)
 				}
 			}
 		}
