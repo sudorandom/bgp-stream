@@ -45,6 +45,7 @@ func runClassificationTest(t *testing.T, name string, expect ClassificationType,
 	})
 }
 
+//nolint:gocognit // this is test code, so it's okay if it's a bit complex
 func TestClassification(t *testing.T) {
 	runClassificationTest(t, "Discovery (100 peers)", ClassificationDiscovery, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
 		for i := 0; i < 100; i++ {
@@ -122,7 +123,7 @@ func TestClassification(t *testing.T) {
 		}
 
 		// Mock a historical origin by sending a valid announcement first
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			classify(prefix, &MessageContext{
 				Peer: fmt.Sprintf("peer%d", i), Host: fmt.Sprintf("rrc%d", i%3),
 				OriginASN:      1234,
@@ -132,7 +133,7 @@ func TestClassification(t *testing.T) {
 		}
 
 		// Now send the DDoS mitigation announcements
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			host := fmt.Sprintf("rrc%d", i%3)
 			classify(prefix, &MessageContext{
 				Peer: fmt.Sprintf("peer%d", i+10), Host: host,
@@ -173,7 +174,8 @@ func TestClassification(t *testing.T) {
 				return 0
 			}
 			return binary.BigEndian.Uint32(ip.To4())
-		}, time.Now, func(lat, lng float64, cc, city string, eventType EventType, ct ClassificationType, prefix string, asn, historicalASN uint32, ld ...*LeakDetail) {})
+		}, time.Now, func(lat, lng float64, cc, city string, eventType EventType, ct ClassificationType, prefix string, asn, historicalASN uint32, ld ...*LeakDetail) {
+		})
 
 		now := time.Now()
 
@@ -181,7 +183,7 @@ func TestClassification(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			p.handleAnnouncements(p.workers[0], []RISAnnouncement{{Prefixes: []string{prefix}}}, &MessageContext{
 				Peer: fmt.Sprintf("p%d", i), Host: "h1", OriginASN: 13335, LastRpkiStatus: int32(utils.RPKIInvalidASN), Now: now.Add(time.Duration(i) * time.Second), LastOriginAsn: 1234,
-			}, now.Add(time.Duration(i) * time.Second), 13335)
+			}, now.Add(time.Duration(i)*time.Second), 13335)
 		}
 
 		// 2. Send another announcement for the same prefix - it should be re-emitted with LeakDetail
