@@ -494,7 +494,7 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 	}
 
 	totalW := summaryW + spacing + (trendBoxW + 20) + spacing + beaconW
-	baseX := float64(e.Width) - margin - totalW
+	baseX := float64(e.Width) - margin - totalW - 60
 	baseY := float64(e.Height) - margin - graphH - 10
 
 	summaryX := baseX

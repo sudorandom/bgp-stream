@@ -1548,7 +1548,26 @@ func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bo
 	}
 
 	// RETROACTIVE UPDATE: If we now have leak details that the previous entry lacked, update it
-	if ce.LeakType == LeakUnknown && ev.leakDetail != nil {
+	if ce.Anom == nameDDoSMitigation {
+		if ce.LeakerASN == 0 {
+			if ev.leakDetail != nil && ev.leakDetail.LeakerASN != 0 {
+				ce.LeakerASN = ev.leakDetail.LeakerASN
+				needsUpdate = true
+			} else if ev.asn != 0 {
+				ce.LeakerASN = ev.asn
+				needsUpdate = true
+			}
+		}
+		if ce.VictimASN == 0 {
+			if ev.leakDetail != nil && ev.leakDetail.VictimASN != 0 {
+				ce.VictimASN = ev.leakDetail.VictimASN
+				needsUpdate = true
+			} else if ev.historicalASN != 0 {
+				ce.VictimASN = ev.historicalASN
+				needsUpdate = true
+			}
+		}
+	} else if ce.LeakType == LeakUnknown && ev.leakDetail != nil {
 		ce.LeakType = ev.leakDetail.Type
 		ce.LeakerASN = ev.leakDetail.LeakerASN
 		ce.VictimASN = ev.leakDetail.VictimASN
@@ -1577,6 +1596,14 @@ func (e *Engine) addNewCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 		ce.LeakType = ev.leakDetail.Type
 		ce.LeakerASN = ev.leakDetail.LeakerASN
 		ce.VictimASN = ev.leakDetail.VictimASN
+	}
+	if ce.Anom == nameDDoSMitigation {
+		if ce.LeakerASN == 0 {
+			ce.LeakerASN = ev.asn
+		}
+		if ce.VictimASN == 0 {
+			ce.VictimASN = ev.historicalASN
+		}
 	}
 	e.updateCriticalEventCacheStrs(ce)
 	// Prepend to stream

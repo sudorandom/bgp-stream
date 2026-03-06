@@ -234,7 +234,7 @@ func (c *Classifier) ClassifyEvent(prefix string, ctx *MessageContext) (PendingE
 		} else if !isNormalAnomaly(ClassificationType(state.ClassifiedType)) {
 			// If it's a Normal anomaly, we still allow upgrade to Bad/Critical
 			var ld *LeakDetail
-			if state.LeakType != 0 {
+			if state.LeakType != 0 || ClassificationType(state.ClassifiedType) == ClassificationDDoSMitigation {
 				ld = &LeakDetail{
 					Type:      LeakType(state.LeakType),
 					LeakerASN: state.LeakerAsn,
@@ -963,15 +963,25 @@ func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixS
 		state.VictimAsn = ld.VictimASN
 	}
 
-	if anomType == ClassificationDDoSMitigation && state.VictimAsn == 0 {
-		state.VictimAsn = historicalOriginAsn
+	if anomType == ClassificationDDoSMitigation {
+		if state.VictimAsn == 0 {
+			state.VictimAsn = historicalOriginAsn
+		}
+		if state.LeakerAsn == 0 {
+			state.LeakerAsn = originASN
+		}
 		if ld == nil {
 			ld = &LeakDetail{
-				LeakerASN: originASN,
-				VictimASN: historicalOriginAsn,
+				LeakerASN: state.LeakerAsn,
+				VictimASN: state.VictimAsn,
 			}
-		} else if ld.LeakerASN == 0 {
-			ld.LeakerASN = originASN
+		} else {
+			if ld.LeakerASN == 0 {
+				ld.LeakerASN = state.LeakerAsn
+			}
+			if ld.VictimASN == 0 {
+				ld.VictimASN = state.VictimAsn
+			}
 		}
 	}
 
