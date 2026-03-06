@@ -88,7 +88,7 @@ func (e *Engine) drawAnomalySummary(screen *ebiten.Image, xBase, yBase, boxW, bo
 		vector.FillRect(e.impactBuffer, 0, 0, float32(scaledBoxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 		vector.StrokeRect(e.impactBuffer, 0, 0, float32(scaledBoxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-		impactTitle := "NETWORK SECURITY & STABILITY SUMMARY"
+		impactTitle := "BGP EVENT SUMMARY"
 		vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 		textOp := &text.DrawOptions{}
@@ -263,7 +263,7 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 		vector.FillRect(e.streamBuffer, 0, 0, float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 		vector.StrokeRect(e.streamBuffer, 0, 0, float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-		streamTitle := "CRITICAL EVENT STREAM (Real-time)"
+		streamTitle := "MAJOR EVENT STREAM (real-time)"
 		vector.FillRect(e.streamBuffer, 0, 0, 4, float32(fontSize+10), color.RGBA{255, 50, 50, 255}, false)
 
 		textOp := &text.DrawOptions{}
@@ -276,7 +276,7 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 			textOp.GeoM.Translate(localX+5, localY+5)
 			textOp.ColorScale.Reset()
 			textOp.ColorScale.Scale(1, 1, 1, 0.3)
-			text.Draw(e.streamBuffer, "Waiting for critical events...", e.subMonoFace, textOp)
+			text.Draw(e.streamBuffer, "Waiting for major events...", e.subMonoFace, textOp)
 		} else {
 			e.streamClipBuffer.Clear()
 			currentY := e.streamOffset
