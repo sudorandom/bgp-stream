@@ -1300,14 +1300,15 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		imgW := float64(e.pulseImage.Bounds().Dx())
 		imgToDraw := e.pulseImage
 
-		if p.Shape == ShapeFlare {
+		switch p.Shape {
+		case ShapeFlare:
 			imgW = float64(e.flareImage.Bounds().Dx())
 			imgToDraw = e.flareImage
 			maxRadiusMultiplier = 3.0
 			flareIntensity := math.Sin(progress * math.Pi)
 			flareIntensity = math.Pow(flareIntensity, 1.5) * 2.5
 			alpha = flareIntensity
-		} else if p.Shape == ShapeSquare {
+		case ShapeSquare:
 			imgW = float64(e.squareImage.Bounds().Dx())
 			imgToDraw = e.squareImage
 			// A square pulse can have similar radius expansion

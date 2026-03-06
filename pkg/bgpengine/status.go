@@ -166,9 +166,10 @@ func (e *Engine) drawAnomalySummaryContent(localX, localY, scaledBoxW, fontSize 
 		// Draw Swatch/Icon
 		mapCol, _, mapShape := e.getClassificationVisuals(pc.Type)
 		imgToDraw := e.pulseImage
-		if mapShape == ShapeFlare {
+		switch mapShape {
+		case ShapeFlare:
 			imgToDraw = e.flareImage
-		} else if mapShape == ShapeSquare {
+		case ShapeSquare:
 			imgToDraw = e.squareImage
 		}
 
