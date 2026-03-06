@@ -142,6 +142,8 @@ type prefixStats struct {
 	uniqueASNs                               map[uint32]bool
 	uniquePeers                              map[string]bool
 	uniqueHosts                              map[string]bool
+	withdrawnPeers                           map[string]bool
+	withdrawnHosts                           map[string]bool
 }
 
 type Classifier struct {
@@ -214,6 +216,20 @@ func (c *Classifier) ClassifyEvent(prefix string, ctx *MessageContext) (PendingE
 
 	if ctx.IsWithdrawal {
 		bucket.Withdrawals++
+		sessionKey := ctx.Host + ":" + ctx.Peer
+		if state.PeerLastAttrs == nil {
+			state.PeerLastAttrs = make(map[string]*bgpproto.LastAttrs)
+		}
+		if last, ok := state.PeerLastAttrs[sessionKey]; ok {
+			last.Withdrawn = true
+			last.LastUpdateTs = ctx.Now.Unix()
+		} else {
+			state.PeerLastAttrs[sessionKey] = &bgpproto.LastAttrs{
+				Withdrawn:    true,
+				LastUpdateTs: ctx.Now.Unix(),
+				Host:         ctx.Host,
+			}
+		}
 	} else {
 		// We always update peer attributes for consensus tracking
 		c.updateAnnouncementStats(state, bucket, ctx)
@@ -311,6 +327,7 @@ func (c *Classifier) updateAnnouncementStats(state *bgpproto.PrefixState, bucket
 		LocalPref:    ctx.LocalPref,
 		LastUpdateTs: ctx.Now.Unix(),
 		Host:         ctx.Host,
+		Withdrawn:    false,
 	}
 }
 
@@ -417,11 +434,13 @@ func (c *Classifier) aggregateRecentBuckets(state *bgpproto.PrefixState, now tim
 
 	cutoff := now.Add(-10 * time.Minute).Unix()
 	s := prefixStats{
-		earliestTS:  now.Unix(),
-		uniqueHops:  make(map[string]bool),
-		uniqueASNs:  make(map[uint32]bool),
-		uniquePeers: make(map[string]bool),
-		uniqueHosts: make(map[string]bool),
+		earliestTS:     now.Unix(),
+		uniqueHops:     make(map[string]bool),
+		uniqueASNs:     make(map[uint32]bool),
+		uniquePeers:    make(map[string]bool),
+		uniqueHosts:    make(map[string]bool),
+		withdrawnPeers: make(map[string]bool),
+		withdrawnHosts: make(map[string]bool),
 	}
 
 	for ts, b := range state.Buckets {
@@ -451,11 +470,19 @@ func (c *Classifier) aggregateRecentBuckets(state *bgpproto.PrefixState, now tim
 		if attr.OriginAsn != 0 {
 			s.uniqueASNs[attr.OriginAsn] = true
 		}
-		// Only count peers and hosts that are currently seeing the same origin ASN
-		if attr.OriginAsn == currentOriginASN {
-			s.uniquePeers[peer] = true
+		// Count withdrawn peers/hosts (regardless of origin ASN)
+		if attr.Withdrawn {
+			s.withdrawnPeers[peer] = true
 			if attr.Host != "" {
-				s.uniqueHosts[attr.Host] = true
+				s.withdrawnHosts[attr.Host] = true
+			}
+		} else {
+			// Only count active peers and hosts that are currently seeing the same origin ASN
+			if attr.OriginAsn == currentOriginASN {
+				s.uniquePeers[peer] = true
+				if attr.Host != "" {
+					s.uniqueHosts[attr.Host] = true
+				}
 			}
 		}
 	}
@@ -493,12 +520,28 @@ func (c *Classifier) getHistoricalASN(prefix string) uint32 {
 }
 
 func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
-	if s.totalWith >= 3 && s.totalAnn == 0 && elapsed > 60 {
-		return ClassificationOutage, nil, true
-	}
-
 	peerCount := len(s.uniquePeers)
 	hostCount := len(s.uniqueHosts)
+	withdrawnPeerCount := len(s.withdrawnPeers)
+	withdrawnHostCount := len(s.withdrawnHosts)
+	totalKnownPeers := peerCount + withdrawnPeerCount
+
+	// Outage heuristic based on host diversity and total peers tracking the prefix
+	if s.totalAnn == 0 && elapsed > 60 {
+		if totalKnownPeers > 0 {
+			if totalKnownPeers <= 2 {
+				// For very small prefixes, require all known peers to be withdrawn
+				if withdrawnPeerCount >= totalKnownPeers {
+					return ClassificationOutage, nil, true
+				}
+			} else {
+				// For larger prefixes, require multiple withdrawals and host diversity
+				if withdrawnPeerCount >= 3 && withdrawnHostCount >= 2 {
+					return ClassificationOutage, nil, true
+				}
+			}
+		}
+	}
 
 	// 1. Hijack Detection (RPKI Signal)
 	if anom, ld, ok := c.detectHijack(prefix, peerCount, hostCount, ctx); ok {
