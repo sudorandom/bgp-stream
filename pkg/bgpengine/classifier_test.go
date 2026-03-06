@@ -103,7 +103,12 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 	now := time.Now()
 
 	t.Run("Outage Detection", func(t *testing.T) {
-		s := &prefixStats{totalWith: 30, totalAnn: 0}
+		s := &prefixStats{
+			totalWith:      30,
+			totalAnn:       0,
+			withdrawnPeers: map[string]bool{"p1": true, "p2": true, "p3": true},
+			withdrawnHosts: map[string]bool{"h1": true, "h2": true},
+		}
 		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, &MessageContext{Now: now})
 		if !ok || et != ClassificationOutage {
 			t.Errorf("findCriticalAnomaly() expected Outage, got %v, %v", et, ok)

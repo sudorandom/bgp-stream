@@ -48,6 +48,8 @@ message LastAttrs {
     int64 last_update_ts = 9;
     // Identity of the collector host (RRC) that received the update
     string host = 10;
+    // Flag indicating if the route was withdrawn by this peer
+    bool withdrawn = 11;
 }
 
 message PrefixState {

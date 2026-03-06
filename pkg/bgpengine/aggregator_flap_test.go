@@ -6,14 +6,15 @@ import (
 	"time"
 )
 
+const testPrefix = "1.2.3.0/24"
+
 func TestAggregatorFlap_MultiHost(t *testing.T) {
 	// This test verifies that different aggregator values from different hosts
 	// for the same peer IP do NOT trigger an aggregator flap.
-	
+
 	runClassificationTest(t, "Aggregator Flap (Multi-Host False Positive)", ClassificationNone, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		prefix := "1.2.3.0/24"
 		peerIP := "10.0.0.1"
-		
+
 		for i := 0; i < 20; i++ {
 			host := "rrc00"
 			agg := "65001:1.1.1.1"
@@ -21,8 +22,8 @@ func TestAggregatorFlap_MultiHost(t *testing.T) {
 				host = "rrc01"
 				agg = "65002:2.2.2.2"
 			}
-			
-			classify(prefix, &MessageContext{
+
+			classify(testPrefix, &MessageContext{
 				Peer:       peerIP,
 				Host:       host,
 				Aggregator: agg,
@@ -36,15 +37,14 @@ func TestAggregatorFlap_MultiHost(t *testing.T) {
 func TestAggregatorFlap_SingleHost(t *testing.T) {
 	// This test verifies that different aggregator values from the SAME host
 	// and same peer IP DO trigger an aggregator flap.
-	
+
 	runClassificationTest(t, "Aggregator Flap (Single-Host Real Flap)", ClassificationAggFlap, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		prefix := "1.2.3.0/24"
 		peerIP := "10.0.0.1"
 		host := "rrc00"
-		
+
 		for i := 0; i < 20; i++ {
 			agg := fmt.Sprintf("65001:%d.%d.%d.%d", i, i, i, i)
-			classify(prefix, &MessageContext{
+			classify(testPrefix, &MessageContext{
 				Peer:       peerIP,
 				Host:       host,
 				Aggregator: agg,

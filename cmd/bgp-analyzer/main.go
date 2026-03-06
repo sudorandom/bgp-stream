@@ -466,7 +466,7 @@ func handlePrefix(localClassifier, masterClassifier *bgpengine.Classifier, prefi
 
 		if oldType != newType {
 			// Record the classification in the master classifier for the summary
-			masterClassifier.RecordClassification(prefix, state, newType, ctx.Now.Unix(), ctx, ev.LeakDetail)
+			masterClassifier.RecordClassification(prefix, state, newType, ctx.Now.Unix(), ctx, ev.HistoricalASN, ev.LeakDetail)
 
 			csvMu.Lock()
 			_ = writer.Write([]string{
