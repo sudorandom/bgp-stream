@@ -106,8 +106,8 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 		s := &prefixStats{
 			totalWith:      30,
 			totalAnn:       0,
-			withdrawnPeers: map[string]bool{"p1": true, "p2": true, "p3": true},
-			withdrawnHosts: map[string]bool{"h1": true, "h2": true},
+			withdrawnPeers: map[string]bool{"p1": true, "p2": true, "p3": true, "p4": true, "p5": true, "p6": true, "p7": true, "p8": true, "p9": true, "p10": true},
+			withdrawnHosts: map[string]bool{"h1": true, "h2": true, "h3": true},
 		}
 		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, &MessageContext{Now: now})
 		if !ok || et != ClassificationOutage {

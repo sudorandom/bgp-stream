@@ -76,14 +76,11 @@ func TestClassification(t *testing.T) {
 	})
 
 	runClassificationTest(t, "Outage", ClassificationOutage, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {
-		for i := 0; i < 3; i++ {
+		for i := 0; i < 10; i++ {
 			classify("4.4.4.0/24", &MessageContext{
-				Peer: "peer1", IsWithdrawal: true, Now: now.Add(time.Duration(i*50) * time.Second),
+				Peer: fmt.Sprintf("peer%d", i), Host: fmt.Sprintf("h%d", i%3), IsWithdrawal: true, Now: now.Add(time.Duration(i*50) * time.Second),
 			})
 		}
-		classify("4.4.4.0/24", &MessageContext{
-			Peer: "peer1", IsWithdrawal: true, Now: now.Add(150 * time.Second),
-		})
 	})
 
 	runClassificationTest(t, "Route Leak", ClassificationRouteLeak, func(p *BGPProcessor, now time.Time, classify func(string, *MessageContext)) {

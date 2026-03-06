@@ -27,8 +27,16 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	}
 	e.recordToCriticalStream(ev1, c, name)
 
+	if len(e.criticalQueue) != 1 {
+		t.Fatalf("Expected 1 event in queue, got %d", len(e.criticalQueue))
+	}
+
+	// Wait 1s and update
+	e.lastCriticalAddedAt = time.Now().Add(-2 * time.Second)
+	e.updateCriticalStream()
+
 	if len(e.CriticalStream) != 1 {
-		t.Fatalf("Expected 1 event, got %d", len(e.CriticalStream))
+		t.Fatalf("Expected 1 event in stream, got %d", len(e.CriticalStream))
 	}
 
 	// Event 2: Same outage (same ASN), different prefix 1.1.2.0/24
@@ -44,21 +52,22 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 		t.Errorf("Expected 1 event after deduplication, got %d", len(e.CriticalStream))
 	}
 
-	// Event 3: Outage with ASN 0 (unknown), prefix 2.2.1.0/24
+	// Event 3: Outage with ASN 5678, prefix 2.2.1.0/24
 	ev3 := &bgpEvent{
 		classificationType: ClassificationOutage,
 		prefix:             "2.2.1.0/24",
-		asn:                0,
-		historicalASN:      5678,
+		asn:                5678,
 		cc:                 "FR",
 	}
 	e.recordToCriticalStream(ev3, c, name)
+	e.lastCriticalAddedAt = time.Now().Add(-2 * time.Second)
+	e.updateCriticalStream()
+
 	if len(e.CriticalStream) != 2 {
 		t.Fatalf("Expected 2 events, got %d", len(e.CriticalStream))
 	}
 
-	// Event 4: Same outage (ASN 0), but another prefix 2.2.2.0/24, same historical ASN
-	// This should now be deduplicated if we use historicalASN
+	// Event 4: Outage with ASN 0 (unknown) - should be ignored now
 	ev4 := &bgpEvent{
 		classificationType: ClassificationOutage,
 		prefix:             "2.2.2.0/24",
@@ -69,7 +78,7 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	e.recordToCriticalStream(ev4, c, name)
 
 	if len(e.CriticalStream) != 2 {
-		t.Errorf("Expected 2 events after deduplication of ASN 0 outage, got %d", len(e.CriticalStream))
+		t.Errorf("Expected 2 events (ASN 0 ignored), got %d", len(e.CriticalStream))
 	}
 
 	// Event 5: DDoS Mitigation, Provider 13335, Victim 9999, Prefix 3.3.1.0/24
@@ -86,6 +95,9 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 		},
 	}
 	e.recordToCriticalStream(ev5, c, nameDDoS)
+	e.lastCriticalAddedAt = time.Now().Add(-2 * time.Second)
+	e.updateCriticalStream()
+
 	if len(e.CriticalStream) != 3 {
 		t.Fatalf("Expected 3 events, got %d", len(e.CriticalStream))
 	}
@@ -106,6 +118,27 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	e.recordToCriticalStream(ev6, c, nameDDoS)
 	if len(e.CriticalStream) != 3 {
 		t.Errorf("Expected 3 events after deduplication of DDoS mitigation, got %d", len(e.CriticalStream))
+	}
+
+	// Verify both prefixes are in the DDoS event
+	var ddosEvent *CriticalEvent
+	for _, ce := range e.CriticalStream {
+		if ce.Anom == nameDDoSMitigation {
+			ddosEvent = ce
+			break
+		}
+	}
+	if ddosEvent == nil {
+		t.Fatal("DDoS event not found in stream")
+	}
+	if len(ddosEvent.ImpactedPrefixes) != 2 {
+		t.Errorf("Expected 2 prefixes in DDoS event, got %d", len(ddosEvent.ImpactedPrefixes))
+	}
+	if _, ok := ddosEvent.ImpactedPrefixes["3.3.1.0/24"]; !ok {
+		t.Error("Prefix 3.3.1.0/24 not found in DDoS event")
+	}
+	if _, ok := ddosEvent.ImpactedPrefixes["3.3.2.0/24"]; !ok {
+		t.Error("Prefix 3.3.2.0/24 not found in DDoS event")
 	}
 }
 
@@ -138,8 +171,12 @@ func TestCriticalStreamExpiration(t *testing.T) {
 	}
 	e.recordToCriticalStream(ev1, c, name)
 
+	// Move from queue to stream (need to wait 1s in virtual time)
+	e.virtualTime = startTime.Add(2 * time.Second)
+	e.updateCriticalStream()
+
 	if len(e.CriticalStream) != 1 {
-		t.Fatalf("Expected 1 event at T=0, got %d", len(e.CriticalStream))
+		t.Fatalf("Expected 1 event in stream at T=2s, got %d", len(e.CriticalStream))
 	}
 
 	// T=5m: Duplicate event arrives

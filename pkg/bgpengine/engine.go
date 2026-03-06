@@ -147,12 +147,19 @@ type CriticalEvent struct {
 	CachedTypeLabel   string
 	CachedTypeWidth   float64
 	CachedFirstLine   string
-	CachedLeakerStr   string
-	CachedVictimStr   string
-	CachedASNStr      string
-	CachedNetworksStr string
-	CachedLocationStr string
-	CachedImpactStr   string
+
+	CachedLeakerLabel string
+	CachedLeakerVal   string
+	CachedVictimLabel string
+	CachedVictimVal   string
+	CachedASNLabel    string
+	CachedASNVal      string
+	CachedNetLabel    string
+	CachedNetVal      string
+	CachedLocLabel    string
+	CachedLocVal      string
+
+	CachedImpactStr string
 }
 
 type Engine struct {
@@ -191,6 +198,7 @@ type Engine struct {
 	windowLinkFlap, windowAggFlap, windowOscill          int64
 	windowHunting, windowTE, windowNextHop, windowOutage int64
 	windowLeak, windowGlobal, windowDDoS                 int64
+	windowHoneypot, windowResearch, windowSecurity       int64
 
 	rateNew, rateUpd, rateWith, rateGossip float64
 	rateNote, ratePeer, rateOpen           float64
@@ -212,6 +220,7 @@ type Engine struct {
 	extraBuffer      *ebiten.Image
 	impactBuffer     *ebiten.Image
 	streamBuffer     *ebiten.Image
+	streamClipBuffer *ebiten.Image
 	trendLinesBuffer *ebiten.Image
 	trendClipBuffer  *ebiten.Image
 	nowPlayingBuffer *ebiten.Image
@@ -243,6 +252,9 @@ type Engine struct {
 	ActiveImpacts          []*VisualImpact
 	ActiveASNImpacts       []*ASNImpact
 	CriticalStream         []*CriticalEvent
+	criticalQueue          []*CriticalEvent
+	lastCriticalAddedAt    time.Time
+	streamOffset           float64
 	streamDirty            bool
 	impactDirty            bool
 	criticalCooldown       map[string]time.Time
@@ -393,7 +405,7 @@ type VisualImpact struct {
 
 type MetricSnapshot struct {
 	New, Upd, With, Gossip, Note, Peer, Open int
-	Beacon                                   int
+	Beacon, Honeypot, Research, Security     int
 
 	LinkFlap, AggFlap, Oscill               int
 	Hunting, TE, NextHop, Outage            int
@@ -1084,6 +1096,7 @@ func (e *Engine) Update() error {
 	e.updateVisualQueue()
 	e.updateInput()
 	e.updateMetrics()
+	e.updateCriticalStream()
 	e.updateActivePulses()
 	return nil
 }
@@ -1204,7 +1217,7 @@ func (e *Engine) updateBeaconPercent() {
 	for i := hLen - window; i < hLen; i++ {
 		s := e.history[i]
 		sumTotal += s.New + s.Upd + s.With + s.Gossip
-		sumBeacon += s.Beacon
+		sumBeacon += s.Beacon + s.Honeypot + s.Research + s.Security
 	}
 
 	targetPercent := 0.0
@@ -1457,8 +1470,13 @@ func (e *Engine) isIgnoredDDoS(ev *bgpEvent) bool {
 }
 
 func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string) {
-	// Filter out ASN 0 for outages only if we ALSO don't have a historical ASN
-	if ev.classificationType == ClassificationOutage && ev.asn == 0 && ev.historicalASN == 0 {
+	// Filter out ASN 0 for outages as requested
+	if ev.classificationType == ClassificationOutage && ev.asn == 0 {
+		return
+	}
+
+	// Filter out excluded ASN categories
+	if utils.IsExcludedASN(ev.asn) {
 		return
 	}
 
@@ -1496,6 +1514,17 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 		}
 	}
 
+	// Also check for duplicates in the pending queue
+	for _, ce := range e.criticalQueue {
+		if e.isSameEvent(ce, ev, name, orgID) {
+			// If we found an existing event, update it in place
+			if e.updateExistingCriticalEvent(ce, ev) {
+				e.updateCriticalEventCacheStrs(ce)
+			}
+			return
+		}
+	}
+
 	// Only add a new event if it's not on a per-prefix cooldown
 	// Substantial cooldown: 10 minutes
 	if lastTime, ok := e.criticalCooldown[ev.prefix]; ok && now.Sub(lastTime) < 10*time.Minute {
@@ -1503,10 +1532,8 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 	}
 
 	e.criticalCooldown[ev.prefix] = now
-	if len(e.CriticalStream) == 0 {
-		e.streamUpdatedAt = now
-	}
-	e.addNewCriticalEvent(ev, c, name, asnStr, orgID, newLoc, now)
+	ce := e.createCriticalEvent(ev, c, name, asnStr, orgID, newLoc, now)
+	e.criticalQueue = append(e.criticalQueue, ce)
 }
 
 func (e *Engine) isSameEvent(ce *CriticalEvent, ev *bgpEvent, name, orgID string) bool {
@@ -1611,7 +1638,7 @@ func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bo
 	return needsUpdate
 }
 
-func (e *Engine) addNewCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, orgID, newLoc string, now time.Time) {
+func (e *Engine) createCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, orgID, newLoc string, now time.Time) *CriticalEvent {
 	asnToUse := ev.asn
 	if asnToUse == 0 {
 		asnToUse = ev.historicalASN
@@ -1645,12 +1672,48 @@ func (e *Engine) addNewCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 		}
 	}
 	e.updateCriticalEventCacheStrs(ce)
-	// Prepend to stream
-	e.CriticalStream = append([]*CriticalEvent{ce}, e.CriticalStream...)
-	e.streamDirty = true
-	// Limit size
-	if len(e.CriticalStream) > 20 {
-		e.CriticalStream = e.CriticalStream[:20]
+	return ce
+}
+
+func (e *Engine) updateCriticalStream() {
+	now := e.Now()
+
+	// 1. Animate offset towards 0
+	if math.Abs(e.streamOffset) > 0.1 {
+		e.streamOffset *= 0.85
+		e.streamDirty = true
+	} else if e.streamOffset != 0 {
+		e.streamOffset = 0
+		e.streamDirty = true
+	}
+
+	// 2. Handle queue with 1 second gap
+	if len(e.criticalQueue) > 0 && now.Sub(e.lastCriticalAddedAt) >= 1*time.Second {
+		ce := e.criticalQueue[0]
+		e.criticalQueue = e.criticalQueue[1:]
+
+		// Calculate height for animation
+		boxW := 280.0
+		fontSize := 18.0
+		if e.Width > 2000 {
+			boxW = 560.0
+			fontSize = 36.0
+		}
+		height := e.calculateEventHeight(ce, boxW*1.1, fontSize)
+		totalSpace := height + 25.0 // height + spacer
+
+		// Shift down existing items by setting negative offset
+		e.streamOffset -= totalSpace
+
+		// Prepend to stream
+		e.CriticalStream = append([]*CriticalEvent{ce}, e.CriticalStream...)
+		e.lastCriticalAddedAt = now
+		e.streamDirty = true
+
+		// Limit size
+		if len(e.CriticalStream) > 20 {
+			e.CriticalStream = e.CriticalStream[:20]
+		}
 	}
 }
 
@@ -1660,12 +1723,13 @@ func (e *Engine) updateCriticalEventCacheStrs(ce *CriticalEvent) {
 		ce.CachedTypeWidth, _ = text.Measure(ce.CachedTypeLabel, e.subMonoFace, 0)
 	}
 
-	if ce.Anom == nameHardOutage || ce.Anom == nameDDoSMitigation {
+	if ce.Anom == nameHardOutage || ce.Anom == nameDDoSMitigation || ce.Anom == nameRouteLeak {
 		ce.CachedFirstLine = fmt.Sprintf(" %s IPs Impacted", utils.FormatNumber(ce.ImpactedIPs))
 		if ce.Anom == nameHardOutage {
 			e.cacheOutageStrings(ce)
-		} else if ce.LeakerASN != 0 {
+		} else {
 			e.cacheLeakStrings(ce)
+			e.cacheOutageStrings(ce) // Now also used for Networks line in Leaks/DDoS
 		}
 	} else {
 		ce.CachedFirstLine = ce.ASNStr
@@ -1690,31 +1754,33 @@ func (e *Engine) cacheLeakStrings(ce *CriticalEvent) {
 		leakerLabel = "  Provider: "
 		victimLabel = "  Impacted: "
 	}
+	ce.CachedLeakerLabel = leakerLabel
+	ce.CachedVictimLabel = victimLabel
 
-	leakerStr := fmt.Sprintf("%sAS%d", leakerLabel, ce.LeakerASN)
+	leakerVal := fmt.Sprintf("AS%d", ce.LeakerASN)
 	if e.asnMapping != nil {
 		if n := e.asnMapping.GetName(ce.LeakerASN); n != "" {
-			leakerStr += " - " + n
+			leakerVal += " - " + n
 		}
 	}
-	ce.CachedLeakerStr = leakerStr
+	ce.CachedLeakerVal = leakerVal
 
-	victimStr := victimLabel + "Unknown"
+	victimVal := "Unknown"
 	if ce.VictimASN != 0 {
-		victimStr = fmt.Sprintf("%sAS%d", victimLabel, ce.VictimASN)
+		victimVal = fmt.Sprintf("AS%d", ce.VictimASN)
 		if e.asnMapping != nil {
 			if n := e.asnMapping.GetName(ce.VictimASN); n != "" {
-				victimStr += " - " + n
+				victimVal += " - " + n
 			}
 		}
 	}
-	ce.CachedVictimStr = victimStr
+	ce.CachedVictimVal = victimVal
 }
 
 func (e *Engine) cacheOutageStrings(ce *CriticalEvent) {
 	// Impacted ASN line
-	asnStr := "  Impacted: " + ce.ASNStr
-	ce.CachedASNStr = asnStr
+	ce.CachedASNLabel = "  Impacted: "
+	ce.CachedASNVal = ce.ASNStr
 
 	// Networks line
 	networks := make([]string, 0, len(ce.ImpactedPrefixes))
@@ -1731,19 +1797,21 @@ func (e *Engine) cacheOutageStrings(ce *CriticalEvent) {
 		moreCount = len(networks) - maxShow
 	}
 
-	netStr := "  Networks: " + strings.Join(displayNets, ", ")
+	ce.CachedNetLabel = "  Networks: "
+	netVal := strings.Join(displayNets, ", ")
 	if moreCount > 0 {
-		netStr += fmt.Sprintf(", (%d more)", moreCount)
+		netVal += fmt.Sprintf(", (%d more)", moreCount)
 	}
-	ce.CachedNetworksStr = netStr
+	ce.CachedNetVal = netVal
 
 	// Locations line
+	ce.CachedLocLabel = "  Location: "
 	locs := strings.Split(ce.Locations, " | ")
 	if len(locs) <= 2 {
-		ce.CachedLocationStr = "  Location: " + ce.Locations
+		ce.CachedLocVal = ce.Locations
 	} else {
 		displayLocs := locs[:2]
-		ce.CachedLocationStr = fmt.Sprintf("  Location: %s | %s (%d more)", displayLocs[0], displayLocs[1], len(locs)-2)
+		ce.CachedLocVal = fmt.Sprintf("%s | %s (%d more)", displayLocs[0], displayLocs[1], len(locs)-2)
 	}
 }
 
@@ -1913,6 +1981,17 @@ func (e *Engine) getClassificationUIColor(name string) color.RGBA {
 }
 
 func (e *Engine) updateWindowedMetrics(eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+	if cat, ok := utils.GetExcludedASNCategory(asn); ok {
+		switch cat {
+		case "DoD Honeypot":
+			e.windowHoneypot++
+		case "BGP Research":
+			e.windowResearch++
+		case "Security Scanner":
+			e.windowSecurity++
+		}
+	}
+
 	switch classificationType {
 	case ClassificationLinkFlap:
 		e.windowLinkFlap++
