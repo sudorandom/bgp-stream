@@ -105,128 +105,7 @@ func (e *Engine) drawAnomalySummary(screen *ebiten.Image, xBase, yBase, boxW, bo
 			textOp.ColorScale.Scale(1, 1, 1, 0.3)
 			text.Draw(e.impactBuffer, "Crunching the numbers, please wait...", e.subMonoFace, textOp)
 		} else {
-			currentY := localY + 5.0
-			// Layout: [ICON] [ANOMALY NAME] [RATE] [ASNS] [PFXS]
-			col1X := localX + 5.0 + (fontSize * 1.2)
-			col4X := localX + scaledBoxW - 40.0
-			col3X := col4X - 60.0
-			col2X := col3X - 80.0
-
-			if e.Width > 2000 {
-				col4X = localX + scaledBoxW - 80.0
-				col3X = col4X - 120.0
-				col2X = col3X - 160.0
-			}
-
-			textOp.ColorScale.Reset()
-			textOp.ColorScale.Scale(1, 1, 1, 0.4)
-
-			// Headers
-			textOp.GeoM.Reset()
-			textOp.GeoM.Translate(col1X, currentY)
-			text.Draw(e.impactBuffer, "TYPE", e.subMonoFace, textOp)
-
-			hRate := "MSG/s"
-			hwRate, _ := text.Measure(hRate, e.subMonoFace, 0)
-			textOp.GeoM.Reset()
-			textOp.GeoM.Translate(col2X-hwRate/2, currentY)
-			text.Draw(e.impactBuffer, hRate, e.subMonoFace, textOp)
-
-			h1 := "ASNS"
-			hw1, _ := text.Measure(h1, e.subMonoFace, 0)
-			textOp.GeoM.Reset()
-			textOp.GeoM.Translate(col3X-hw1/2, currentY)
-			text.Draw(e.impactBuffer, h1, e.subMonoFace, textOp)
-
-			h2 := "PFXS"
-			hw2, _ := text.Measure(h2, e.subMonoFace, 0)
-			textOp.GeoM.Reset()
-			textOp.GeoM.Translate(col4X-hw2/2, currentY)
-			text.Draw(e.impactBuffer, h2, e.subMonoFace, textOp)
-
-			currentY += fontSize * 1.1
-
-			for i := range e.prefixCounts {
-				pc := &e.prefixCounts[i]
-
-				// Draw Swatch/Icon
-				mapCol, _ := e.getClassificationVisuals(pc.Type)
-				imgToDraw := e.pulseImage
-				if pc.Name == nameRouteLeak {
-					imgToDraw = e.flareImage
-				}
-
-				swatchSize := fontSize * 0.8
-				cr, cg, cb := float32(mapCol.R)/255.0, float32(mapCol.G)/255.0, float32(mapCol.B)/255.0
-				baseAlpha := float32(0.6)
-				if pc.Name == nameRouteLeak {
-					baseAlpha = 1.0
-				}
-				if pc.Count == 0 {
-					baseAlpha *= 0.3
-				}
-
-				imgWidth := float64(imgToDraw.Bounds().Dx())
-				halfWidth := imgWidth / 2
-				op := &ebiten.DrawImageOptions{}
-				op.Blend = ebiten.BlendLighter
-				scale := swatchSize / imgWidth
-				op.GeoM.Translate(-halfWidth, -halfWidth)
-				op.GeoM.Scale(scale, scale)
-				op.GeoM.Translate(localX+5+(swatchSize/2), currentY+(fontSize/2))
-				op.ColorScale.Scale(cr*baseAlpha, cg*baseAlpha, cb*baseAlpha, baseAlpha)
-				e.impactBuffer.DrawImage(imgToDraw, op)
-
-				// Anomaly Name
-				textOp.GeoM.Reset()
-				textOp.GeoM.Translate(col1X, currentY)
-				textOp.ColorScale.Reset()
-				if pc.Count > 0 {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-				} else {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-					textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1) // Much more faded
-				}
-				text.Draw(e.impactBuffer, pc.Name, e.subMonoFace, textOp)
-
-				// Rate
-				textOp.GeoM.Reset()
-				textOp.GeoM.Translate(col2X-pc.RateWidth/2, currentY)
-				textOp.ColorScale.Reset()
-				if pc.Count > 0 {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-				} else {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-					textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1)
-				}
-				text.Draw(e.impactBuffer, pc.RateStr, e.subMonoFace, textOp)
-
-				// ASN Count
-				textOp.GeoM.Reset()
-				textOp.GeoM.Translate(col3X-pc.ASNWidth/2, currentY)
-				textOp.ColorScale.Reset()
-				if pc.Count > 0 {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-				} else {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-					textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1)
-				}
-				text.Draw(e.impactBuffer, pc.ASNStr, e.subMonoFace, textOp)
-
-				// Prefix Count
-				textOp.GeoM.Reset()
-				textOp.GeoM.Translate(col4X-pc.CountWidth/2, currentY)
-				textOp.ColorScale.Reset()
-				if pc.Count > 0 {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-				} else {
-					textOp.ColorScale.ScaleWithColor(pc.Color)
-					textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1)
-				}
-				text.Draw(e.impactBuffer, pc.CountStr, e.subMonoFace, textOp)
-
-				currentY += fontSize * 1.0
-			}
+			e.drawAnomalySummaryContent(localX, localY, scaledBoxW, fontSize, textOp)
 		}
 		e.impactDirty = false
 	}
@@ -239,6 +118,131 @@ func (e *Engine) drawAnomalySummary(screen *ebiten.Image, xBase, yBase, boxW, bo
 	}
 
 	e.drawGlitchImage(screen, e.impactBuffer, xBase-10, yBase-fontSize-15, intensity, isGlitching)
+}
+
+func (e *Engine) drawAnomalySummaryContent(localX, localY, scaledBoxW, fontSize float64, textOp *text.DrawOptions) {
+	currentY := localY + 5.0
+	// Layout: [ICON] [ANOMALY NAME] [RATE] [ASNS] [PFXS]
+	col1X := localX + 5.0 + (fontSize * 1.2)
+	col4X := localX + scaledBoxW - 40.0
+	col3X := col4X - 60.0
+	col2X := col3X - 80.0
+
+	if e.Width > 2000 {
+		col4X = localX + scaledBoxW - 80.0
+		col3X = col4X - 120.0
+		col2X = col3X - 160.0
+	}
+
+	textOp.ColorScale.Reset()
+	textOp.ColorScale.Scale(1, 1, 1, 0.4)
+
+	// Headers
+	textOp.GeoM.Reset()
+	textOp.GeoM.Translate(col1X, currentY)
+	text.Draw(e.impactBuffer, "TYPE", e.subMonoFace, textOp)
+
+	hRate := "MSG/s"
+	hwRate, _ := text.Measure(hRate, e.subMonoFace, 0)
+	textOp.GeoM.Reset()
+	textOp.GeoM.Translate(col2X-hwRate/2, currentY)
+	text.Draw(e.impactBuffer, hRate, e.subMonoFace, textOp)
+
+	h1 := "ASNS"
+	hw1, _ := text.Measure(h1, e.subMonoFace, 0)
+	textOp.GeoM.Reset()
+	textOp.GeoM.Translate(col3X-hw1/2, currentY)
+	text.Draw(e.impactBuffer, h1, e.subMonoFace, textOp)
+
+	h2 := "PFXS"
+	hw2, _ := text.Measure(h2, e.subMonoFace, 0)
+	textOp.GeoM.Reset()
+	textOp.GeoM.Translate(col4X-hw2/2, currentY)
+	text.Draw(e.impactBuffer, h2, e.subMonoFace, textOp)
+
+	currentY += fontSize * 1.1
+
+	for i := range e.prefixCounts {
+		pc := &e.prefixCounts[i]
+
+		// Draw Swatch/Icon
+		mapCol, _ := e.getClassificationVisuals(pc.Type)
+		imgToDraw := e.pulseImage
+		if pc.Name == nameRouteLeak {
+			imgToDraw = e.flareImage
+		}
+
+		swatchSize := fontSize * 0.8
+		cr, cg, cb := float32(mapCol.R)/255.0, float32(mapCol.G)/255.0, float32(mapCol.B)/255.0
+		baseAlpha := float32(0.6)
+		if pc.Name == nameRouteLeak {
+			baseAlpha = 1.0
+		}
+		if pc.Count == 0 {
+			baseAlpha *= 0.3
+		}
+
+		imgWidth := float64(imgToDraw.Bounds().Dx())
+		halfWidth := imgWidth / 2
+		op := &ebiten.DrawImageOptions{}
+		op.Blend = ebiten.BlendLighter
+		scale := swatchSize / imgWidth
+		op.GeoM.Translate(-halfWidth, -halfWidth)
+		op.GeoM.Scale(scale, scale)
+		op.GeoM.Translate(localX+5+(swatchSize/2), currentY+(fontSize/2))
+		op.ColorScale.Scale(cr*baseAlpha, cg*baseAlpha, cb*baseAlpha, baseAlpha)
+		e.impactBuffer.DrawImage(imgToDraw, op)
+
+		// Anomaly Name
+		textOp.GeoM.Reset()
+		textOp.GeoM.Translate(col1X, currentY)
+		textOp.ColorScale.Reset()
+		if pc.Count > 0 {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+		} else {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+			textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1) // Much more faded
+		}
+		text.Draw(e.impactBuffer, pc.Name, e.subMonoFace, textOp)
+
+		// Rate
+		textOp.GeoM.Reset()
+		textOp.GeoM.Translate(col2X-pc.RateWidth/2, currentY)
+		textOp.ColorScale.Reset()
+		if pc.Count > 0 {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+		} else {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+			textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1)
+		}
+		text.Draw(e.impactBuffer, pc.RateStr, e.subMonoFace, textOp)
+
+		// ASN Count
+		textOp.GeoM.Reset()
+		textOp.GeoM.Translate(col3X-pc.ASNWidth/2, currentY)
+		textOp.ColorScale.Reset()
+		if pc.Count > 0 {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+		} else {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+			textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1)
+		}
+		text.Draw(e.impactBuffer, pc.ASNStr, e.subMonoFace, textOp)
+
+		// Prefix Count
+		textOp.GeoM.Reset()
+		textOp.GeoM.Translate(col4X-pc.CountWidth/2, currentY)
+		textOp.ColorScale.Reset()
+		if pc.Count > 0 {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+		} else {
+			textOp.ColorScale.ScaleWithColor(pc.Color)
+			textOp.ColorScale.Scale(0.5, 0.5, 0.5, 0.1)
+		}
+		text.Draw(e.impactBuffer, pc.CountStr, e.subMonoFace, textOp)
+
+		currentY += fontSize * 1.0
+	}
 }
 
 func (e *Engine) calculateStreamBoxHeight(fontSize, maxHeight float64) float64 {
@@ -338,21 +342,24 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, boxH, fontSize
 	textOp.ColorScale.Scale(1, 1, 0, 0.8) // Yellow
 
 	// Details for Route Leaks
-	if ce.Anom == nameRouteLeak && ce.LeakType != LeakUnknown {
-		if nextY+fontSize > boxH {
-			return 0
-		}
+	switch ce.Anom {
+	case nameRouteLeak:
+		if ce.LeakType != LeakUnknown {
+			if nextY+fontSize > boxH {
+				return 0
+			}
 
-		indent := 20.0
-		// Leaker
-		nextY = e.drawWrappedText(e.streamBuffer, ce.CachedLeakerStr, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, textOp)
+			indent := 20.0
+			// Leaker
+			nextY = e.drawWrappedText(e.streamBuffer, ce.CachedLeakerStr, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, textOp)
 
-		// Impacted
-		if nextY+fontSize > boxH {
-			return 0
+			// Impacted
+			if nextY+fontSize > boxH {
+				return 0
+			}
+			nextY = e.drawWrappedText(e.streamBuffer, ce.CachedVictimStr, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, textOp)
 		}
-		nextY = e.drawWrappedText(e.streamBuffer, ce.CachedVictimStr, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, textOp)
-	} else if ce.Anom == nameHardOutage {
+	case nameHardOutage:
 		if nextY+fontSize > boxH {
 			return 0
 		}
@@ -374,7 +381,7 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, boxH, fontSize
 			}
 			nextY = e.drawWrappedText(e.streamBuffer, ce.CachedLocationStr, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, textOp)
 		}
-	} else if ce.Anom == nameDDoSMitigation {
+	case nameDDoSMitigation:
 		if nextY+fontSize > boxH {
 			return 0
 		}
@@ -1032,27 +1039,25 @@ func (e *Engine) updatePrefixCounts(allImpact []*VisualImpact) {
 		}
 	}
 
-	if allImpact != nil {
-		for _, vi := range allImpact {
-			if vi.ClassificationName == "" {
-				continue
-			}
-			asn := e.prefixToASN[vi.Prefix]
-
-			if pc, ok := e.countMap[vi.ClassificationName]; ok {
-				pc.Count++
-				pc.Rate += vi.Count
-			}
-
-			// Track ASNs per classification. If ASN is unknown (0), we still track it as a unique
-			// entry to ensure ASNCount is at least 1 when Prefixes are present.
-			m, ok := e.asnsPerClass[vi.ClassificationName]
-			if !ok {
-				m = make(map[uint32]struct{})
-				e.asnsPerClass[vi.ClassificationName] = m
-			}
-			m[asn] = struct{}{}
+	for _, vi := range allImpact {
+		if vi.ClassificationName == "" {
+			continue
 		}
+		asn := e.prefixToASN[vi.Prefix]
+
+		if pc, ok := e.countMap[vi.ClassificationName]; ok {
+			pc.Count++
+			pc.Rate += vi.Count
+		}
+
+		// Track ASNs per classification. If ASN is unknown (0), we still track it as a unique
+		// entry to ensure ASNCount is at least 1 when Prefixes are present.
+		m, ok := e.asnsPerClass[vi.ClassificationName]
+		if !ok {
+			m = make(map[uint32]struct{})
+			e.asnsPerClass[vi.ClassificationName] = m
+		}
+		m[asn] = struct{}{}
 	}
 
 	e.prefixCounts = e.prefixCounts[:0]

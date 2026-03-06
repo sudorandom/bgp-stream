@@ -801,40 +801,44 @@ func (e *Engine) drawCitiesCPU(img *image.RGBA) {
 		// Bright warm-white
 		cr, cg, cb := uint32(255), uint32(250), uint32(220)
 
-		// 1. Draw a dense 3x3 core for ALL cities to ensure visibility on high-res displays
-		for dx := -1; dx <= 1; dx++ {
-			for dy := -1; dy <= 1; dy++ {
-				e.setPixelCPU(img, ix+dx, iy+dy, cr, cg, cb, alpha)
-			}
-		}
+		e.drawCityBloom(img, ix, iy, logPop, cr, cg, cb, alpha)
+	}
+	log.Printf("[GEO] Baked %d city lights into CPU background image. Avg pop: %d", drawnCount, popSum/uint64(len(cities)+1))
+}
 
-		// 2. Larger cities (> 100k) get a 5x5 bloom
-		if logPop > 5.0 {
-			dimAlpha := alpha / 2
-			for dx := -2; dx <= 2; dx++ {
-				for dy := -2; dy <= 2; dy++ {
-					if (dx >= -1 && dx <= 1) && (dy >= -1 && dy <= 1) {
-						continue
-					}
-					e.setPixelCPU(img, ix+dx, iy+dy, cr, cg, cb, dimAlpha)
-				}
-			}
+func (e *Engine) drawCityBloom(img *image.RGBA, ix, iy int, logPop float64, cr, cg, cb, alpha uint32) {
+	// 1. Draw a dense 3x3 core for ALL cities to ensure visibility on high-res displays
+	for dx := -1; dx <= 1; dx++ {
+		for dy := -1; dy <= 1; dy++ {
+			e.setPixelCPU(img, ix+dx, iy+dy, cr, cg, cb, alpha)
 		}
+	}
 
-		// 3. Megacities (> 5m) get a 7x7 outer glow
-		if logPop > 6.7 {
-			glowAlpha := alpha / 4
-			for dx := -3; dx <= 3; dx++ {
-				for dy := -3; dy <= 3; dy++ {
-					if (dx >= -2 && dx <= 2) && (dy >= -2 && dy <= 2) {
-						continue
-					}
-					e.setPixelCPU(img, ix+dx, iy+dy, cr, cg, cb, glowAlpha)
+	// 2. Larger cities (> 100k) get a 5x5 bloom
+	if logPop > 5.0 {
+		dimAlpha := alpha / 2
+		for dx := -2; dx <= 2; dx++ {
+			for dy := -2; dy <= 2; dy++ {
+				if (dx >= -1 && dx <= 1) && (dy >= -1 && dy <= 1) {
+					continue
 				}
+				e.setPixelCPU(img, ix+dx, iy+dy, cr, cg, cb, dimAlpha)
 			}
 		}
 	}
-	log.Printf("[GEO] Baked %d city lights into CPU background image. Avg pop: %d", drawnCount, popSum/uint64(len(cities)+1))
+
+	// 3. Megacities (> 5m) get a 7x7 outer glow
+	if logPop > 6.7 {
+		glowAlpha := alpha / 4
+		for dx := -3; dx <= 3; dx++ {
+			for dy := -3; dy <= 3; dy++ {
+				if (dx >= -2 && dx <= 2) && (dy >= -2 && dy <= 2) {
+					continue
+				}
+				e.setPixelCPU(img, ix+dx, iy+dy, cr, cg, cb, glowAlpha)
+			}
+		}
+	}
 }
 
 func (e *Engine) setPixelCPU(img *image.RGBA, x, y int, r, g, b, alpha uint32) {
@@ -845,22 +849,6 @@ func (e *Engine) setPixelCPU(img *image.RGBA, x, y int, r, g, b, alpha uint32) {
 	img.Pix[off+1] = uint8((g*alpha + dg*(255-alpha)) / 255)
 	img.Pix[off+2] = uint8((b*alpha + db*(255-alpha)) / 255)
 	img.Pix[off+3] = 255
-}
-
-func (e *Engine) blendPixel(img *image.RGBA, x, y int, r, g, b, alpha uint32) {
-	if x < 0 || x >= e.Width || y < 0 || y >= e.Height {
-		return
-	}
-	i := img.PixOffset(x, y)
-
-	// Standard Alpha Blending
-	// out = src * alpha + dest * (1 - alpha)
-	dr, dg, db := uint32(img.Pix[i+0]), uint32(img.Pix[i+1]), uint32(img.Pix[i+2])
-
-	img.Pix[i+0] = uint8((r*alpha + dr*(255-alpha)) / 255)
-	img.Pix[i+1] = uint8((g*alpha + dg*(255-alpha)) / 255)
-	img.Pix[i+2] = uint8((b*alpha + db*(255-alpha)) / 255)
-	img.Pix[i+3] = 255
 }
 
 func (e *Engine) cacheBackground(cacheFile string, cpuImg *image.RGBA) {

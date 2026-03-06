@@ -125,9 +125,9 @@ func TestClassification(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			classify(prefix, &MessageContext{
 				Peer: fmt.Sprintf("peer%d", i), Host: fmt.Sprintf("rrc%d", i%3),
-				OriginASN: 1234,
+				OriginASN:      1234,
 				LastRpkiStatus: int32(utils.RPKIValid),
-				Now: now.Add(time.Duration(i*30) * time.Second),
+				Now:            now.Add(time.Duration(i*30) * time.Second),
 			})
 		}
 
@@ -136,9 +136,9 @@ func TestClassification(t *testing.T) {
 			host := fmt.Sprintf("rrc%d", i%3)
 			classify(prefix, &MessageContext{
 				Peer: fmt.Sprintf("peer%d", i+10), Host: host,
-				OriginASN: 13335, // Cloudflare (DDoS Provider)
+				OriginASN:      13335, // Cloudflare (DDoS Provider)
 				LastRpkiStatus: int32(utils.RPKIInvalidASN),
-				Now: now.Add(10*time.Minute + time.Duration(i*30)*time.Second),
+				Now:            now.Add(10*time.Minute + time.Duration(i*30)*time.Second),
 			})
 		}
 

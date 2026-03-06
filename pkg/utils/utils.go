@@ -95,7 +95,7 @@ func FormatNumber(n uint64) string {
 		res = append([]string{s[len(s)-3:]}, res...)
 		s = s[:len(s)-3]
 	}
-	if len(s) > 0 {
+	if s != "" {
 		res = append([]string{s}, res...)
 	}
 	return strings.Join(res, ",")

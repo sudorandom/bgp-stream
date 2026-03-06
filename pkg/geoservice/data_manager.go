@@ -78,53 +78,7 @@ func (dm *DataManager) LoadWorldCities() {
 			if err != nil {
 				continue
 			}
-			// Supported Format 1 (SimpleMaps): city, city_ascii, lat, lng, country, iso2, iso3, admin_name, capital, population, id
-			if len(rec) >= 6 && (strings.Contains(rec[2], ".") || strings.Contains(rec[2], ",")) {
-				lat, _ := strconv.ParseFloat(rec[2], 64)
-				lng, _ := strconv.ParseFloat(rec[3], 64)
-				cc := strings.ToUpper(rec[5])
-				countryName := strings.ToUpper(rec[4])
-				cityName := strings.ToLower(rec[1])
-
-				pop := uint64(0)
-				if len(rec) >= 10 {
-					p, _ := strconv.ParseFloat(rec[9], 64)
-					pop = uint64(p)
-				}
-				dm.geo.cities = append(dm.geo.cities, CityInfo{Lat: float32(lat), Lng: float32(lng), Population: pop})
-
-				dm.geo.cityCoords[cityKey{city: cityName, cc: cc}] = [2]float32{float32(lat), float32(lng)}
-				dm.geo.cityCoords[cityKey{city: cityName, cc: countryName}] = [2]float32{float32(lat), float32(lng)}
-				dm.geo.citiesByCountry[cc] = append(dm.geo.citiesByCountry[cc], cityName)
-				dm.geo.citiesByCountry[countryName] = append(dm.geo.citiesByCountry[countryName], cityName)
-				dm.geo.isoToCountry[cc] = rec[4]
-				dm.geo.countryToISO[strings.ToUpper(rec[4])] = cc
-
-				if _, ok := dm.geo.countryCoords[cc]; !ok || (len(rec) >= 9 && rec[8] == "primary") {
-					dm.geo.countryCoords[cc] = [2]float32{float32(lat), float32(lng)}
-					dm.geo.countryCoords[countryName] = [2]float32{float32(lat), float32(lng)}
-				}
-			} else if len(rec) >= 10 {
-				// Supported Format 2 (dr5hn): id, name, state_id, state_code, state_name, country_id, country_code, country_name, latitude, longitude, wikiDataId
-				lat, _ := strconv.ParseFloat(rec[8], 64)
-				lng, _ := strconv.ParseFloat(rec[9], 64)
-				cc := strings.ToUpper(rec[6])
-				countryName := strings.ToUpper(rec[7])
-				cityName := strings.ToLower(rec[1])
-				dm.geo.cities = append(dm.geo.cities, CityInfo{Lat: float32(lat), Lng: float32(lng), Population: 0})
-
-				dm.geo.cityCoords[cityKey{city: cityName, cc: cc}] = [2]float32{float32(lat), float32(lng)}
-				dm.geo.cityCoords[cityKey{city: cityName, cc: countryName}] = [2]float32{float32(lat), float32(lng)}
-				dm.geo.citiesByCountry[cc] = append(dm.geo.citiesByCountry[cc], cityName)
-				dm.geo.citiesByCountry[countryName] = append(dm.geo.citiesByCountry[countryName], cityName)
-				dm.geo.isoToCountry[cc] = rec[7]
-				dm.geo.countryToISO[strings.ToUpper(rec[7])] = cc
-
-				if _, ok := dm.geo.countryCoords[cc]; !ok {
-					dm.geo.countryCoords[cc] = [2]float32{float32(lat), float32(lng)}
-					dm.geo.countryCoords[countryName] = [2]float32{float32(lat), float32(lng)}
-				}
-			}
+			dm.parseCityRecord(rec)
 		}
 
 		log.Printf("[GEO] City dictionary loaded. %d countries, %d total cities. US: %d, CN: %d, GB: %d, DE: %d, FR: %d",
@@ -133,6 +87,56 @@ func (dm *DataManager) LoadWorldCities() {
 			len(dm.geo.citiesByCountry["GB"]), len(dm.geo.citiesByCountry["DE"]),
 			len(dm.geo.citiesByCountry["FR"]))
 		dm.geo.dataMu.Unlock()
+	}
+}
+
+func (dm *DataManager) parseCityRecord(rec []string) {
+	// Supported Format 1 (SimpleMaps): city, city_ascii, lat, lng, country, iso2, iso3, admin_name, capital, population, id
+	if len(rec) >= 6 && (strings.Contains(rec[2], ".") || strings.Contains(rec[2], ",")) {
+		lat, _ := strconv.ParseFloat(rec[2], 64)
+		lng, _ := strconv.ParseFloat(rec[3], 64)
+		cc := strings.ToUpper(rec[5])
+		countryName := strings.ToUpper(rec[4])
+		cityName := strings.ToLower(rec[1])
+
+		pop := uint64(0)
+		if len(rec) >= 10 {
+			p, _ := strconv.ParseFloat(rec[9], 64)
+			pop = uint64(p)
+		}
+		dm.geo.cities = append(dm.geo.cities, CityInfo{Lat: float32(lat), Lng: float32(lng), Population: pop})
+
+		dm.geo.cityCoords[cityKey{city: cityName, cc: cc}] = [2]float32{float32(lat), float32(lng)}
+		dm.geo.cityCoords[cityKey{city: cityName, cc: countryName}] = [2]float32{float32(lat), float32(lng)}
+		dm.geo.citiesByCountry[cc] = append(dm.geo.citiesByCountry[cc], cityName)
+		dm.geo.citiesByCountry[countryName] = append(dm.geo.citiesByCountry[countryName], cityName)
+		dm.geo.isoToCountry[cc] = rec[4]
+		dm.geo.countryToISO[strings.ToUpper(rec[4])] = cc
+
+		if _, ok := dm.geo.countryCoords[cc]; !ok || (len(rec) >= 9 && rec[8] == "primary") {
+			dm.geo.countryCoords[cc] = [2]float32{float32(lat), float32(lng)}
+			dm.geo.countryCoords[countryName] = [2]float32{float32(lat), float32(lng)}
+		}
+	} else if len(rec) >= 10 {
+		// Supported Format 2 (dr5hn): id, name, state_id, state_code, state_name, country_id, country_code, country_name, latitude, longitude, wikiDataId
+		lat, _ := strconv.ParseFloat(rec[8], 64)
+		lng, _ := strconv.ParseFloat(rec[9], 64)
+		cc := strings.ToUpper(rec[6])
+		countryName := strings.ToUpper(rec[7])
+		cityName := strings.ToLower(rec[1])
+		dm.geo.cities = append(dm.geo.cities, CityInfo{Lat: float32(lat), Lng: float32(lng), Population: 0})
+
+		dm.geo.cityCoords[cityKey{city: cityName, cc: cc}] = [2]float32{float32(lat), float32(lng)}
+		dm.geo.cityCoords[cityKey{city: cityName, cc: countryName}] = [2]float32{float32(lat), float32(lng)}
+		dm.geo.citiesByCountry[cc] = append(dm.geo.citiesByCountry[cc], cityName)
+		dm.geo.citiesByCountry[countryName] = append(dm.geo.citiesByCountry[countryName], cityName)
+		dm.geo.isoToCountry[cc] = rec[7]
+		dm.geo.countryToISO[strings.ToUpper(rec[7])] = cc
+
+		if _, ok := dm.geo.countryCoords[cc]; !ok {
+			dm.geo.countryCoords[cc] = [2]float32{float32(lat), float32(lng)}
+			dm.geo.countryCoords[countryName] = [2]float32{float32(lat), float32(lng)}
+		}
 	}
 }
 
