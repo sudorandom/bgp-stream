@@ -56,13 +56,21 @@ func (t EventType) String() string {
 	}
 }
 
+type EventShape int
+
+const (
+	ShapeCircle EventShape = iota
+	ShapeFlare
+	ShapeSquare
+)
+
 type Pulse struct {
 	X, Y      float64
 	StartTime time.Time
 	Duration  time.Duration
 	Color     color.RGBA
 	MaxRadius float64
-	IsFlare   bool
+	Shape     EventShape
 }
 
 type QueuedPulse struct {
@@ -71,12 +79,17 @@ type QueuedPulse struct {
 	Color         color.RGBA
 	Count         int
 	ScheduledTime time.Time
-	IsFlare       bool
+	Shape         EventShape
+}
+
+type PulseKey struct {
+	Color color.RGBA
+	Shape EventShape
 }
 
 type BufferedCity struct {
 	Lat, Lng float64
-	Counts   map[color.RGBA]int
+	Counts   map[PulseKey]int
 }
 
 var (
@@ -183,6 +196,7 @@ type Engine struct {
 	bgImage        *ebiten.Image
 	pulseImage     *ebiten.Image
 	flareImage     *ebiten.Image
+	squareImage    *ebiten.Image
 	trendLineImg   *ebiten.Image
 	trendCircleImg *ebiten.Image
 	whitePixel     *ebiten.Image
@@ -992,16 +1006,16 @@ func (e *Engine) drawLineFast(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA)
 	}
 }
 
-func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...bool) {
+func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, shape ...EventShape) {
 	// De-emphasize Discovery/None pulses (Blue) - less aggressively now
 	// if c == ColorDiscovery && rand.Float64() > 0.4 {
 	// 	return
 	// }
-	flare := false
-	if len(isFlare) > 0 {
-		flare = isFlare[0]
-	} else {
-		flare = (c == ColorLeak)
+	s := ShapeCircle
+	if len(shape) > 0 {
+		s = shape[0]
+	} else if c == ColorLeak {
+		s = ShapeFlare
 	}
 
 	lat += (rand.Float64() - 0.5) * 1.5
@@ -1032,7 +1046,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, isFlare ...
 			Duration:  duration,
 			Color:     c,
 			MaxRadius: radius,
-			IsFlare:   flare,
+			Shape:     s,
 		})
 	} else {
 		e.droppedPulses.Add(1)
@@ -1118,7 +1132,7 @@ func (e *Engine) updateVisualQueue() {
 		added++
 		// Allow up to 5 seconds of delay during massive spikes before dropping pulses
 		if now.Sub(p.ScheduledTime) < 5*time.Second {
-			e.AddPulse(p.Lat, p.Lng, p.Color, p.Count, p.IsFlare)
+			e.AddPulse(p.Lat, p.Lng, p.Color, p.Count, p.Shape)
 		} else {
 			e.droppedStale.Add(1)
 		}
@@ -1286,13 +1300,18 @@ func (e *Engine) Draw(screen *ebiten.Image) {
 		imgW := float64(e.pulseImage.Bounds().Dx())
 		imgToDraw := e.pulseImage
 
-		if p.IsFlare {
+		switch p.Shape {
+		case ShapeFlare:
 			imgW = float64(e.flareImage.Bounds().Dx())
 			imgToDraw = e.flareImage
 			maxRadiusMultiplier = 3.0
 			flareIntensity := math.Sin(progress * math.Pi)
 			flareIntensity = math.Pow(flareIntensity, 1.5) * 2.5
 			alpha = flareIntensity
+		case ShapeSquare:
+			imgW = float64(e.squareImage.Bounds().Dx())
+			imgToDraw = e.squareImage
+			// A square pulse can have similar radius expansion
 		}
 
 		scale := (1 + progress*p.MaxRadius*maxRadiusMultiplier) / imgW * 2.0
@@ -1391,11 +1410,11 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 		}
 	}
 
-	// 2. Determine color and name based on Level 2 type
-	c, name := e.getClassificationVisuals(ev.classificationType)
+	// 2. Determine color, name, and shape based on Level 2 type
+	c, name, shape := e.getClassificationVisuals(ev.classificationType)
 
 	// 3. Buffer city activity
-	e.incrementCityBuffer(ev.lat, ev.lng, c)
+	e.incrementCityBuffer(ev.lat, ev.lng, c, shape)
 
 	// 4. Record to CriticalStream if it's a critical anomaly
 	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation {
@@ -1904,7 +1923,7 @@ func (e *Engine) prefixToIP(p string) uint32 {
 	return binary.BigEndian.Uint32(parsedIP)
 }
 
-func (e *Engine) incrementCityBuffer(lat, lng float64, c color.RGBA) {
+func (e *Engine) incrementCityBuffer(lat, lng float64, c color.RGBA, shape EventShape) {
 	if c == (color.RGBA{}) || (lat == 0 && lng == 0) {
 		return
 	}
@@ -1919,37 +1938,37 @@ func (e *Engine) incrementCityBuffer(lat, lng float64, c color.RGBA) {
 		e.cityBuffer[key] = b
 	}
 	if b.Counts == nil {
-		b.Counts = make(map[color.RGBA]int)
+		b.Counts = make(map[PulseKey]int)
 	}
-	b.Counts[c]++
+	b.Counts[PulseKey{Color: c, Shape: shape}]++
 }
 
-func (e *Engine) getClassificationVisuals(classificationType ClassificationType) (visualColor color.RGBA, classificationName string) {
+func (e *Engine) getClassificationVisuals(classificationType ClassificationType) (visualColor color.RGBA, classificationName string, shape EventShape) {
 	switch classificationType {
 	case ClassificationNone:
-		return ColorDiscovery, nameDiscovery
+		return ColorDiscovery, nameDiscovery, ShapeCircle
 	case ClassificationDiscovery:
-		return ColorDiscovery, nameDiscovery
+		return ColorDiscovery, nameDiscovery, ShapeCircle
 	case ClassificationPolicyChurn:
-		return ColorPolicy, namePolicyChurn
+		return ColorPolicy, namePolicyChurn, ShapeCircle
 	case ClassificationPathLengthOscillation:
-		return ColorPolicy, namePathOscillation
+		return ColorPolicy, namePathOscillation, ShapeCircle
 	case ClassificationPathHunting:
-		return ColorPolicy, namePathHunting
+		return ColorPolicy, namePathHunting, ShapeCircle
 	case ClassificationLinkFlap:
-		return ColorBad, nameLinkFlap
+		return ColorBad, nameLinkFlap, ShapeCircle
 	case ClassificationAggFlap:
-		return ColorBad, nameAggFlap
+		return ColorBad, nameAggFlap, ShapeCircle
 	case ClassificationNextHopOscillation:
-		return ColorBad, nameNextHopFlap
+		return ColorBad, nameNextHopFlap, ShapeCircle
 	case ClassificationOutage:
-		return ColorOutage, nameHardOutage
+		return ColorOutage, nameHardOutage, ShapeCircle
 	case ClassificationRouteLeak:
-		return ColorCritical, nameRouteLeak
+		return ColorCritical, nameRouteLeak, ShapeFlare
 	case ClassificationDDoSMitigation:
-		return ColorOutage, nameDDoSMitigation
+		return ColorOutage, nameDDoSMitigation, ShapeSquare
 	default:
-		return color.RGBA{}, ""
+		return color.RGBA{}, "", ShapeCircle
 	}
 }
 
@@ -2111,6 +2130,33 @@ func (e *Engine) InitFlareTexture() {
 	e.flareImage.WritePixels(flarePixels)
 }
 
+func (e *Engine) InitSquareTexture() {
+	size := 256
+	e.squareImage = ebiten.NewImage(size, size)
+	pixels := make([]byte, size*size*4)
+	center, maxDist := float64(size)/2.0, float64(size)/2.0
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx, dy := math.Abs(float64(x)-center), math.Abs(float64(y)-center)
+			dist := math.Max(dx, dy)
+			if dist < maxDist {
+				val, outer, inner := 0.0, 0.9, 0.8
+				if e.Width > 2000 {
+					outer, inner = 0.94, 0.88
+				}
+				if dist > maxDist*outer {
+					val = math.Cos(((dist - maxDist*(outer+((1-outer)/2))) / (maxDist * ((1 - outer) / 2))) * (math.Pi / 2))
+				} else if dist > maxDist*inner {
+					val = math.Sin(((dist - maxDist*inner) / (maxDist * (outer - inner))) * (math.Pi / 2))
+				}
+				pixels[(y*size+x)*4+3] = uint8(val * 255)
+				pixels[(y*size+x)*4+0], pixels[(y*size+x)*4+1], pixels[(y*size+x)*4+2] = 255, 255, 255
+			}
+		}
+	}
+	e.squareImage.WritePixels(pixels)
+}
+
 func (e *Engine) calculateFlareBrightness(rdx, rdy, maxDist, rayThickness float64) float64 {
 	dist := math.Sqrt(rdx*rdx + rdy*rdy)
 	brightness := 0.0
@@ -2245,12 +2291,11 @@ func (e *Engine) drainCityBuffer() []QueuedPulse {
 	e.bufferMu.Lock()
 	defer e.bufferMu.Unlock()
 	var nextBatch []QueuedPulse
-	// 2. Convert buffered city activity into discrete pulse events for each color
+	// 2. Convert buffered city activity into discrete pulse events for each color and shape
 	for _, d := range e.cityBuffer {
-		for c, count := range d.Counts {
+		for pk, count := range d.Counts {
 			if count > 0 {
-				isFlare := (c == ColorLeak)
-				nextBatch = append(nextBatch, QueuedPulse{Lat: d.Lat, Lng: d.Lng, Color: c, Count: count, IsFlare: isFlare})
+				nextBatch = append(nextBatch, QueuedPulse{Lat: d.Lat, Lng: d.Lng, Color: pk.Color, Count: count, Shape: pk.Shape})
 			}
 		}
 		// Reset and return to pool

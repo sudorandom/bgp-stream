@@ -15,6 +15,7 @@ func BenchmarkDrawBGPStatus(b *testing.B) {
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
 	e.InitFlareTexture()
+	e.InitSquareTexture()
 	e.InitTrendlineTexture()
 
 	// Pre-fill history to ensure we are benchmarking the actual drawing logic
@@ -43,6 +44,7 @@ func TestDrawBGPStatusAllocations(t *testing.T) {
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
 	e.InitFlareTexture()
+	e.InitSquareTexture()
 	e.InitTrendlineTexture()
 
 	// Fill history
@@ -75,6 +77,7 @@ func BenchmarkDrawMap(b *testing.B) {
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
 	e.InitFlareTexture()
+	e.InitSquareTexture()
 	e.InitTrendlineTexture()
 
 	// Fill with pulses
@@ -104,6 +107,7 @@ func TestDrawMapAllocations(t *testing.T) {
 	e := NewEngine(width, height, 1.0)
 	e.InitPulseTexture()
 	e.InitFlareTexture()
+	e.InitSquareTexture()
 	e.InitTrendlineTexture()
 
 	// Fill with pulses
@@ -140,6 +144,7 @@ func BenchmarkDrawTrendGrid(b *testing.B) {
 	// Create required textures to avoid nil pointer dereferences
 	e.InitPulseTexture()
 	e.InitFlareTexture()
+	e.InitSquareTexture()
 	e.InitTrendlineTexture()
 
 	screen := ebiten.NewImage(width, height)

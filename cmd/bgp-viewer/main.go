@@ -92,6 +92,7 @@ func initEngine() *bgpengine.Engine {
 
 	engine.InitPulseTexture()
 	engine.InitFlareTexture()
+	engine.InitSquareTexture()
 	engine.InitTrendlineTexture()
 	return engine
 }

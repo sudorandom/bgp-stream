@@ -192,7 +192,7 @@ func (e *Engine) calculateActiveHubs(state *statsWorkerState, uiInterval float64
 func (e *Engine) gatherActiveImpactsWorker(state *statsWorkerState, uiInterval float64) []*VisualImpact {
 	clear(state.impactMap)
 	for et, prefixes := range state.currentAnomalies {
-		_, name := e.getClassificationVisuals(et)
+		_, name, _ := e.getClassificationVisuals(et)
 		prio := e.GetPriority(name)
 
 		for p, count := range prefixes {
@@ -210,7 +210,7 @@ func (e *Engine) gatherActiveImpactsWorker(state *statsWorkerState, uiInterval f
 
 			if name != "" && (visI.ClassificationName == "" || prio > e.GetPriority(visI.ClassificationName)) {
 				visI.ClassificationName = name
-				visI.ClassificationColor, _ = e.getClassificationVisuals(et)
+				visI.ClassificationColor, _, _ = e.getClassificationVisuals(et)
 			}
 			visI.Count += float64(count) / uiInterval
 		}

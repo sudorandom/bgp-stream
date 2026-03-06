@@ -164,16 +164,19 @@ func (e *Engine) drawAnomalySummaryContent(localX, localY, scaledBoxW, fontSize 
 		pc := &e.prefixCounts[i]
 
 		// Draw Swatch/Icon
-		mapCol, _ := e.getClassificationVisuals(pc.Type)
+		mapCol, _, mapShape := e.getClassificationVisuals(pc.Type)
 		imgToDraw := e.pulseImage
-		if pc.Name == nameRouteLeak {
+		switch mapShape {
+		case ShapeFlare:
 			imgToDraw = e.flareImage
+		case ShapeSquare:
+			imgToDraw = e.squareImage
 		}
 
 		swatchSize := fontSize * 0.8
 		cr, cg, cb := float32(mapCol.R)/255.0, float32(mapCol.G)/255.0, float32(mapCol.B)/255.0
 		baseAlpha := float32(0.6)
-		if pc.Name == nameRouteLeak {
+		if mapShape == ShapeFlare {
 			baseAlpha = 1.0
 		}
 		if pc.Count == 0 {
