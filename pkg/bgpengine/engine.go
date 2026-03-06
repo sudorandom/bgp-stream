@@ -144,9 +144,9 @@ type CriticalEvent struct {
 	ImpactedPrefixes map[string]struct{}
 
 	// Pre-rendered layout values
-	CachedTypeLabel   string
-	CachedTypeWidth   float64
-	CachedFirstLine   string
+	CachedTypeLabel string
+	CachedTypeWidth float64
+	CachedFirstLine string
 
 	CachedLeakerLabel string
 	CachedLeakerVal   string
@@ -1752,7 +1752,6 @@ func (e *Engine) cacheLeakStrings(ce *CriticalEvent) {
 	victimLabel := "  Impacted: "
 	if ce.Anom == nameDDoSMitigation {
 		leakerLabel = "  Provider: "
-		victimLabel = "  Impacted: "
 	}
 	ce.CachedLeakerLabel = leakerLabel
 	ce.CachedVictimLabel = victimLabel

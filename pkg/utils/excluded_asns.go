@@ -3,12 +3,12 @@ package utils
 // ExcludedASNs maps ASNs to their exclusion category
 var ExcludedASNs = map[uint32]string{
 	// 1. DoD Honeypot Operations
-	749:    "DoD Honeypot",
-	8003:   "DoD Honeypot",
+	749:  "DoD Honeypot",
+	8003: "DoD Honeypot",
 
 	// 2. BGP Research and Beacons
-	12654:  "BGP Research",
-	6447:   "BGP Research",
+	12654: "BGP Research",
+	6447:  "BGP Research",
 
 	// 3. Dedicated Security Scanners
 	398324: "Security Scanner",

@@ -281,7 +281,7 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 			e.streamClipBuffer.Clear()
 			currentY := e.streamOffset
 			for i, ce := range e.CriticalStream {
-				nextY := e.drawCriticalEvent(ce, localX, currentY, boxW, boxH, fontSize)
+				nextY := e.drawCriticalEvent(ce, localX, currentY, boxW, fontSize)
 
 				// Draw a subtle separator if not the last one
 				if i < len(e.CriticalStream)-1 && nextY+12 < boxH {
@@ -313,7 +313,7 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 	e.drawGlitchImage(screen, e.streamBuffer, margin-10, yBase-fontSize-15, intensity, isGlitching)
 }
 
-func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, boxH, fontSize float64) float64 {
+func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float64) float64 {
 	// We are now drawing into streamClipBuffer which represents only the events area
 	textOp := &text.DrawOptions{}
 	// Draw Anomaly Type Label (e.g. [OUTAGE])
