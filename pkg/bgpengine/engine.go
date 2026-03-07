@@ -1571,6 +1571,14 @@ func (e *Engine) isSameEvent(ce *CriticalEvent, ev *bgpEvent, name, orgID string
 		return false
 	}
 
+	// Fallback: If it's the exact same prefix and anomaly type, it's the same event.
+	// This is the most robust check for "re-shifting" of the same item.
+	if ev.prefix != "" && ce.ImpactedPrefixes != nil {
+		if _, ok := ce.ImpactedPrefixes[ev.prefix]; ok {
+			return true
+		}
+	}
+
 	// For Route Leaks match based on leak details
 	if name == nameRouteLeak && ev.leakDetail != nil {
 		return (ce.LeakType == LeakUnknown || ce.LeakType == ev.leakDetail.Type) &&
@@ -1701,6 +1709,9 @@ func (e *Engine) createCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 }
 
 func (e *Engine) updateCriticalStream() {
+	e.metricsMu.Lock()
+	defer e.metricsMu.Unlock()
+
 	now := e.Now()
 
 	// 1. Animate offset towards 0
@@ -1716,6 +1727,18 @@ func (e *Engine) updateCriticalStream() {
 	if len(e.criticalQueue) > 0 && now.Sub(e.lastCriticalAddedAt) >= 1*time.Second {
 		ce := e.criticalQueue[0]
 		e.criticalQueue = e.criticalQueue[1:]
+
+		// Final check: ensure this exact event isn't already in the stream (race prevention)
+		isDup := false
+		for _, existing := range e.CriticalStream {
+			if existing.Anom == ce.Anom && existing.ASN == ce.ASN && existing.LeakerASN == ce.LeakerASN && existing.VictimASN == ce.VictimASN {
+				isDup = true
+				break
+			}
+		}
+		if isDup {
+			return
+		}
 
 		// Calculate height for animation
 		boxW := 280.0
