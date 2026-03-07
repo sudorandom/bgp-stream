@@ -86,11 +86,11 @@ jobs:
       - name: Build Linux
         run: |
           go build -tags=ebitengine ./cmd/bgp-viewer
-          go build ./cmd/bgp-data-fetcher
+          go build ./cmd/bgp-cli
       - name: Build Windows
         run: |
           GOOS=windows GOARCH=amd64 go build -tags=ebitengine ./cmd/bgp-viewer
-          GOOS=windows GOARCH=amd64 go build ./cmd/bgp-data-fetcher
+          GOOS=windows GOARCH=amd64 go build ./cmd/bgp-cli
 
   build-macos:
     name: Build Check (macOS)
@@ -106,10 +106,10 @@ jobs:
           CGO_ENABLED: 1
         run: |
           GOARCH=amd64 go build ./cmd/bgp-viewer
-          GOARCH=amd64 go build ./cmd/bgp-data-fetcher
+          GOARCH=amd64 go build ./cmd/bgp-cli
       - name: Build macOS (ARM64)
         env:
           CGO_ENABLED: 1
         run: |
           GOARCH=arm64 go build ./cmd/bgp-viewer
-          GOARCH=arm64 go build ./cmd/bgp-data-fetcher
+          GOARCH=arm64 go build ./cmd/bgp-cli
