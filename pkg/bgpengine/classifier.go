@@ -561,7 +561,7 @@ func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed 
 		if totalKnownPeers > 0 && peerCount == 0 {
 			if totalKnownPeers <= 5 {
 				// For small prefixes, require a decent number of known peers to have withdrawn
-				if withdrawnPeerCount >= 3 && withdrawnPeerCount >= totalKnownPeers {
+				if withdrawnPeerCount >= totalKnownPeers {
 					return ClassificationOutage, nil, true
 				}
 			} else {

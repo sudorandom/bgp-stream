@@ -99,7 +99,7 @@ func TestClassifier_SiblingRouteLeak(t *testing.T) {
 	}
 }
 
-func TestClassifier_FindCriticalAnomaly(t *testing.T) {
+func TestClassifier_FindCriticalAnomaly_Outage(t *testing.T) {
 	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
 	now := time.Now()
 
@@ -109,11 +109,28 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 			totalAnn:       0,
 			withdrawnPeers: map[string]bool{"p1": true, "p2": true, "p3": true, "p4": true, "p5": true, "p6": true, "p7": true, "p8": true, "p9": true, "p10": true},
 			withdrawnHosts: map[string]bool{"h1": true, "h2": true, "h3": true},
+			uniquePeers:    map[string]bool{},
+			uniqueHosts:    map[string]bool{},
 		}
 		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, &MessageContext{Now: now})
 		if !ok || et != ClassificationOutage {
 			t.Errorf("findCriticalAnomaly() expected Outage, got %v, %v", et, ok)
 		}
+
+		t.Run("Should correctly detect outage for small prefixes (<=2 peers)", func(t *testing.T) {
+			sSmall := &prefixStats{
+				totalWith:      5,
+				totalAnn:       0,
+				withdrawnPeers: map[string]bool{"p1": true, "p2": true},
+				withdrawnHosts: map[string]bool{"h1": true},
+				uniquePeers:    map[string]bool{},
+				uniqueHosts:    map[string]bool{},
+			}
+			et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", sSmall, 65.0, &MessageContext{Now: now})
+			if !ok || et != ClassificationOutage {
+				t.Errorf("findCriticalAnomaly() expected Outage for small prefix, got %v, %v", et, ok)
+			}
+		})
 
 		t.Run("Should NOT detect outage if some peers still see the prefix", func(t *testing.T) {
 			s2 := &prefixStats{
@@ -130,8 +147,13 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 			}
 		})
 	})
+}
+
+func TestClassifier_FindCriticalAnomaly_Hijack(t *testing.T) {
+	now := time.Now()
 
 	t.Run("Hijack High Signal Detection", func(t *testing.T) {
+		c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
 		// Mock seen DB for historical origin
 		seenDBPath := filepath.Join(t.TempDir(), "test-seen-classifier.db")
 		seenDB, _ := utils.OpenDiskTrie(seenDBPath)
@@ -164,6 +186,11 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 			t.Errorf("findCriticalAnomaly() expected BGP Hijack, got %v, %v", et, ok)
 		}
 	})
+}
+
+func TestClassifier_FindCriticalAnomaly_DDoS(t *testing.T) {
+	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
+	now := time.Now()
 
 	t.Run("DDoS Mitigation Detection", func(t *testing.T) {
 		// Mock seen DB for historical origin
@@ -214,7 +241,7 @@ func TestClassifier_FindCriticalAnomaly(t *testing.T) {
 		c := NewClassifier(seenDB, nil, nil, nil, func(p string) uint32 {
 			ip, _, _ := net.ParseCIDR(p)
 			return binary.BigEndian.Uint32(ip.To4())
-		}, utils.NewLRUCache[string, *bgpproto.PrefixState](100), func() time.Time { return time.Now() })
+		}, utils.NewLRUCache[string, *bgpproto.PrefixState](100), time.Now)
 
 		ctx := &MessageContext{
 			OriginASN: 200,

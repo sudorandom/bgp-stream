@@ -1426,20 +1426,8 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 
 	// Filter out invalid DDoS Mitigation events from stats so they don't appear in summaries
 	// We require both provider and victim ASN to be known to show a meaningful summary item.
-	if ev.classificationType == ClassificationDDoSMitigation {
-		providerASN := ev.asn
-		victimASN := ev.historicalASN
-		if ev.leakDetail != nil {
-			if ev.leakDetail.LeakerASN != 0 {
-				providerASN = ev.leakDetail.LeakerASN
-			}
-			if ev.leakDetail.VictimASN != 0 {
-				victimASN = ev.leakDetail.VictimASN
-			}
-		}
-		if providerASN == 0 || victimASN == 0 {
-			return
-		}
+	if e.isIgnoredDDoS(ev) {
+		return
 	}
 
 	// 6. Offload remaining heavy stat accumulation to stats worker

@@ -283,11 +283,21 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 		} else {
 			e.streamClipBuffer.Clear()
 			currentY := e.streamOffset
-			for i, ce := range e.CriticalStream {
+
+			// Filter stream for display
+			displayStream := make([]*CriticalEvent, 0, len(e.CriticalStream))
+			for _, ce := range e.CriticalStream {
+				if ce.Anom == nameHardOutage && ce.ImpactedIPs < 1000 {
+					continue
+				}
+				displayStream = append(displayStream, ce)
+			}
+
+			for i, ce := range displayStream {
 				nextY := e.drawCriticalEvent(ce, localX, currentY, boxW, fontSize)
 
 				// Draw a subtle separator if not the last one
-				if i < len(e.CriticalStream)-1 && nextY+12 < boxH {
+				if i < len(displayStream)-1 && nextY+12 < boxH {
 					vector.StrokeLine(e.streamClipBuffer, float32(localX+10), float32(nextY+10), float32(boxW-10), float32(nextY+10), 2, color.RGBA{255, 255, 255, 30}, false)
 				}
 
