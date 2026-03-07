@@ -393,3 +393,119 @@ func TestClassifier_OutageRecovery(t *testing.T) {
 		t.Errorf("Expected Outage state to be cleared after announcement, but it's still %v", ClassificationType(state.ClassifiedType))
 	}
 }
+
+func TestClassifier_FindCriticalAnomaly_DDoS_Detailed(t *testing.T) {
+	c := NewClassifier(nil, nil, nil, nil, nil, nil, time.Now)
+	now := time.Now()
+
+	tests := []struct {
+		name         string
+		prefix       string
+		commStr      string
+		pathStr      string
+		wantType     ClassificationType
+		wantLeakType LeakType
+	}{
+		{
+			name:         "Flowspec via traffic-rate community",
+			prefix:       "1.1.1.0/24",
+			commStr:      "traffic-rate: 0",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSFlowspec,
+		},
+		{
+			name:         "Flowspec via traffic-action community",
+			prefix:       "1.1.1.0/24",
+			commStr:      "65000:100 [traffic-action: sample]",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSFlowspec,
+		},
+		{
+			name:         "RTBH via community",
+			prefix:       "1.1.1.0/24",
+			commStr:      "65535:666",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSRTBH,
+		},
+		{
+			name:         "RTBH via /32 IPv4",
+			prefix:       "1.1.1.1/32",
+			commStr:      "",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSRTBH,
+		},
+		{
+			name:         "RTBH via /128 IPv6",
+			prefix:       "2001:db8::1/128",
+			commStr:      "",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSRTBH,
+		},
+		{
+			name:         "Traffic Redirection via Scrubbing Center ASN (Prolexic)",
+			prefix:       "1.1.1.0/24",
+			pathStr:      "[1234 32787 5678]",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSTrafficRedirection,
+		},
+		{
+			name:         "Traffic Redirection via Scrubbing Center ASN (Imperva)",
+			prefix:       "1.1.1.0/24",
+			pathStr:      "[19551]",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSTrafficRedirection,
+		},
+		{
+			name:         "Traffic Redirection via Scrubbing Center ASN (Radware)",
+			prefix:       "1.1.1.0/24",
+			pathStr:      "[100 200 30689 400]",
+			wantType:     ClassificationDDoSMitigation,
+			wantLeakType: DDoSTrafficRedirection,
+		},
+		{
+			name:         "No DDoS Mitigation",
+			prefix:       "1.1.1.0/24",
+			commStr:      "65000:100",
+			pathStr:      "[100 200 300]",
+			wantType:     ClassificationNone,
+			wantLeakType: LeakUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &prefixStats{
+				uniquePeers: map[string]bool{"p1": true},
+				uniqueHosts: map[string]bool{"h1": true},
+			}
+
+			ctx := &MessageContext{
+				OriginASN: 13335,
+				CommStr:   tt.commStr,
+				PathStr:   tt.pathStr,
+				Now:       now,
+			}
+
+			gotType, gotLD, ok := c.findCriticalAnomaly(tt.prefix, s, 65.0, ctx)
+
+			if tt.wantType == ClassificationNone {
+				if ok && gotType == ClassificationDDoSMitigation {
+					t.Errorf("Expected no DDoS mitigation, got %v", gotType)
+				}
+				return
+			}
+
+			if !ok || gotType != tt.wantType {
+				t.Errorf("Expected type %v, got %v (ok=%v)", tt.wantType, gotType, ok)
+			}
+
+			if gotLD == nil {
+				t.Fatalf("Expected LeakDetail, got nil")
+			}
+
+			if gotLD.Type != tt.wantLeakType {
+				t.Errorf("Expected subtype %v, got %v", tt.wantLeakType, gotLD.Type)
+			}
+		})
+	}
+}

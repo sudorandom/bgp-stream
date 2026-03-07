@@ -39,6 +39,9 @@ const (
 	LeakProviderToPeer
 	LeakPeerToProvider
 	LeakReOrigination
+	DDoSRTBH
+	DDoSFlowspec
+	DDoSTrafficRedirection
 )
 
 const (
@@ -57,6 +60,12 @@ func (t LeakType) String() string {
 		return "Peer to Provider"
 	case LeakReOrigination:
 		return "Prefix Re-Origination"
+	case DDoSRTBH:
+		return "RTBH"
+	case DDoSFlowspec:
+		return "Flowspec"
+	case DDoSTrafficRedirection:
+		return "Traffic Redirection"
 	default:
 		return StrUnknown
 	}

@@ -453,9 +453,9 @@ func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed 
 		}
 	}
 
-	// 0.5 RTBH Detection
-	if c.isRTBH(prefix, ctx) {
-		return ClassificationDDoSMitigation, nil, true
+	// 0.5 DDoS Mitigation Detection
+	if ld, ok := c.detectDDoSMitigation(prefix, ctx); ok {
+		return ClassificationDDoSMitigation, ld, true
 	}
 
 	// 1. Hijack Detection (RPKI Signal)
@@ -901,21 +901,43 @@ func (c *Classifier) isBogon(prefix string, ctx *MessageContext) bool {
 	return false
 }
 
-func (c *Classifier) isRTBH(prefix string, ctx *MessageContext) bool {
-	// Look for standard RTBH community
-	if strings.Contains(ctx.CommStr, "65535:666") {
-		return true
+func (c *Classifier) detectDDoSMitigation(prefix string, ctx *MessageContext) (*LeakDetail, bool) {
+	// Flowspec: look for traffic-rate in communities or specific flowspec communities
+	if strings.Contains(ctx.CommStr, "traffic-rate:") || strings.Contains(ctx.CommStr, "traffic-action:") {
+		return &LeakDetail{Type: DDoSFlowspec}, true
 	}
 
-	// Or look for /32 (IPv4) or /128 (IPv6)
+	// RTBH: look for standard RTBH communities (e.g. 65535:666) or exact host routes
 	pfx, err := netip.ParsePrefix(prefix)
-	if err != nil {
-		return false
+	isHostRoute := err == nil && ((pfx.Addr().Is4() && pfx.Bits() == 32) || (pfx.Addr().Is6() && pfx.Bits() == 128))
+	if strings.Contains(ctx.CommStr, "65535:666") || isHostRoute {
+		return &LeakDetail{Type: DDoSRTBH}, true
 	}
 
-	if (pfx.Addr().Is4() && pfx.Bits() == 32) || (pfx.Addr().Is6() && pfx.Bits() == 128) {
-		return true
+	// Traffic Redirection: look for scrubbing center characteristics
+	// Heuristic: If we see certain route target communities often used for VRF leaking
+	// or heavy AS-path prepending along with specific next-hop alterations, but
+	// for a simple heuristic, we can check for common scrubbing center ASNs in the path
+	// or specific community strings indicating redirection.
+	// We'll rely on community hints or known scrubbing ASNs in the path.
+	// Cloudflare (13335), Akamai/Prolexic (32787), Imperva (19551), Fastly (54113), Radware (30689)
+	scrubbingASNs := map[uint32]bool{
+		32787: true, // Prolexic
+		19551: true, // Imperva
+		30689: true, // Radware
 	}
 
-	return false
+	if ctx.PathStr != "" {
+		fields := strings.Fields(strings.Trim(ctx.PathStr, "[]"))
+		for _, f := range fields {
+			var asn uint32
+			if _, err := fmt.Sscanf(f, "%d", &asn); err == nil {
+				if scrubbingASNs[asn] {
+					return &LeakDetail{Type: DDoSTrafficRedirection}, true
+				}
+			}
+		}
+	}
+
+	return nil, false
 }
