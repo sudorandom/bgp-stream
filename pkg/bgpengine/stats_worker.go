@@ -10,6 +10,7 @@ import (
 
 	"github.com/biter777/countries"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/sudorandom/bgp-stream/pkg/bgp"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
@@ -20,7 +21,7 @@ type hub struct {
 
 type windowBucket struct {
 	countryActivity map[string]int
-	anomalyActivity map[ClassificationType]map[string]int
+	anomalyActivity map[bgp.ClassificationType]map[string]int
 }
 
 func getMaskLen(prefix string) int {
@@ -41,7 +42,7 @@ type statsEvent struct {
 }
 
 type prefixClassState struct {
-	ct ClassificationType
+	ct bgp.ClassificationType
 	ts time.Time
 }
 
@@ -76,7 +77,7 @@ func (e *Engine) runStatsWorker() {
 	}
 	for i := range state.buckets {
 		state.buckets[i].countryActivity = make(map[string]int)
-		state.buckets[i].anomalyActivity = make(map[ClassificationType]map[string]int)
+		state.buckets[i].anomalyActivity = make(map[bgp.ClassificationType]map[string]int)
 	}
 
 	for msg := range e.statsCh {
@@ -174,7 +175,7 @@ func (e *Engine) calculateActiveHubs(state *statsWorkerState) []*VisualHub {
 
 		cc := state.hubCurrent[i].cc
 		countryName := countries.ByName(cc).String()
-		if countryName == strUnknown {
+		if countryName == bgp.StrUnknown {
 			countryName = cc
 		}
 		if idx := strings.Index(countryName, " ("); idx != -1 {
@@ -216,7 +217,7 @@ func (e *Engine) gatherActiveImpactsWorker(state *statsWorkerState) []*VisualImp
 
 	// Aggregate prefix activity over 60s
 	prefixMsgCounts := make(map[string]int)
-	prefixClass := make(map[string]ClassificationType)
+	prefixClass := make(map[string]bgp.ClassificationType)
 
 	for i := 0; i < 60; i++ {
 		b := &state.buckets[i]
@@ -239,7 +240,7 @@ func (e *Engine) gatherActiveImpactsWorker(state *statsWorkerState) []*VisualImp
 			delete(state.prefixToClassification, p)
 			continue
 		}
-		if st.ct == ClassificationNone {
+		if st.ct == bgp.ClassificationNone {
 			continue
 		}
 		// Only override if not already in prefixClass or if higher priority
@@ -285,10 +286,10 @@ func (e *Engine) calculatePrefixCounts(state *statsWorkerState, allImpact []*Vis
 	}
 	clear(state.asnsPerClass)
 
-	allClasses := []ClassificationType{
-		ClassificationHijack, ClassificationRouteLeak, ClassificationOutage,
-		ClassificationFlap, ClassificationDDoSMitigation, ClassificationTrafficEngineering,
-		ClassificationPathHunting, ClassificationDiscovery,
+	allClasses := []bgp.ClassificationType{
+		bgp.ClassificationHijack, bgp.ClassificationRouteLeak, bgp.ClassificationOutage,
+		bgp.ClassificationFlap, bgp.ClassificationDDoSMitigation, bgp.ClassificationTrafficEngineering,
+		bgp.ClassificationPathHunting, bgp.ClassificationDiscovery,
 	}
 	for _, ct := range allClasses {
 		name := ct.String()
@@ -397,7 +398,7 @@ func (e *Engine) groupASNImpactsWorker(state *statsWorkerState, allImpact []*Vis
 		}
 		g.totalCount += visI.Count
 
-		if visI.LeakType != LeakUnknown {
+		if visI.LeakType != bgp.LeakUnknown {
 			g.leakType = visI.LeakType
 			g.leakerASN = visI.LeakerASN
 			g.victimASN = visI.VictimASN
@@ -478,7 +479,7 @@ func (e *Engine) processStatsEvent(msg *statsEvent, state *statsWorkerState) {
 		}
 
 		// Track activity for this classification in the current rolling window bucket
-		if ev.classificationType != ClassificationNone {
+		if ev.classificationType != bgp.ClassificationNone {
 			bucket := &state.buckets[state.currentIdx]
 			if bucket.anomalyActivity[ev.classificationType] == nil {
 				bucket.anomalyActivity[ev.classificationType] = make(map[string]int)

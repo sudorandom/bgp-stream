@@ -27,36 +27,12 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	geojson "github.com/paulmach/go.geojson"
-	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgpengine/proto/v1"
+	"github.com/sudorandom/bgp-stream/pkg/bgp"
+	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgp/proto/v1"
 	"github.com/sudorandom/bgp-stream/pkg/geoservice"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 	"google.golang.org/protobuf/proto"
 )
-
-type EventType int
-
-const (
-	EventUnknown EventType = iota
-	EventNew
-	EventUpdate
-	EventWithdrawal
-	EventGossip
-)
-
-func (t EventType) String() string {
-	switch t {
-	case EventNew:
-		return "new"
-	case EventUpdate:
-		return "upd"
-	case EventWithdrawal:
-		return "with"
-	case EventGossip:
-		return "gossip"
-	default:
-		return "unknown"
-	}
-}
 
 type EventShape int
 
@@ -77,7 +53,7 @@ type Pulse struct {
 
 type QueuedPulse struct {
 	Lat, Lng      float64
-	Type          EventType
+	Type          bgp.EventType
 	Color         color.RGBA
 	Count         int
 	ScheduledTime time.Time
@@ -148,7 +124,7 @@ type CriticalEvent struct {
 	ASN       uint32
 	ASNStr    string
 	OrgID     string
-	LeakType  LeakType
+	LeakType  bgp.LeakType
 	LeakerASN uint32
 	VictimASN uint32
 	Locations string
@@ -263,8 +239,8 @@ type Engine struct {
 	ActiveHubs []*VisualHub
 
 	prefixImpactHistory    []map[string]int
-	prefixToClassification map[string]ClassificationType
-	currentAnomalies       map[ClassificationType]map[string]int
+	prefixToClassification map[string]bgp.ClassificationType
+	currentAnomalies       map[bgp.ClassificationType]map[string]int
 	VisualImpact           map[string]*VisualImpact
 	ActiveImpacts          []*VisualImpact
 	ActiveASNImpacts       []*ASNImpact
@@ -282,7 +258,7 @@ type Engine struct {
 	RPKI    *utils.RPKIManager
 
 	audioPlayer *AudioPlayer
-	processor   *BGPProcessor
+	processor   *bgp.BGPProcessor
 	asnMapping  *utils.ASNMapping
 	geoResolver geoservice.GeoResolver
 	dataMgr     *geoservice.DataManager
@@ -342,12 +318,12 @@ type bgpEvent struct {
 	lat, lng           float64
 	cc                 string
 	city               string
-	eventType          EventType
-	classificationType ClassificationType
+	eventType          bgp.EventType
+	classificationType bgp.ClassificationType
 	prefix             string
 	asn                uint32
 	historicalASN      uint32
-	leakDetail         *LeakDetail
+	leakDetail         *bgp.LeakDetail
 }
 
 type VisualHub struct {
@@ -365,7 +341,7 @@ type VisualHub struct {
 
 type PrefixCount struct {
 	Name     string
-	Type     ClassificationType
+	Type     bgp.ClassificationType
 	Count    int
 	CountStr string
 	ASNCount int
@@ -394,7 +370,7 @@ type ASNImpact struct {
 	Count     int
 	Rate      float64
 
-	LeakType  LeakType
+	LeakType  bgp.LeakType
 	LeakerASN uint32
 	VictimASN uint32
 	Locations string
@@ -418,7 +394,7 @@ type VisualImpact struct {
 	TargetAlpha                float32
 	Active                     bool
 
-	LeakType  LeakType
+	LeakType  bgp.LeakType
 	LeakerASN uint32
 	VictimASN uint32
 	CCs       map[string]struct{}
@@ -442,7 +418,7 @@ type asnGroup struct {
 	maxCount   float64
 	totalCount float64
 
-	leakType  LeakType
+	leakType  bgp.LeakType
 	leakerASN uint32
 	victimASN uint32
 	locations map[string]struct{}
@@ -492,8 +468,8 @@ func NewEngine(width, height int, scale float64) *Engine {
 		lastMetricsUpdate:      time.Now(),
 		VisualHubs:             make(map[string]*VisualHub),
 		prefixImpactHistory:    make([]map[string]int, 60), // 60 buckets * 20s = 20 mins
-		prefixToClassification: make(map[string]ClassificationType),
-		currentAnomalies:       make(map[ClassificationType]map[string]int),
+		prefixToClassification: make(map[string]bgp.ClassificationType),
+		currentAnomalies:       make(map[bgp.ClassificationType]map[string]int),
 		VisualImpact:           make(map[string]*VisualImpact),
 		lastFrameCapturedAt:    time.Now(),
 		drawOp:                 &ebiten.DrawImageOptions{},
@@ -649,7 +625,7 @@ func (e *Engine) LoadRemainingData() error {
 		log.Printf("Warning: Failed to load ASN mapping: %v", err)
 	}
 
-	e.processor = NewBGPProcessor(e.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.RPKI, e.prefixToIP, e.Now, e.recordEvent)
+	e.processor = bgp.NewBGPProcessor(e.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.RPKI, e.prefixToIP, e.Now, e.recordEvent)
 
 	// Preload anomalies from state DB to initialize the BGP EVENT SUMMARY
 	go e.preloadActiveAnomalies()
@@ -685,22 +661,22 @@ func (e *Engine) preloadActiveAnomalies() {
 			mask := int(k[4])
 			prefix := fmt.Sprintf("%s/%d", ip.String(), mask)
 
-			c, name, _ := e.getClassificationVisuals(ClassificationType(state.ClassifiedType))
+			c, name, _ := e.getClassificationVisuals(bgp.ClassificationType(state.ClassifiedType))
 
 			ipUint := binary.BigEndian.Uint32(k[:4])
 			_, _, cc, city, _ := e.GetIPCoords(ipUint)
 
 			ev := &bgpEvent{
 				prefix:             prefix,
-				classificationType: ClassificationType(state.ClassifiedType),
+				classificationType: bgp.ClassificationType(state.ClassifiedType),
 				asn:                state.LastOriginAsn,
 				cc:                 cc,
 				city:               city,
 			}
 
-			if state.LeakType != 0 || ClassificationType(state.ClassifiedType) == ClassificationDDoSMitigation {
-				ev.leakDetail = &LeakDetail{
-					Type:      LeakType(state.LeakType),
+			if state.LeakType != 0 || bgp.ClassificationType(state.ClassifiedType) == bgp.ClassificationDDoSMitigation {
+				ev.leakDetail = &bgp.LeakDetail{
+					Type:      bgp.LeakType(state.LeakType),
 					LeakerASN: state.LeakerAsn,
 					VictimASN: state.VictimAsn,
 				}
@@ -1127,7 +1103,7 @@ func (e *Engine) AddPulse(lat, lng float64, c color.RGBA, count int, shape ...Ev
 	}
 }
 
-func (e *Engine) GetProcessor() *BGPProcessor {
+func (e *Engine) GetProcessor() *bgp.BGPProcessor {
 	return e.processor
 }
 
@@ -1466,8 +1442,8 @@ func (e *Engine) processEventBatch(batch []*bgpEvent) {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn, historicalASN uint32, leakDetail ...*LeakDetail) {
-	var ld *LeakDetail
+func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType bgp.EventType, classificationType bgp.ClassificationType, prefix string, asn, historicalASN uint32, leakDetail ...*bgp.LeakDetail) {
+	var ld *bgp.LeakDetail
 	if len(leakDetail) > 0 {
 		ld = leakDetail[0]
 	}
@@ -1493,7 +1469,7 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 	e.incrementCityBuffer(ev.lat, ev.lng, c, shape)
 
 	// 4. Record to CriticalStream if it's a critical anomaly
-	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation || ev.classificationType == ClassificationHijack {
+	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationDDoSMitigation || ev.classificationType == bgp.ClassificationHijack {
 		e.recordToCriticalStream(ev, c, name)
 	}
 
@@ -1535,7 +1511,7 @@ func (e *Engine) getBestLocation(prefix, cc, city string) string {
 }
 
 func (e *Engine) isIgnoredDDoS(ev *bgpEvent) bool {
-	if ev.classificationType != ClassificationDDoSMitigation {
+	if ev.classificationType != bgp.ClassificationDDoSMitigation {
 		return false
 	}
 
@@ -1568,7 +1544,7 @@ func (e *Engine) isIgnoredDDoS(ev *bgpEvent) bool {
 
 func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string) {
 	// Filter out ASN 0 for outages as requested
-	if ev.classificationType == ClassificationOutage && ev.asn == 0 {
+	if ev.classificationType == bgp.ClassificationOutage && ev.asn == 0 {
 		return
 	}
 
@@ -1610,7 +1586,7 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 	}
 
 	// If the event is not critical itself, we are done
-	if ev.classificationType != ClassificationOutage && ev.classificationType != ClassificationRouteLeak && ev.classificationType != ClassificationDDoSMitigation && ev.classificationType != ClassificationHijack {
+	if ev.classificationType != bgp.ClassificationOutage && ev.classificationType != bgp.ClassificationRouteLeak && ev.classificationType != bgp.ClassificationDDoSMitigation && ev.classificationType != bgp.ClassificationHijack {
 		return
 	}
 
@@ -1641,7 +1617,7 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 
 	// Filter out outages with low impact (< 1000 IPs)
 	// We only add NEW outages to the stream if they meet the threshold.
-	if ev.classificationType == ClassificationOutage && utils.GetPrefixSize(ev.prefix) < 1000 {
+	if ev.classificationType == bgp.ClassificationOutage && utils.GetPrefixSize(ev.prefix) < 1000 {
 		return
 	}
 
@@ -1709,13 +1685,13 @@ func (e *Engine) isSameEvent(ce *CriticalEvent, ev *bgpEvent, name string) bool 
 	}
 
 	// For Route Leaks match based on leak details
-	if name == nameRouteLeak && ev.leakDetail != nil {
-		return (ce.LeakType == LeakUnknown || ce.LeakType == ev.leakDetail.Type) &&
+	if name == bgp.NameRouteLeak && ev.leakDetail != nil {
+		return (ce.LeakType == bgp.LeakUnknown || ce.LeakType == ev.leakDetail.Type) &&
 			ce.LeakerASN == ev.leakDetail.LeakerASN && ce.VictimASN == ev.leakDetail.VictimASN
 	}
 
 	// For DDoS Mitigation, always match by provider/victim pair
-	if name == nameDDoSMitigation {
+	if name == bgp.NameDDoSMitigation {
 		leaker := ev.asn
 		victim := ev.historicalASN
 		if ev.leakDetail != nil {
@@ -1756,7 +1732,7 @@ func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bo
 	}
 
 	// Update IP Impact
-	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation || ev.classificationType == ClassificationHijack {
+	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationDDoSMitigation || ev.classificationType == bgp.ClassificationHijack {
 		if ce.ImpactedPrefixes == nil {
 			ce.ImpactedPrefixes = make(map[string]struct{})
 		}
@@ -1768,7 +1744,7 @@ func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bo
 	}
 
 	// RETROACTIVE UPDATE: If we now have leak details that the previous entry lacked, update it
-	if ce.Anom == nameDDoSMitigation {
+	if ce.Anom == bgp.NameDDoSMitigation {
 		if ce.LeakerASN == 0 {
 			if ev.leakDetail != nil && ev.leakDetail.LeakerASN != 0 {
 				ce.LeakerASN = ev.leakDetail.LeakerASN
@@ -1787,7 +1763,7 @@ func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bo
 				needsUpdate = true
 			}
 		}
-	} else if ce.LeakType == LeakUnknown && ev.leakDetail != nil {
+	} else if ce.LeakType == bgp.LeakUnknown && ev.leakDetail != nil {
 		ce.LeakType = ev.leakDetail.Type
 		ce.LeakerASN = ev.leakDetail.LeakerASN
 		ce.VictimASN = ev.leakDetail.VictimASN
@@ -1812,7 +1788,7 @@ func (e *Engine) createCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 		Locations:        newLoc,
 		ImpactedPrefixes: make(map[string]struct{}),
 	}
-	if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation || ev.classificationType == ClassificationHijack {
+	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationDDoSMitigation || ev.classificationType == bgp.ClassificationHijack {
 		ce.ImpactedPrefixes[ev.prefix] = struct{}{}
 		ce.ImpactedIPs = utils.GetPrefixSize(ev.prefix)
 	}
@@ -1821,7 +1797,7 @@ func (e *Engine) createCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 		ce.LeakerASN = ev.leakDetail.LeakerASN
 		ce.VictimASN = ev.leakDetail.VictimASN
 	}
-	if ce.Anom == nameDDoSMitigation {
+	if ce.Anom == bgp.NameDDoSMitigation {
 		if ce.LeakerASN == 0 {
 			ce.LeakerASN = ev.asn
 		}
@@ -1897,9 +1873,9 @@ func (e *Engine) updateCriticalEventCacheStrs(ce *CriticalEvent) {
 		ce.CachedTypeWidth, _ = text.Measure(ce.CachedTypeLabel, e.subMonoFace, 0)
 	}
 
-	if ce.Anom == nameHardOutage || ce.Anom == nameDDoSMitigation || ce.Anom == nameRouteLeak || ce.Anom == nameHijack {
+	if ce.Anom == bgp.NameHardOutage || ce.Anom == bgp.NameDDoSMitigation || ce.Anom == bgp.NameRouteLeak || ce.Anom == bgp.NameHijack {
 		ce.CachedFirstLine = fmt.Sprintf(" %s IPs Impacted", utils.FormatNumber(ce.ImpactedIPs))
-		if ce.Anom == nameHardOutage {
+		if ce.Anom == bgp.NameHardOutage {
 			e.cacheOutageStrings(ce)
 		} else {
 			e.cacheLeakStrings(ce)
@@ -1907,27 +1883,27 @@ func (e *Engine) updateCriticalEventCacheStrs(ce *CriticalEvent) {
 		}
 	} else {
 		ce.CachedFirstLine = ce.ASNStr
-		if ce.Anom == nameRouteLeak && ce.LeakerASN != 0 {
+		if ce.Anom == bgp.NameRouteLeak && ce.LeakerASN != 0 {
 			e.cacheLeakStrings(ce)
 		}
 	}
 
-	if ce.ImpactedIPs > 0 && ce.Anom != nameHardOutage && ce.Anom != nameDDoSMitigation && ce.Anom != nameHijack {
+	if ce.ImpactedIPs > 0 && ce.Anom != bgp.NameHardOutage && ce.Anom != bgp.NameDDoSMitigation && ce.Anom != bgp.NameHijack {
 		e.cacheImpactStrings(ce)
 	}
 }
 
 func (e *Engine) cacheLeakStrings(ce *CriticalEvent) {
-	if ce.Anom == nameRouteLeak {
+	if ce.Anom == bgp.NameRouteLeak {
 		ce.CachedFirstLine = ce.LeakType.String()
 	}
 
 	leakerLabel := "  Leaker: "
 	victimLabel := "  Impacted: "
-	if ce.Anom == nameDDoSMitigation {
+	if ce.Anom == bgp.NameDDoSMitigation {
 		leakerLabel = "  Provider: "
 	}
-	if ce.Anom == nameHijack {
+	if ce.Anom == bgp.NameHijack {
 		leakerLabel = "  Hijacker: "
 		victimLabel = "  Victim: "
 	}
@@ -2102,28 +2078,28 @@ func (e *Engine) incrementCityBuffer(lat, lng float64, c color.RGBA, shape Event
 	b.Counts[PulseKey{Color: c, Shape: shape}]++
 }
 
-func (e *Engine) getClassificationVisuals(classificationType ClassificationType) (visualColor color.RGBA, classificationName string, shape EventShape) {
+func (e *Engine) getClassificationVisuals(classificationType bgp.ClassificationType) (visualColor color.RGBA, classificationName string, shape EventShape) {
 	switch classificationType {
-	case ClassificationNone:
-		return ColorDiscovery, nameDiscovery, ShapeCircle
-	case ClassificationDiscovery:
-		return ColorDiscovery, nameDiscovery, ShapeCircle
-	case ClassificationTrafficEngineering:
-		return ColorPolicy, nameTrafficEng, ShapeCircle
-	case ClassificationPathHunting:
-		return ColorPolicy, namePathHunting, ShapeCircle
-	case ClassificationFlap:
-		return ColorBad, nameFlap, ShapeCircle
-	case ClassificationOutage:
-		return ColorOutage, nameHardOutage, ShapeCircle
-	case ClassificationRouteLeak:
-		return ColorCritical, nameRouteLeak, ShapeCircle
-	case ClassificationHijack:
-		return ColorCritical, nameHijack, ShapeFlare
-	case ClassificationBogon:
-		return ColorCritical, nameBogon, ShapeFlare
-	case ClassificationDDoSMitigation:
-		return ColorDDoSMitigation, nameDDoSMitigation, ShapeSquare
+	case bgp.ClassificationNone:
+		return ColorDiscovery, bgp.NameDiscovery, ShapeCircle
+	case bgp.ClassificationDiscovery:
+		return ColorDiscovery, bgp.NameDiscovery, ShapeCircle
+	case bgp.ClassificationTrafficEngineering:
+		return ColorPolicy, bgp.NameTrafficEng, ShapeCircle
+	case bgp.ClassificationPathHunting:
+		return ColorPolicy, bgp.NamePathHunting, ShapeCircle
+	case bgp.ClassificationFlap:
+		return ColorBad, bgp.NameFlap, ShapeCircle
+	case bgp.ClassificationOutage:
+		return ColorOutage, bgp.NameHardOutage, ShapeCircle
+	case bgp.ClassificationRouteLeak:
+		return ColorCritical, bgp.NameRouteLeak, ShapeCircle
+	case bgp.ClassificationHijack:
+		return ColorCritical, bgp.NameHijack, ShapeFlare
+	case bgp.ClassificationBogon:
+		return ColorCritical, bgp.NameBogon, ShapeFlare
+	case bgp.ClassificationDDoSMitigation:
+		return ColorDDoSMitigation, bgp.NameDDoSMitigation, ShapeSquare
 	default:
 		return color.RGBA{}, "", ShapeCircle
 	}
@@ -2131,11 +2107,11 @@ func (e *Engine) getClassificationVisuals(classificationType ClassificationType)
 
 func (e *Engine) GetPriority(name string) int {
 	switch name {
-	case nameRouteLeak, nameHardOutage, nameHijack:
+	case bgp.NameRouteLeak, bgp.NameHardOutage, bgp.NameHijack:
 		return 3 // Critical (Red)
-	case nameFlap:
+	case bgp.NameFlap:
 		return 2 // Bad (Orange)
-	case nameTrafficEng, namePathHunting, nameDDoSMitigation:
+	case bgp.NameTrafficEng, bgp.NamePathHunting, bgp.NameDDoSMitigation:
 		return 1 // Normalish (Purple)
 	default:
 		return 0 // Discovery (Blue)
@@ -2144,18 +2120,18 @@ func (e *Engine) GetPriority(name string) int {
 
 func (e *Engine) getClassificationUIColor(name string) color.RGBA {
 	switch name {
-	case nameRouteLeak, nameHardOutage, nameHijack:
+	case bgp.NameRouteLeak, bgp.NameHardOutage, bgp.NameHijack:
 		return ColorWithUI
-	case nameFlap:
+	case bgp.NameFlap:
 		return ColorBad // Already pretty bright
-	case nameTrafficEng, namePathHunting, nameDDoSMitigation:
+	case bgp.NameTrafficEng, bgp.NamePathHunting, bgp.NameDDoSMitigation:
 		return ColorUpdUI
 	default:
 		return ColorGossipUI
 	}
 }
 
-func (e *Engine) updateWindowedMetrics(eventType EventType, classificationType ClassificationType, prefix string, asn uint32) {
+func (e *Engine) updateWindowedMetrics(eventType bgp.EventType, classificationType bgp.ClassificationType, prefix string, asn uint32) {
 	if cat, ok := utils.GetExcludedASNCategory(asn); ok {
 		switch cat {
 		case "DoD Honeypot":
@@ -2168,39 +2144,39 @@ func (e *Engine) updateWindowedMetrics(eventType EventType, classificationType C
 	}
 
 	switch classificationType {
-	case ClassificationFlap:
+	case bgp.ClassificationFlap:
 		e.windowFlap++
-	case ClassificationTrafficEngineering:
+	case bgp.ClassificationTrafficEngineering:
 		e.windowTE++
-	case ClassificationPathHunting:
+	case bgp.ClassificationPathHunting:
 		e.windowHunting++
-	case ClassificationOutage:
+	case bgp.ClassificationOutage:
 		e.windowOutage++
-	case ClassificationRouteLeak:
-	case ClassificationHijack:
+	case bgp.ClassificationRouteLeak:
+	case bgp.ClassificationHijack:
 		e.windowHijack++
-	case ClassificationBogon:
+	case bgp.ClassificationBogon:
 		e.windowBogon++
 		e.windowLeak++
-	case ClassificationDDoSMitigation:
+	case bgp.ClassificationDDoSMitigation:
 		e.windowDDoS++
-	case ClassificationNone, ClassificationDiscovery:
+	case bgp.ClassificationNone, bgp.ClassificationDiscovery:
 		e.windowGlobal++
 	}
 
 	switch eventType {
-	case EventNew:
+	case bgp.EventNew:
 		e.windowNew++
 		if prefix != "" {
 			e.bufferMu.Lock()
 			e.seenBuffer[prefix] = asn
 			e.bufferMu.Unlock()
 		}
-	case EventUpdate:
+	case bgp.EventUpdate:
 		e.windowUpd++
-	case EventWithdrawal:
+	case bgp.EventWithdrawal:
 		e.windowWith++
-	case EventGossip:
+	case bgp.EventGossip:
 		e.windowGossip++
 	}
 }

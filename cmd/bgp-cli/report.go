@@ -10,8 +10,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/sudorandom/bgp-stream/pkg/bgpengine"
-	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgpengine/proto/v1"
+	"github.com/sudorandom/bgp-stream/pkg/bgp"
+	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgp/proto/v1"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 	"google.golang.org/protobuf/proto"
 )
@@ -23,15 +23,15 @@ type ReportCmd struct {
 
 func (c *ReportCmd) Run() error {
 	stateMap := map[string]string{
-		"flap":            "Flap",
-		"path_hunting":    "Path Hunting",
-		"traffic_eng":     "Traffic Eng.",
-		"outage":          "Outage",
-		"route_leak":      "Route Leak",
-		"discovery":       "Discovery",
-		"ddos_mitigation": "DDoS Mitigation",
-		"bgp_hijack":      "BGP Hijack",
-		"bogon_martian":   "Bogon/Martian",
+		"flap":            bgp.NameFlap,
+		"path_hunting":    bgp.NamePathHunting,
+		"traffic_eng":     bgp.NameTrafficEng,
+		"outage":          bgp.NameHardOutage,
+		"route_leak":      bgp.NameRouteLeak,
+		"discovery":       bgp.NameDiscovery,
+		"ddos_mitigation": bgp.NameDDoSMitigation,
+		"bgp_hijack":      bgp.NameHijack,
+		"bogon_martian":   bgp.NameBogon,
 	}
 
 	targetStates := make(map[string]bool)
@@ -77,7 +77,7 @@ func (c *ReportCmd) Run() error {
 			return nil
 		}
 
-		className := bgpengine.ClassificationType(state.ClassifiedType).String()
+		className := bgp.ClassificationType(state.ClassifiedType).String()
 		if !targetStates[strings.ToLower(className)] {
 			return nil
 		}

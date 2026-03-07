@@ -1,6 +1,6 @@
 version: v2
 modules:
-  - path: pkg/bgpengine/proto
+  - path: pkg/bgp/proto
 lint:
   use:
     - DEFAULT

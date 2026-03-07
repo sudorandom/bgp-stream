@@ -21,8 +21,8 @@ import (
 
 	"github.com/osrg/gobgp/v3/pkg/packet/bgp"
 	"github.com/osrg/gobgp/v3/pkg/packet/mrt"
-	"github.com/sudorandom/bgp-stream/pkg/bgpengine"
-	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgpengine/proto/v1"
+	bgp_pkg "github.com/sudorandom/bgp-stream/pkg/bgp"
+	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgp/proto/v1"
 	"github.com/sudorandom/bgp-stream/pkg/geoservice"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
@@ -72,7 +72,7 @@ func (c *AnalyzeCmd) Run() error {
 		return time.Unix(currentTime, 0)
 	}
 
-	masterClassifier := bgpengine.NewClassifier(nil, nil, asnMapping, rpki, prefixToIP, nil, timeProvider)
+	masterClassifier := bgp_pkg.NewClassifier(nil, nil, asnMapping, rpki, prefixToIP, nil, timeProvider)
 
 	runReplay(startTime, endTime, rrcs, c.Cache, numWorkers, timeProvider, &currentTime, masterClassifier, csvWriter)
 
@@ -112,7 +112,7 @@ func setupCSVWriter(csvFile string) (writer *csv.Writer, closer func()) {
 
 var csvMu sync.Mutex
 
-func runReplay(startTime, endTime time.Time, rrcs []string, cacheDir string, numWorkers int, timeProvider bgpengine.TimeProvider, currentTime *int64, masterClassifier *bgpengine.Classifier, csvWriter *csv.Writer) {
+func runReplay(startTime, endTime time.Time, rrcs []string, cacheDir string, numWorkers int, timeProvider bgp_pkg.TimeProvider, currentTime *int64, masterClassifier *bgp_pkg.Classifier, csvWriter *csv.Writer) {
 	workers := make([]chan WorkerTask, numWorkers)
 	var wg sync.WaitGroup
 
@@ -125,7 +125,7 @@ func runReplay(startTime, endTime time.Time, rrcs []string, cacheDir string, num
 		go func(ch chan WorkerTask) {
 			defer wg.Done()
 			localPrefixStates := utils.NewLRUCache[string, *bgpproto.PrefixState](1000000 / numWorkers)
-			localClassifier := bgpengine.NewClassifier(nil, nil, asnMapping, rpki, prefixToIP, localPrefixStates, timeProvider)
+			localClassifier := bgp_pkg.NewClassifier(nil, nil, asnMapping, rpki, prefixToIP, localPrefixStates, timeProvider)
 
 			for task := range ch {
 				processUpdate(localClassifier, masterClassifier, task.msg, task.update, csvWriter, &csvMu)
@@ -282,8 +282,8 @@ func prefixToIP(p string) uint32 {
 	return utils.IPToUint32(parsedIP)
 }
 
-func processUpdate(localClassifier, masterClassifier *bgpengine.Classifier, msg *MRTMessage, update *bgp.BGPUpdate, writer *csv.Writer, csvMu *sync.Mutex) {
-	ctx := &bgpengine.MessageContext{
+func processUpdate(localClassifier, masterClassifier *bgp_pkg.Classifier, msg *MRTMessage, update *bgp.BGPUpdate, writer *csv.Writer, csvMu *sync.Mutex) {
+	ctx := &bgp_pkg.MessageContext{
 		Peer: msg.Peer,
 		Host: msg.Collector,
 		Now:  msg.Timestamp,
@@ -331,18 +331,18 @@ func processUpdate(localClassifier, masterClassifier *bgpengine.Classifier, msg 
 	}
 }
 
-func handlePrefix(localClassifier, masterClassifier *bgpengine.Classifier, prefix string, ctx *bgpengine.MessageContext, writer *csv.Writer, csvMu *sync.Mutex) {
-	oldType := bgpengine.ClassificationNone
+func handlePrefix(localClassifier, masterClassifier *bgp_pkg.Classifier, prefix string, ctx *bgp_pkg.MessageContext, writer *csv.Writer, csvMu *sync.Mutex) {
+	oldType := bgp_pkg.ClassificationNone
 	state, ok := localClassifier.GetPrefixState(prefix)
 	if ok {
-		oldType = bgpengine.ClassificationType(state.ClassifiedType)
+		oldType = bgp_pkg.ClassificationType(state.ClassifiedType)
 	}
 
 	ev, classified := localClassifier.ClassifyEvent(prefix, ctx)
 
 	if classified {
 		state, _ = localClassifier.GetPrefixState(prefix)
-		newType := bgpengine.ClassificationType(state.ClassifiedType)
+		newType := bgp_pkg.ClassificationType(state.ClassifiedType)
 
 		if oldType != newType {
 			masterClassifier.RecordClassification(prefix, state, newType, ctx.Now.Unix(), ctx, ev.HistoricalASN, ev.LeakDetail)
@@ -360,7 +360,7 @@ func handlePrefix(localClassifier, masterClassifier *bgpengine.Classifier, prefi
 	}
 }
 
-func writeSummary(path string, c *bgpengine.Classifier) {
+func writeSummary(path string, c *bgp_pkg.Classifier) {
 	stats, total := c.GetClassificationStats()
 	f, err := os.Create(path)
 	if err != nil {
@@ -381,7 +381,7 @@ func writeSummary(path string, c *bgpengine.Classifier) {
 	sort.Ints(keys)
 
 	for _, k := range keys {
-		ct := bgpengine.ClassificationType(k)
+		ct := bgp_pkg.ClassificationType(k)
 		_, _ = fmt.Fprintf(f, "  %-20s: %d\n", ct.String(), stats[ct])
 	}
 }

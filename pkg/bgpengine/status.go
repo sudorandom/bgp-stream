@@ -11,6 +11,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/sudorandom/bgp-stream/pkg/bgp"
 )
 
 type legendRow struct {
@@ -343,7 +344,7 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float
 	textOp.GeoM.Translate(x+ce.CachedTypeWidth+10, y)
 
 	// Use a distinct color for sub-classifications (Route Leak types, DDoS) or Impact
-	if ce.Anom == nameRouteLeak || ce.Anom == nameHardOutage || ce.Anom == nameDDoSMitigation || ce.Anom == nameHijack {
+	if ce.Anom == bgp.NameRouteLeak || ce.Anom == bgp.NameHardOutage || ce.Anom == bgp.NameDDoSMitigation || ce.Anom == bgp.NameHijack {
 		textOp.ColorScale.Reset()
 		textOp.ColorScale.Scale(0, 1, 1, 0.9) // Cyan for sub-type or impact
 	} else {
@@ -361,8 +362,8 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float
 
 	// Details for Route Leaks
 	switch ce.Anom {
-	case nameRouteLeak:
-		if ce.LeakType != LeakUnknown {
+	case bgp.NameRouteLeak:
+		if ce.LeakType != bgp.LeakUnknown {
 			// Leaker
 			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
 
@@ -372,7 +373,7 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float
 			// Networks line
 			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
 		}
-	case nameHardOutage:
+	case bgp.NameHardOutage:
 		// Impacted ASN line
 		nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedASNLabel, ce.CachedASNVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
 
@@ -383,9 +384,9 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float
 		if ce.CachedLocVal != "" {
 			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLocLabel, ce.CachedLocVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
 		}
-	case nameDDoSMitigation, nameHijack:
+	case bgp.NameDDoSMitigation, bgp.NameHijack:
 		// Provider/Hijacker - Skip if DDoS and Provider == Victim
-		if ce.Anom != nameDDoSMitigation || ce.LeakerASN != ce.VictimASN {
+		if ce.Anom != bgp.NameDDoSMitigation || ce.LeakerASN != ce.VictimASN {
 			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
 		}
 
@@ -1100,19 +1101,19 @@ func (e *Engine) calculateEventHeight(ce *CriticalEvent, boxW, fontSize float64)
 	detailsW := boxW - indent - 5
 
 	switch ce.Anom {
-	case nameRouteLeak:
-		if ce.LeakType != LeakUnknown {
+	case bgp.NameRouteLeak:
+		if ce.LeakType != bgp.LeakUnknown {
 			h += e.labeledLineHeight(ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, detailsW, fontSize)
 			h += e.labeledLineHeight(ce.CachedVictimLabel, ce.CachedVictimVal, e.subMonoFace, detailsW, fontSize)
 			h += e.labeledLineHeight(ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, detailsW, fontSize)
 		}
-	case nameHardOutage:
+	case bgp.NameHardOutage:
 		h += e.labeledLineHeight(ce.CachedASNLabel, ce.CachedASNVal, e.subMonoFace, detailsW, fontSize)
 		h += e.labeledLineHeight(ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, detailsW, fontSize)
 		if ce.CachedLocVal != "" {
 			h += e.labeledLineHeight(ce.CachedLocLabel, ce.CachedLocVal, e.subMonoFace, detailsW, fontSize)
 		}
-	case nameDDoSMitigation, nameHijack:
+	case bgp.NameDDoSMitigation, bgp.NameHijack:
 		h += e.labeledLineHeight(ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, detailsW, fontSize)
 		h += e.labeledLineHeight(ce.CachedVictimLabel, ce.CachedVictimVal, e.subMonoFace, detailsW, fontSize)
 		h += e.labeledLineHeight(ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, detailsW, fontSize)

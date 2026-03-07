@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sudorandom/bgp-stream/pkg/bgp"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
@@ -16,11 +17,11 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	// Initializing fonts and other UI stuff is not needed for this logic test
 
 	c := color.RGBA{255, 0, 0, 255}
-	name := nameHardOutage
+	name := bgp.NameHardOutage
 
 	// Event 1: Outage for ASN 1234, prefix 1.1.0.0/16
 	ev1 := &bgpEvent{
-		classificationType: ClassificationOutage,
+		classificationType: bgp.ClassificationOutage,
 		prefix:             "1.1.0.0/16",
 		asn:                1234,
 		cc:                 "US",
@@ -41,7 +42,7 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 
 	// Event 2: Same outage (same ASN), different prefix 1.2.0.0/16
 	ev2 := &bgpEvent{
-		classificationType: ClassificationOutage,
+		classificationType: bgp.ClassificationOutage,
 		prefix:             "1.2.0.0/16",
 		asn:                1234,
 		cc:                 "US",
@@ -54,7 +55,7 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 
 	// Event 3: Outage with ASN 5678, prefix 2.2.0.0/16
 	ev3 := &bgpEvent{
-		classificationType: ClassificationOutage,
+		classificationType: bgp.ClassificationOutage,
 		prefix:             "2.2.0.0/16",
 		asn:                5678,
 		cc:                 "FR",
@@ -69,7 +70,7 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 
 	// Event 4: Outage with ASN 0 (unknown) - should be ignored now
 	ev4 := &bgpEvent{
-		classificationType: ClassificationOutage,
+		classificationType: bgp.ClassificationOutage,
 		prefix:             "2.3.0.0/16",
 		asn:                0,
 		historicalASN:      5678,
@@ -82,14 +83,14 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	}
 
 	// Event 5: DDoS Mitigation, Provider 13335, Victim 9999, Prefix 3.3.0.0/16
-	nameDDoS := nameDDoSMitigation
+	nameDDoS := bgp.NameDDoSMitigation
 	ev5 := &bgpEvent{
-		classificationType: ClassificationDDoSMitigation,
+		classificationType: bgp.ClassificationDDoSMitigation,
 		prefix:             "3.3.0.0/16",
 		asn:                13335,
 		historicalASN:      9999,
 		cc:                 "NL",
-		leakDetail: &LeakDetail{
+		leakDetail: &bgp.LeakDetail{
 			LeakerASN: 13335,
 			VictimASN: 9999,
 		},
@@ -105,12 +106,12 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	// Event 6: Same DDoS Mitigation, different prefix
 	// This should now be deduplicated
 	ev6 := &bgpEvent{
-		classificationType: ClassificationDDoSMitigation,
+		classificationType: bgp.ClassificationDDoSMitigation,
 		prefix:             "3.4.0.0/16",
 		asn:                13335,
 		historicalASN:      9999,
 		cc:                 "NL",
-		leakDetail: &LeakDetail{
+		leakDetail: &bgp.LeakDetail{
 			LeakerASN: 13335,
 			VictimASN: 9999,
 		},
@@ -123,7 +124,7 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	// Verify both prefixes are in the DDoS event
 	var ddosEvent *CriticalEvent
 	for _, ce := range e.CriticalStream {
-		if ce.Anom == nameDDoSMitigation {
+		if ce.Anom == bgp.NameDDoSMitigation {
 			ddosEvent = ce
 			break
 		}
@@ -144,12 +145,12 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 	// Event 7: Cloudflare Self-Mitigation (Provider == Victim)
 	// This was previously ignored, now should be allowed.
 	ev7 := &bgpEvent{
-		classificationType: ClassificationDDoSMitigation,
+		classificationType: bgp.ClassificationDDoSMitigation,
 		prefix:             "1.3.0.0/16",
 		asn:                13335,
 		historicalASN:      13335,
 		cc:                 "US",
-		leakDetail: &LeakDetail{
+		leakDetail: &bgp.LeakDetail{
 			LeakerASN: 13335,
 			VictimASN: 13335,
 		},
@@ -182,11 +183,11 @@ func TestCriticalStreamExpiration(t *testing.T) {
 	e.VideoWriter = &fakeWriteCloser{}
 
 	c := color.RGBA{255, 0, 0, 255}
-	name := nameHardOutage
+	name := bgp.NameHardOutage
 
 	// T=0: Event 1 arrives
 	ev1 := &bgpEvent{
-		classificationType: ClassificationOutage,
+		classificationType: bgp.ClassificationOutage,
 		prefix:             "1.1.0.0/16",
 		asn:                1234,
 	}
@@ -243,18 +244,18 @@ func TestCriticalStreamTransition(t *testing.T) {
 		asnMapping:       utils.NewASNMapping(),
 	}
 	c := color.RGBA{255, 0, 0, 255}
-	name := nameHardOutage
+	name := bgp.NameHardOutage
 
 	// 1. Add Outage for two prefixes
 	ev1 := &bgpEvent{
-		classificationType: ClassificationOutage,
+		classificationType: bgp.ClassificationOutage,
 		prefix:             "1.1.0.0/16", // 65536 IPs
 		asn:                1234,
 	}
 	e.recordToCriticalStream(ev1, c, name)
 
 	ev2 := &bgpEvent{
-		classificationType: ClassificationOutage,
+		classificationType: bgp.ClassificationOutage,
 		prefix:             "1.2.0.0/16", // 65536 IPs
 		asn:                1234,
 	}
@@ -274,7 +275,7 @@ func TestCriticalStreamTransition(t *testing.T) {
 
 	// 2. Transition one prefix to Discovery (Not critical)
 	ev1Recovery := &bgpEvent{
-		classificationType: ClassificationDiscovery,
+		classificationType: bgp.ClassificationDiscovery,
 		prefix:             "1.1.0.0/16",
 		asn:                1234,
 	}
@@ -290,7 +291,7 @@ func TestCriticalStreamTransition(t *testing.T) {
 
 	// 3. Transition the other prefix to Discovery
 	ev2Recovery := &bgpEvent{
-		classificationType: ClassificationDiscovery,
+		classificationType: bgp.ClassificationDiscovery,
 		prefix:             "1.2.0.0/16",
 		asn:                1234,
 	}

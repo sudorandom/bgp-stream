@@ -1,5 +1,5 @@
 version: v2
 plugins:
   - local: protoc-gen-go
-    out: pkg/bgpengine/proto
+    out: pkg/bgp/proto
     opt: paths=source_relative
