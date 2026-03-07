@@ -1532,16 +1532,16 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 	e.streamMu.Lock()
 	defer e.streamMu.Unlock()
 
-	// Check for duplicates across the entire visible stream
-	for i, ce := range e.CriticalStream {
-		if e.isSameEvent(ce, ev, name, orgID) {
-			// Check if this specific prefix is still in the same critical state
-			_, currentAnomName, _ := e.getClassificationVisuals(ev.classificationType)
-			if currentAnomName != ce.Anom {
-				// Prefix transitioned to a different state!
-				// Remove it from THIS critical event
-				if ce.ImpactedPrefixes != nil {
-					if _, exists := ce.ImpactedPrefixes[ev.prefix]; exists {
+	// FIRST: Check if this prefix is currently tracked under a DIFFERENT anomaly type
+	// and remove it from that old event if so.
+	if ev.prefix != "" {
+		_, currentAnomName, _ := e.getClassificationVisuals(ev.classificationType)
+
+		// Check stream
+		for i, ce := range e.CriticalStream {
+			if ce.ImpactedPrefixes != nil {
+				if _, ok := ce.ImpactedPrefixes[ev.prefix]; ok {
+					if currentAnomName != ce.Anom {
 						delete(ce.ImpactedPrefixes, ev.prefix)
 						size := utils.GetPrefixSize(ev.prefix)
 						if ce.ImpactedIPs >= size {
@@ -1557,17 +1557,43 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 							e.CriticalStream = append(e.CriticalStream[:i], e.CriticalStream[i+1:]...)
 						}
 					}
+					break // A prefix can only be in one event
 				}
+			}
+		}
 
-				// If the new state is ALSO critical, it will be added as a new event below
-				// (or matched to another existing event of that type)
-				if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation || ev.classificationType == ClassificationHijack {
-					// Fallthrough to add/match for the NEW critical type
+		// Check queue
+		for i, ce := range e.criticalQueue {
+			if ce.ImpactedPrefixes != nil {
+				if _, ok := ce.ImpactedPrefixes[ev.prefix]; ok {
+					if currentAnomName != ce.Anom {
+						delete(ce.ImpactedPrefixes, ev.prefix)
+						size := utils.GetPrefixSize(ev.prefix)
+						if ce.ImpactedIPs >= size {
+							ce.ImpactedIPs -= size
+						} else {
+							ce.ImpactedIPs = 0
+						}
+						e.updateCriticalEventCacheStrs(ce)
+
+						if len(ce.ImpactedPrefixes) == 0 {
+							e.criticalQueue = append(e.criticalQueue[:i], e.criticalQueue[i+1:]...)
+						}
+					}
 					break
 				}
-				return
 			}
+		}
+	}
 
+	// If the event is not critical itself, we are done
+	if ev.classificationType != ClassificationOutage && ev.classificationType != ClassificationRouteLeak && ev.classificationType != ClassificationDDoSMitigation && ev.classificationType != ClassificationHijack {
+		return
+	}
+
+	// Check for duplicates across the entire visible stream
+	for _, ce := range e.CriticalStream {
+		if e.isSameEvent(ce, ev, name, orgID) {
 			ce.Timestamp = now // Reset expiration timer
 			// If we found an existing event, update it in place
 			if e.updateExistingCriticalEvent(ce, ev) {
@@ -1579,32 +1605,8 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 	}
 
 	// Also check for duplicates in the pending queue
-	for i, ce := range e.criticalQueue {
+	for _, ce := range e.criticalQueue {
 		if e.isSameEvent(ce, ev, name, orgID) {
-			_, currentAnomName, _ := e.getClassificationVisuals(ev.classificationType)
-			if currentAnomName != ce.Anom {
-				// Transition in queue
-				if ce.ImpactedPrefixes != nil {
-					if _, exists := ce.ImpactedPrefixes[ev.prefix]; exists {
-						delete(ce.ImpactedPrefixes, ev.prefix)
-						size := utils.GetPrefixSize(ev.prefix)
-						if ce.ImpactedIPs >= size {
-							ce.ImpactedIPs -= size
-						} else {
-							ce.ImpactedIPs = 0
-						}
-						e.updateCriticalEventCacheStrs(ce)
-						if len(ce.ImpactedPrefixes) == 0 {
-							e.criticalQueue = append(e.criticalQueue[:i], e.criticalQueue[i+1:]...)
-						}
-					}
-				}
-				if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation || ev.classificationType == ClassificationHijack {
-					break
-				}
-				return
-			}
-
 			ce.Timestamp = now // Reset expiration timer
 			// If we found an existing event, update it in place
 			if e.updateExistingCriticalEvent(ce, ev) {

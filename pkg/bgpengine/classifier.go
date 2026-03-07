@@ -562,20 +562,14 @@ func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed 
 	}
 
 	// Outage heuristic based on host diversity and total peers tracking the prefix
-	if s.totalAnn == 0 && elapsed > 60 {
-		if totalKnownPeers > 0 && peerCount == 0 {
-			if totalKnownPeers <= 5 {
-				// For small prefixes, require all known peers AND at least 2 distinct hosts to have withdrawn
-				if withdrawnPeerCount >= totalKnownPeers && withdrawnHostCount >= 2 {
-					return ClassificationOutage, nil, true
-				}
-			} else {
-				// For larger prefixes, require substantial evidence
-				// At least 20 peers and 5 hosts must report the prefix as withdrawn
-				if withdrawnPeerCount >= 20 && withdrawnHostCount >= 5 {
-					return ClassificationOutage, nil, true
-				}
-			}
+	// Industry standard: A prefix is considered in outage if it loses all its paths (peerCount == 0)
+	if elapsed > 60 && totalKnownPeers > 0 && peerCount == 0 && withdrawnPeerCount > 0 {
+		if withdrawnPeerCount >= 3 && withdrawnHostCount >= 2 {
+			// Sufficient diversity across collectors and peers to confirm an outage
+			return ClassificationOutage, nil, true
+		} else if withdrawnPeerCount >= totalKnownPeers && withdrawnHostCount >= 2 {
+			// For smaller prefixes (<= 2 peers), require all known peers and multiple hosts to have withdrawn
+			return ClassificationOutage, nil, true
 		}
 	}
 
