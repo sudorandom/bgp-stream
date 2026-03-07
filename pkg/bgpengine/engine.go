@@ -666,7 +666,7 @@ func (e *Engine) preloadActiveAnomalies() {
 
 	log.Println("Preloading active anomalies from StateDB...")
 	count := 0
-	e.StateDB.ForEach(func(k []byte, v []byte) error {
+	err := e.StateDB.ForEach(func(k []byte, v []byte) error {
 		if len(k) != 5 {
 			return nil
 		}
@@ -713,6 +713,9 @@ func (e *Engine) preloadActiveAnomalies() {
 		}
 		return nil
 	})
+	if err != nil {
+		log.Printf("Warning: Error preloading anomalies from StateDB: %v", err)
+	}
 	log.Printf("Finished preloading %d active anomalies.", count)
 }
 
