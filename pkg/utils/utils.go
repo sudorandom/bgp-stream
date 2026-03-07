@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -135,14 +136,14 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 }
 
 // DownloadFile downloads a file from a URL to a local path safely.
-func DownloadFile(url, path string) error {
+func DownloadFile(urlStr, path string) error {
 	client := &http.Client{}
 	maxRetries := 2
 	var resp *http.Response
 	var err error
 
 	for i := 0; i < maxRetries; i++ {
-		req, err := http.NewRequest("GET", url, http.NoBody)
+		req, err := http.NewRequest("GET", urlStr, http.NoBody)
 		if err != nil {
 			return err
 		}
@@ -155,7 +156,7 @@ func DownloadFile(url, path string) error {
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			_ = resp.Body.Close()
-			log.Printf("Rate limited (429) for %s. Retrying in 5s...", url)
+			log.Printf("Rate limited (429) for %s. Retrying in 5s...", urlStr)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -202,9 +203,9 @@ func DownloadFile(url, path string) error {
 }
 
 // Exists checks if a URL exists using a HEAD request.
-func Exists(url string) bool {
+func Exists(urlStr string) bool {
 	client := &http.Client{}
-	req, err := http.NewRequest("HEAD", url, http.NoBody)
+	req, err := http.NewRequest("HEAD", urlStr, http.NoBody)
 	if err != nil {
 		return false
 	}
@@ -223,9 +224,16 @@ func Exists(url string) bool {
 }
 
 // GetCacheFileName returns the expected local filename for a given URL and logPrefix.
-func GetCacheFileName(url, logPrefix string) string {
-	urlParts := strings.Split(url, "/")
-	fileName := urlParts[len(urlParts)-1]
+func GetCacheFileName(urlStr, logPrefix string) string {
+	parsedURL, err := url.Parse(urlStr)
+	var fileName string
+	if err == nil {
+		pathParts := strings.Split(parsedURL.Path, "/")
+		fileName = pathParts[len(pathParts)-1]
+	} else {
+		urlParts := strings.Split(urlStr, "/")
+		fileName = urlParts[len(urlParts)-1]
+	}
 
 	// Include sanitized logPrefix in the filename to prevent collisions between years/versions
 	sanitizedPrefix := strings.Trim(logPrefix, "[]")
@@ -249,18 +257,18 @@ func FindCachedURL(urls []string, logPrefix string) (string, bool) {
 }
 
 // GetCachedReader returns a reader for the given URL, using a local cache if enabled.
-func GetCachedReader(url string, useCache bool, logPrefix string) (io.ReadCloser, error) {
+func GetCachedReader(urlStr string, useCache bool, logPrefix string) (io.ReadCloser, error) {
 	if useCache {
 		cacheDir := "./data/cache"
 		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create cache dir: %w", err)
 		}
-		fileName := GetCacheFileName(url, logPrefix)
+		fileName := GetCacheFileName(urlStr, logPrefix)
 		localPath := filepath.Join(cacheDir, fileName)
 
 		if _, err := os.Stat(localPath); os.IsNotExist(err) {
-			log.Printf("%s Downloading %s", logPrefix, url)
-			if err := DownloadFile(url, localPath); err != nil {
+			log.Printf("%s Downloading %s", logPrefix, urlStr)
+			if err := DownloadFile(urlStr, localPath); err != nil {
 				return nil, err // Return the error directly so caller can see ErrNotFound
 			}
 		} else {
@@ -273,14 +281,14 @@ func GetCachedReader(url string, useCache bool, logPrefix string) (io.ReadCloser
 		return f, nil
 	}
 
-	log.Printf("%s Streaming from %s", logPrefix, url)
+	log.Printf("%s Streaming from %s", logPrefix, urlStr)
 	client := &http.Client{}
 	maxRetries := 2
 	var resp *http.Response
 
 	for i := 0; i < maxRetries; i++ {
 		var err error
-		req, err := http.NewRequest("GET", url, http.NoBody)
+		req, err := http.NewRequest("GET", urlStr, http.NoBody)
 
 		if err != nil {
 			return nil, err
@@ -294,7 +302,7 @@ func GetCachedReader(url string, useCache bool, logPrefix string) (io.ReadCloser
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			_ = resp.Body.Close()
-			log.Printf("%s Rate limited (429) for %s. Retrying in 5s...", logPrefix, url)
+			log.Printf("%s Rate limited (429) for %s. Retrying in 5s...", logPrefix, urlStr)
 			time.Sleep(5 * time.Second)
 			continue
 		}
