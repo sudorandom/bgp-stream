@@ -1634,8 +1634,7 @@ func (e *Engine) isSameEvent(ce *CriticalEvent, ev *bgpEvent, name, orgID string
 		return false
 	}
 
-	// Fallback: If it's the exact same prefix and anomaly type, it's the same event.
-	// This is the most robust check for "re-shifting" of the same item.
+	// 1. Exact Prefix Match: If this prefix is already part of this event, it's definitely the same event.
 	if ev.prefix != "" && ce.ImpactedPrefixes != nil {
 		if _, ok := ce.ImpactedPrefixes[ev.prefix]; ok {
 			return true
@@ -1663,7 +1662,7 @@ func (e *Engine) isSameEvent(ce *CriticalEvent, ev *bgpEvent, name, orgID string
 		return ce.LeakerASN == leaker && ce.VictimASN == victim
 	}
 
-	// For other anomalies (like Outages), match by Origin ASN
+	// 4. Origin ASN Match: For other anomalies (like Outages), match by Origin ASN
 	asn := ev.asn
 	if asn == 0 {
 		asn = ev.historicalASN
@@ -1673,10 +1672,6 @@ func (e *Engine) isSameEvent(ce *CriticalEvent, ev *bgpEvent, name, orgID string
 		return true
 	}
 
-	// Match by Organization (if known)
-	if orgID != "" && ce.OrgID != "" && orgID == ce.OrgID {
-		return true
-	}
 	return false
 }
 
