@@ -47,7 +47,7 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		// Extend to near the bottom of the view
 		maxStreamH := float64(e.Height) - margin - streamY
 		streamH := e.calculateStreamBoxHeight(fontSize, maxStreamH)
-		e.drawCriticalStream(screen, margin+10, streamY, boxW+20, streamH, fontSize)
+		e.drawCriticalStream(screen, margin-10, streamY, boxW*1.4, streamH, fontSize)
 	}
 	e.streamMu.Unlock()
 
@@ -76,8 +76,8 @@ func (e *Engine) calculateSummaryBoxHeight(fontSize float64) float64 {
 }
 
 func (e *Engine) drawAnomalySummary(screen *ebiten.Image, xBase, yBase, boxW, boxH, fontSize float64) {
-	// boxW is scaled by 1.8 in the caller
-	scaledBoxW := boxW * 1.8
+	// boxW is scaled by 1.5 in the caller
+	scaledBoxW := boxW * 1.5
 	if e.impactBuffer == nil || e.impactBuffer.Bounds().Dx() != int(scaledBoxW) || e.impactBuffer.Bounds().Dy() != int(boxH) {
 		e.impactBuffer = ebiten.NewImage(int(scaledBoxW), int(boxH))
 		e.impactDirty = true
@@ -90,7 +90,7 @@ func (e *Engine) drawAnomalySummary(screen *ebiten.Image, xBase, yBase, boxW, bo
 		vector.FillRect(e.impactBuffer, 0, 0, float32(scaledBoxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 		vector.StrokeRect(e.impactBuffer, 0, 0, float32(scaledBoxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-		impactTitle := "BGP EVENT SUMMARY"
+		impactTitle := "BGP EVENT SUMMARY (last minute)"
 		vector.FillRect(e.impactBuffer, 0, 0, 4, float32(fontSize+10), ColorNew, false)
 
 		textOp := &text.DrawOptions{}
@@ -137,19 +137,19 @@ func (e *Engine) drawAnomalySummaryContent(localX, localY, scaledBoxW, fontSize 
 	textOp.GeoM.Translate(col2X-hwRate/2, currentY)
 	text.Draw(e.impactBuffer, hRate, e.subMonoFace, textOp)
 
-	h1 := "ASNS"
+	h1 := "ASNs"
 	hw1, _ := text.Measure(h1, e.subMonoFace, 0)
 	textOp.GeoM.Reset()
 	textOp.GeoM.Translate(col3X-hw1/2, currentY)
 	text.Draw(e.impactBuffer, h1, e.subMonoFace, textOp)
 
-	h2 := "PFXS"
+	h2 := "PFXs"
 	hw2, _ := text.Measure(h2, e.subMonoFace, 0)
 	textOp.GeoM.Reset()
 	textOp.GeoM.Translate(col4X-hw2/2, currentY)
 	text.Draw(e.impactBuffer, h2, e.subMonoFace, textOp)
 
-	h3 := "IPS"
+	h3 := "IPs"
 	hw3, _ := text.Measure(h3, e.subMonoFace, 0)
 	textOp.GeoM.Reset()
 	textOp.GeoM.Translate(col5X-hw3/2, currentY)
@@ -478,7 +478,7 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 		legendH = 150.0
 	}
 
-	summaryW := boxW * 1.8
+	summaryW := boxW * 1.5
 	summaryH := e.calculateSummaryBoxHeight(fontSize)
 
 	// Match heights

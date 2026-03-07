@@ -75,14 +75,14 @@ func (e *Engine) runStatsWorker() {
 
 	for msg := range e.statsCh {
 		if msg.trigger {
-			e.processStatsTrigger(msg, state)
+			e.processStatsTrigger(state)
 			continue
 		}
 		e.processStatsEvent(msg, state)
 	}
 }
 
-func (e *Engine) processStatsTrigger(msg *statsEvent, state *statsWorkerState) {
+func (e *Engine) processStatsTrigger(state *statsWorkerState) {
 	// 1. Calculate stats over the rolling 60s window
 	activeHubs := e.calculateActiveHubs(state)
 	allImpact := e.gatherActiveImpactsWorker(state)

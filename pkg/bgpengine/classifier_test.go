@@ -384,15 +384,12 @@ func TestClassifier_OutageRecovery(t *testing.T) {
 	ctx.IsWithdrawal = false
 	ctx.OriginASN = 1234
 
-	_, ok := c.ClassifyEvent(prefix, ctx)
-	if !ok {
-		// It might not be classified as anything immediately after recovery,
-		// but the important thing is that the Outage state is cleared.
-	}
+	c.ClassifyEvent(prefix, ctx)
+	// It might not be classified as anything immediately after recovery,
+	// but the important thing is that the Outage state is cleared.
 
 	state, _ = c.GetPrefixState(prefix)
 	if ClassificationType(state.ClassifiedType) == ClassificationOutage {
 		t.Errorf("Expected Outage state to be cleared after announcement, but it's still %v", ClassificationType(state.ClassifiedType))
 	}
 }
-

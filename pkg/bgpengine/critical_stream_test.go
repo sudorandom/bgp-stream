@@ -300,4 +300,3 @@ func TestCriticalStreamTransition(t *testing.T) {
 		t.Errorf("Expected event to be removed from stream after all prefixes recovered, but still have %d events", len(e.CriticalStream))
 	}
 }
-
