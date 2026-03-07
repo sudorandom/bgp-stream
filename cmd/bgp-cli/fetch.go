@@ -1,34 +1,21 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/sudorandom/bgp-stream/pkg/geoservice"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
-type multiFlag []string
-
-func (f *multiFlag) String() string {
-	return strings.Join(*f, ", ")
+type FetchCmd struct {
+	Fresh           bool     `help:"Re-download all source files even if they are already cached."`
+	CustomLocations []string `name:"custom-locations" help:"Custom location override (format: CIDR:City,CC, e.g. 1.1.1.0/24:Sydney,AU). Can be specified multiple times."`
 }
 
-func (f *multiFlag) Set(value string) error {
-	*f = append(*f, value)
-	return nil
-}
-
-func main() {
-	fresh := flag.Bool("fresh", false, "Re-download all source files even if they are already cached")
-	var customLocations multiFlag
-	flag.Var(&customLocations, "custom-locations", "Custom location override (format: CIDR:City,CC, e.g. 1.1.1.0/24:Sydney,AU). Can be specified multiple times.")
-	flag.Parse()
-
+func (c *FetchCmd) Run() error {
 	// Initialize GeoService
 	geo := geoservice.NewGeoService(3840, 2160, 760.0)
 
@@ -40,7 +27,7 @@ func main() {
 
 	dm := geoservice.NewDataManager(geo)
 
-	if *fresh {
+	if c.Fresh {
 		log.Println("Fresh data requested. Clearing caches...")
 		// 1. Clear pre-processed cache to force re-generation
 		if err := os.Remove("data/prefix-dump-cache.json"); err != nil && !os.IsNotExist(err) {
@@ -68,7 +55,7 @@ func main() {
 
 	// 1. Reference Data (Load these first as others depend on them)
 	log.Println("--- Reference Data ---")
-	if err := dm.DownloadWorldCities(*fresh); err != nil {
+	if err := dm.DownloadWorldCities(c.Fresh); err != nil {
 		log.Printf("Warning: failed to download worldcities: %v", err)
 	}
 	dm.LoadWorldCities()
@@ -124,10 +111,11 @@ func main() {
 	go func() {
 		defer wg.Done()
 		log.Println("--- Custom Hints ---")
-		dm.ProcessCustomHints(customLocations)
+		dm.ProcessCustomHints(c.CustomLocations)
 	}()
 
 	wg.Wait()
 
 	log.Println("Data management tasks complete.")
+	return nil
 }

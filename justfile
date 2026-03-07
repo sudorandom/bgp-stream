@@ -16,15 +16,15 @@ record-video:
 
 # Watch BGP updates for a specific prefix
 debug-prefix prefix="146.66.28.0/22":
-	go run ./cmd/debug-prefix -prefix {{prefix}}
+	go run ./cmd/bgp-cli debug-prefix --prefix {{prefix}}
 
 # Fetch and process all required geolocation data
 fetch-data:
-	go run ./cmd/bgp-data-fetcher
+	go run ./cmd/bgp-cli fetch
 
 # Force a re-download of all source data files
 refresh-data:
-	go run ./cmd/bgp-data-fetcher -fresh
+	go run ./cmd/bgp-cli fetch --fresh
 
 # Mixes the end of an MP3 with a MOV file. Usage: just mix-video vid.mov aud.mp3
 mix-video vid aud:

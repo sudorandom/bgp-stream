@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -14,23 +13,12 @@ import (
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 )
 
-type multiFlag []string
-
-func (f *multiFlag) String() string {
-	return ""
+type DebugGeoCmd struct {
+	IP   string   `help:"IP address to resolve"`
+	MMDB []string `name:"mmdb" help:"Path to an additional .mmdb file (can be specified multiple times)"`
 }
 
-func (f *multiFlag) Set(value string) error {
-	*f = append(*f, value)
-	return nil
-}
-
-func main() {
-	ipStr := flag.String("ip", "", "IP address to resolve")
-	var mmdbFiles multiFlag
-	flag.Var(&mmdbFiles, "mmdb", "Path to an additional .mmdb file (can be specified multiple times)")
-	flag.Parse()
-
+func (c *DebugGeoCmd) Run() error {
 	// Initialize GeoService
 	geo := geoservice.NewGeoService(3840, 2160, 760.0)
 
@@ -47,7 +35,7 @@ func main() {
 		log.Printf("Warning: failed to load remote city data: %v", err)
 	}
 
-	for _, path := range mmdbFiles {
+	for _, path := range c.MMDB {
 		if err := geo.AddMMDBReader(path); err != nil {
 			log.Printf("Warning: failed to load MMDB database %s: %v", path, err)
 		}
@@ -86,9 +74,9 @@ func main() {
 		fmt.Println("--------------------------------")
 	}
 
-	if *ipStr != "" {
-		resolve(*ipStr)
-		return
+	if c.IP != "" {
+		resolve(c.IP)
+		return nil
 	}
 
 	fmt.Println("Enter IPs to resolve (one per line, Ctrl+C to exit):")
@@ -99,4 +87,5 @@ func main() {
 			resolve(line)
 		}
 	}
+	return nil
 }

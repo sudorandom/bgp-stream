@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,6 +13,12 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+type DebugPrefixCmd struct {
+	Prefix  string        `default:"146.66.28.0/22" help:"BGP prefix to watch"`
+	Timeout time.Duration `default:"0" help:"How long to run before exiting (0 for infinite)"`
+	JSON    bool          `help:"Dump raw JSON instead of showing stats"`
+}
 
 type LastAttrs struct {
 	Path        string
@@ -252,19 +257,14 @@ func (s *Stats) analyze() []string {
 	return results
 }
 
-func main() {
-	prefix := flag.String("prefix", "146.66.28.0/22", "BGP prefix to watch")
-	timeout := flag.Duration("timeout", 0, "How long to run before exiting (0 for infinite)")
-	showJSON := flag.Bool("json", false, "Dump raw JSON instead of showing stats")
-	flag.Parse()
-
+func (c *DebugPrefixCmd) Run() error {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	if *timeout > 0 {
+	if c.Timeout > 0 {
 		go func() {
-			time.Sleep(*timeout)
-			log.Printf("Timeout of %v reached, exiting...", *timeout)
+			time.Sleep(c.Timeout)
+			log.Printf("Timeout of %v reached, exiting...", c.Timeout)
 			interrupt <- os.Interrupt
 		}()
 	}
@@ -272,13 +272,12 @@ func main() {
 	u := "wss://ris-live.ripe.net/v1/ws/?client=github.com/sudorandom/bgp-stream-debug"
 	log.Printf("Connecting to %s", u)
 
-	c, _, err := websocket.DefaultDialer.Dial(u, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(u, nil)
 	if err != nil {
-		log.Printf("dial: %v", err)
-		return
+		return fmt.Errorf("dial: %v", err)
 	}
 	defer func() {
-		_ = c.Close()
+		_ = conn.Close()
 	}()
 
 	stats := &Stats{
@@ -292,11 +291,11 @@ func main() {
 	go func() {
 		defer close(done)
 		for {
-			_, message, err := c.ReadMessage()
+			_, message, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
-			stats.Record(message, *showJSON)
+			stats.Record(message, c.JSON)
 		}
 	}()
 
@@ -304,17 +303,16 @@ func main() {
 	subscribeMsg := map[string]interface{}{
 		"type": "ris_subscribe",
 		"data": map[string]interface{}{
-			"prefix":       *prefix,
+			"prefix":       c.Prefix,
 			"moreSpecific": true,
 			"lessSpecific": true,
 		},
 	}
 	subBytes, _ := json.Marshal(subscribeMsg)
-	log.Printf("Subscribing to: %s", *prefix)
-	err = c.WriteMessage(websocket.TextMessage, subBytes)
+	log.Printf("Subscribing to: %s", c.Prefix)
+	err = conn.WriteMessage(websocket.TextMessage, subBytes)
 	if err != nil {
-		log.Printf("subscribe error: %v", err)
-		return
+		return fmt.Errorf("subscribe error: %v", err)
 	}
 
 	ticker := time.NewTicker(time.Second)
@@ -323,25 +321,25 @@ func main() {
 	for {
 		select {
 		case <-done:
-			return
+			return nil
 		case <-ticker.C:
-			if !*showJSON {
+			if !c.JSON {
 				stats.Report()
 			}
 		case <-interrupt:
 			log.Println("Exiting...")
-			if !*showJSON {
+			if !c.JSON {
 				stats.Report()
 			}
-			err := c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			if err != nil {
-				return
+				return err
 			}
 			select {
 			case <-done:
 			case <-time.After(time.Second):
 			}
-			return
+			return nil
 		}
 	}
 }
