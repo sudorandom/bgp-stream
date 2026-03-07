@@ -191,28 +191,34 @@ func (e *Engine) calculateActiveHubs(state *statsWorkerState, uiInterval float64
 
 func (e *Engine) gatherActiveImpactsWorker(state *statsWorkerState, uiInterval float64) []*VisualImpact {
 	clear(state.impactMap)
-	for et, prefixes := range state.currentAnomalies {
+	// Iterate over all active prefixes that have a classification
+	for p, et := range state.prefixToClassification {
+		if et == ClassificationNone {
+			continue
+		}
 		_, name, _ := e.getClassificationVisuals(et)
-		prio := e.GetPriority(name)
+		if name == "" {
+			continue
+		}
 
-		for p, count := range prefixes {
-			visI, ok := state.impactMap[p]
+		visI, ok := state.impactMap[p]
+		if !ok {
+			visI, ok = state.visualImpact[p]
 			if !ok {
-				visI, ok = state.visualImpact[p]
-				if !ok {
-					visI = &VisualImpact{Prefix: p, MaskLen: getMaskLen(p)}
-					state.visualImpact[p] = visI
-				}
-				visI.ClassificationName = ""
-				visI.Count = 0
-				state.impactMap[p] = visI
+				visI = &VisualImpact{Prefix: p, MaskLen: getMaskLen(p)}
+				state.visualImpact[p] = visI
 			}
+			visI.ClassificationName = name
+			visI.ClassificationColor, _, _ = e.getClassificationVisuals(et)
+			visI.Count = 0
+			state.impactMap[p] = visI
+		}
 
-			if name != "" && (visI.ClassificationName == "" || prio > e.GetPriority(visI.ClassificationName)) {
-				visI.ClassificationName = name
-				visI.ClassificationColor, _, _ = e.getClassificationVisuals(et)
+		// Add rate based on activity in this window
+		if counts, ok := state.currentAnomalies[et]; ok {
+			if msgCount, exists := counts[p]; exists {
+				visI.Count = float64(msgCount) / uiInterval
 			}
-			visI.Count += float64(count) / uiInterval
 		}
 	}
 
@@ -416,18 +422,15 @@ func (e *Engine) processStatsEvent(msg *statsEvent, state *statsWorkerState) {
 		}
 		state.prefixToClassification[ev.prefix] = ev.classificationType
 
-		if ev.eventType == EventNew || ev.eventType == EventUpdate || ev.eventType == EventGossip {
-			if prefixes, ok := state.currentAnomalies[ClassificationOutage]; ok {
-				delete(prefixes, ev.prefix)
+		// Track activity for this classification in the current UI window
+		if ev.classificationType != ClassificationNone {
+			if state.currentAnomalies[ev.classificationType] == nil {
+				state.currentAnomalies[ev.classificationType] = make(map[string]int)
 			}
-		}
-		if actualType, ok := state.prefixToClassification[ev.prefix]; ok {
-			if state.currentAnomalies[actualType] == nil {
-				state.currentAnomalies[actualType] = make(map[string]int)
-			}
-			state.currentAnomalies[actualType][ev.prefix]++
+			state.currentAnomalies[ev.classificationType][ev.prefix]++
 		}
 
+		// Update geographic metadata for the prefix
 		visI, ok := state.visualImpact[ev.prefix]
 		if !ok {
 			visI = &VisualImpact{Prefix: ev.prefix, CCs: make(map[string]struct{})}
@@ -438,17 +441,6 @@ func (e *Engine) processStatsEvent(msg *statsEvent, state *statsWorkerState) {
 		}
 		if ev.cc != "" {
 			visI.CCs[ev.cc] = struct{}{}
-		}
-		if msg.name != "" {
-			if e.GetPriority(msg.name) >= e.GetPriority(visI.ClassificationName) {
-				visI.ClassificationName = msg.name
-				visI.ClassificationColor = msg.c
-				if ev.leakDetail != nil {
-					visI.LeakType = ev.leakDetail.Type
-					visI.LeakerASN = ev.leakDetail.LeakerASN
-					visI.VictimASN = ev.leakDetail.VictimASN
-				}
-			}
 		}
 	}
 	if ev.cc != "" {
