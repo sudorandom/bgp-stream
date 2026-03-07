@@ -10,9 +10,9 @@ These updates are the "gossip" of the internet. It is how different networks (Au
 🎨 THE LEGEND (CLASSIFICATION ENGINE):
 Updates are processed through a multi-stage classification engine and categorized into four severity tiers based on network behavior:
 
-* Red Pulses (Critical): Outages, Route Leaks, DDoS Mitigations, BGP Hijacks, and Bogon/Martians. These are significant routing failures or security events, such as a prefix losing all its paths, path violations suggesting a route leak, standard RTBH announcements, RPKI invalid status, or usage of private/bogon network space.
+* Red Pulses (Critical): Outages, Route Leaks, and BGP Hijacks. These are significant routing failures or security events, such as a prefix losing all its paths, path violations suggesting a route leak, or RPKI invalid status.
 * Orange Pulses (Bad Behavior): Flaps. This highlights highly volatile or inefficient routing, including rapid toggling of reachability or continuous next-hop oscillation.
-* Purple Pulses (Policy & Path Hunting): Standard routing adjustments. This includes traffic engineering (Policy Churn, Path Length Oscillation) or the natural "Path Hunting" process where routers actively explore alternative routes during convergence.
+* Purple Pulses (Policy & Path Hunting): Standard routing adjustments and DDoS Mitigations. This includes traffic engineering (Policy Churn, Path Length Oscillation), standard RTBH (Remotely Triggered Black Hole) announcements to mitigate DDoS attacks, or the natural "Path Hunting" process where routers actively explore alternative routes during convergence.
 * Blue Pulses (Discovery & Gossip): Routine background noise. This covers standard prefix origination and redundant gossip pulses that keep routing tables current.
 
 🌀 WATCHING THE INTERNET SELF-HEAL:
@@ -22,8 +22,8 @@ Occasionally, you will see a sudden, massive wave of Purple (Path Hunting) pulse
 * The Global Recalculation: Instead of staying disconnected, the global routing system automatically "hunts" for new paths. This massive burst of purple is the sound of millions of routers worldwide re-mapping the internet to bypass the failure.
 * Resiliency in Action: You are watching the internet heal itself at the speed of light, routing around damage to ensure the world stays connected.
 
-📡 BEACON ANALYSIS:
-The stream includes a Beacon Analysis panel, which tracks the percentage of BGP updates belonging to "routing beacons". Routing beacons will announce and withdraw their routes on a strict schedule. Think of them as a scheduled pulse check for the internet. By watching how fast these test signals ripple across the globe, we can measure the overall health, speed, and reaction time of the global routing system.
+📡 ONGOING RESEARCH & VALIDATION (BEACONS):
+The stream includes an analysis panel tracking the percentage of BGP updates belonging to "routing beacons". Routing beacons will announce and withdraw their routes on a strict schedule. Think of them as a scheduled pulse check for the internet, providing a way for ongoing research and validation of the Internet backbone. By watching how fast these test signals ripple across the globe, we can measure the overall health, speed, and reaction time of the global routing system.
 Learn more about routing beacons here:
 [https://ris.ripe.net/docs/routing-beacons/](https://ris.ripe.net/docs/routing-beacons/)
 
