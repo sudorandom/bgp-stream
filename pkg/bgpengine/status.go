@@ -30,9 +30,6 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		margin, fontSize = 80.0, 36.0
 	}
 
-	e.metricsMu.Lock()
-	defer e.metricsMu.Unlock()
-
 	boxW := 280.0
 	if e.Width > 2000 {
 		boxW = 560.0
@@ -45,12 +42,17 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 		streamY = float64(e.Height) * 0.50
 	}
 
+	e.streamMu.Lock()
 	if len(e.CriticalStream) > 0 {
 		// Extend to near the bottom of the view
 		maxStreamH := float64(e.Height) - margin - streamY
 		streamH := e.calculateStreamBoxHeight(fontSize, maxStreamH)
 		e.drawCriticalStream(screen, margin+10, streamY, boxW+20, streamH, fontSize)
 	}
+	e.streamMu.Unlock()
+
+	e.metricsMu.Lock()
+	defer e.metricsMu.Unlock()
 
 	// 3. Bottom Center: Now Playing
 	e.drawNowPlaying(screen, margin, boxW, fontSize, e.face)
@@ -375,8 +377,10 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float
 			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLocLabel, ce.CachedLocVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
 		}
 	case nameDDoSMitigation, nameHijack:
-		// Provider/Hijacker
-		nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
+		// Provider/Hijacker - Skip if DDoS and Provider == Victim
+		if ce.Anom != nameDDoSMitigation || ce.LeakerASN != ce.VictimASN {
+			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
+		}
 
 		// Impacted/Victim
 		nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedVictimLabel, ce.CachedVictimVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)

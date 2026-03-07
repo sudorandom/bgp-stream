@@ -236,3 +236,68 @@ func TestCriticalStreamExpiration(t *testing.T) {
 		t.Errorf("Expected 0 events at T=16m (expired), got %d", len(e.CriticalStream))
 	}
 }
+
+func TestCriticalStreamTransition(t *testing.T) {
+	e := &Engine{
+		criticalCooldown: make(map[string]time.Time),
+		asnMapping:       utils.NewASNMapping(),
+	}
+	c := color.RGBA{255, 0, 0, 255}
+	name := nameHardOutage
+
+	// 1. Add Outage for two prefixes
+	ev1 := &bgpEvent{
+		classificationType: ClassificationOutage,
+		prefix:             "1.1.0.0/16", // 65536 IPs
+		asn:                1234,
+	}
+	e.recordToCriticalStream(ev1, c, name)
+
+	ev2 := &bgpEvent{
+		classificationType: ClassificationOutage,
+		prefix:             "1.2.0.0/16", // 65536 IPs
+		asn:                1234,
+	}
+	e.recordToCriticalStream(ev2, c, name)
+
+	e.lastCriticalAddedAt = time.Now().Add(-2 * time.Second)
+	e.updateCriticalStream()
+
+	if len(e.CriticalStream) != 1 {
+		t.Fatalf("Expected 1 event, got %d", len(e.CriticalStream))
+	}
+	ce := e.CriticalStream[0]
+	expectedIPs := uint64(65536 * 2)
+	if ce.ImpactedIPs != expectedIPs {
+		t.Errorf("Expected %d IPs, got %d", expectedIPs, ce.ImpactedIPs)
+	}
+
+	// 2. Transition one prefix to Discovery (Not critical)
+	ev1Recovery := &bgpEvent{
+		classificationType: ClassificationDiscovery,
+		prefix:             "1.1.0.0/16",
+		asn:                1234,
+	}
+	// The name passed here should match the existing event's name for it to be found
+	e.recordToCriticalStream(ev1Recovery, color.RGBA{}, name)
+
+	if ce.ImpactedIPs != 65536 {
+		t.Errorf("Expected impacted IPs to drop to 65536, got %d", ce.ImpactedIPs)
+	}
+	if len(ce.ImpactedPrefixes) != 1 {
+		t.Errorf("Expected 1 prefix remaining, got %d", len(ce.ImpactedPrefixes))
+	}
+
+	// 3. Transition the other prefix to Discovery
+	ev2Recovery := &bgpEvent{
+		classificationType: ClassificationDiscovery,
+		prefix:             "1.2.0.0/16",
+		asn:                1234,
+	}
+	e.recordToCriticalStream(ev2Recovery, color.RGBA{}, name)
+
+	if len(e.CriticalStream) != 0 {
+		t.Errorf("Expected event to be removed from stream after all prefixes recovered, but still have %d events", len(e.CriticalStream))
+	}
+}
+

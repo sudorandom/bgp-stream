@@ -271,6 +271,7 @@ type Engine struct {
 	lastCriticalAddedAt    time.Time
 	streamOffset           float64
 	streamDirty            bool
+	streamMu               sync.Mutex
 	impactDirty            bool
 	criticalCooldown       map[string]time.Time
 
@@ -1206,6 +1207,7 @@ func (e *Engine) updateMetrics() {
 
 	// Cleanup Critical Event Stream (remove entries older than 10 mins)
 	now := e.Now()
+	e.streamMu.Lock()
 	activeStream := e.CriticalStream[:0]
 	removedAny := false
 	for _, ce := range e.CriticalStream {
@@ -1219,6 +1221,7 @@ func (e *Engine) updateMetrics() {
 		e.CriticalStream = activeStream
 		e.streamDirty = true
 	}
+	e.streamMu.Unlock()
 }
 
 func (e *Engine) updateBeaconPercent() {
@@ -1523,9 +1526,45 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 
 	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city)
 
+	e.streamMu.Lock()
+	defer e.streamMu.Unlock()
+
 	// Check for duplicates across the entire visible stream
-	for _, ce := range e.CriticalStream {
+	for i, ce := range e.CriticalStream {
 		if e.isSameEvent(ce, ev, name, orgID) {
+			// Check if this specific prefix is still in the same critical state
+			_, currentAnomName, _ := e.getClassificationVisuals(ev.classificationType)
+			if currentAnomName != ce.Anom {
+				// Prefix transitioned to a different state!
+				// Remove it from THIS critical event
+				if ce.ImpactedPrefixes != nil {
+					if _, exists := ce.ImpactedPrefixes[ev.prefix]; exists {
+						delete(ce.ImpactedPrefixes, ev.prefix)
+						size := utils.GetPrefixSize(ev.prefix)
+						if ce.ImpactedIPs >= size {
+							ce.ImpactedIPs -= size
+						} else {
+							ce.ImpactedIPs = 0
+						}
+						e.updateCriticalEventCacheStrs(ce)
+						e.streamDirty = true
+
+						// If no prefixes remain, remove the event from the stream
+						if len(ce.ImpactedPrefixes) == 0 {
+							e.CriticalStream = append(e.CriticalStream[:i], e.CriticalStream[i+1:]...)
+						}
+					}
+				}
+
+				// If the new state is ALSO critical, it will be added as a new event below
+				// (or matched to another existing event of that type)
+				if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation || ev.classificationType == ClassificationHijack || ev.classificationType == ClassificationBogon {
+					// Fallthrough to add/match for the NEW critical type
+					break
+				}
+				return
+			}
+
 			ce.Timestamp = now // Reset expiration timer
 			// If we found an existing event, update it in place
 			if e.updateExistingCriticalEvent(ce, ev) {
@@ -1537,8 +1576,32 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 	}
 
 	// Also check for duplicates in the pending queue
-	for _, ce := range e.criticalQueue {
+	for i, ce := range e.criticalQueue {
 		if e.isSameEvent(ce, ev, name, orgID) {
+			_, currentAnomName, _ := e.getClassificationVisuals(ev.classificationType)
+			if currentAnomName != ce.Anom {
+				// Transition in queue
+				if ce.ImpactedPrefixes != nil {
+					if _, exists := ce.ImpactedPrefixes[ev.prefix]; exists {
+						delete(ce.ImpactedPrefixes, ev.prefix)
+						size := utils.GetPrefixSize(ev.prefix)
+						if ce.ImpactedIPs >= size {
+							ce.ImpactedIPs -= size
+						} else {
+							ce.ImpactedIPs = 0
+						}
+						e.updateCriticalEventCacheStrs(ce)
+						if len(ce.ImpactedPrefixes) == 0 {
+							e.criticalQueue = append(e.criticalQueue[:i], e.criticalQueue[i+1:]...)
+						}
+					}
+				}
+				if ev.classificationType == ClassificationOutage || ev.classificationType == ClassificationRouteLeak || ev.classificationType == ClassificationDDoSMitigation || ev.classificationType == ClassificationHijack || ev.classificationType == ClassificationBogon {
+					break
+				}
+				return
+			}
+
 			ce.Timestamp = now // Reset expiration timer
 			// If we found an existing event, update it in place
 			if e.updateExistingCriticalEvent(ce, ev) {
@@ -1709,8 +1772,8 @@ func (e *Engine) createCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 }
 
 func (e *Engine) updateCriticalStream() {
-	e.metricsMu.Lock()
-	defer e.metricsMu.Unlock()
+	e.streamMu.Lock()
+	defer e.streamMu.Unlock()
 
 	now := e.Now()
 
