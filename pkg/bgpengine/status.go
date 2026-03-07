@@ -284,8 +284,14 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 			e.streamClipBuffer.Clear()
 			currentY := e.streamOffset
 
-			// Use all events for display
-			displayStream := e.CriticalStream
+			// Filter stream for display
+			displayStream := make([]*CriticalEvent, 0, len(e.CriticalStream))
+			for _, ce := range e.CriticalStream {
+				if ce.Anom == nameHardOutage && ce.ImpactedIPs < 1000 {
+					continue
+				}
+				displayStream = append(displayStream, ce)
+			}
 
 			for i, ce := range displayStream {
 				nextY := e.drawCriticalEvent(ce, localX, currentY, boxW, fontSize)
