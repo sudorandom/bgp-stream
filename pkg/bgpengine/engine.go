@@ -209,8 +209,8 @@ type Engine struct {
 	windowNote, windowPeer, windowOpen             int64
 	windowBeacon                                   int64
 
-	windowFlap, windowTE, windowOscill             int64
-	windowHunting, windowNextHop, windowOutage     int64
+	windowFlap, windowTE                           int64
+	windowHunting, windowOutage                    int64
 	windowLeak, windowHijack, windowBogon          int64
 	windowGlobal, windowDDoS                       int64
 	windowHoneypot, windowResearch, windowSecurity int64

@@ -1,6 +1,6 @@
 module github.com/sudorandom/bgp-stream
 
-go 1.25.0
+go 1.24
 
 require (
 	github.com/biter777/countries v1.7.5

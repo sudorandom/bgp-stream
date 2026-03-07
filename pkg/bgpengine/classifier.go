@@ -502,7 +502,7 @@ func (c *Classifier) findClassification(prefix string, s *prefixStats, elapsed f
 	}
 
 	// 2. Bad
-	if et, ok := c.findBadAnomaly(s, elapsed); ok {
+	if et, ok := c.findBadAnomaly(s); ok {
 		return et, nil, true
 	}
 
@@ -660,54 +660,6 @@ func (c *Classifier) detectRouteLeak(prefix string, peerCount, hostCount int, ct
 	}
 
 	return ClassificationNone, nil, false
-}
-
-func (c *Classifier) isDDoSProvider(asn uint32) bool {
-	// Known Scrubbing ASNs, major clouds, and large tech networks that often trigger RPKI false positives
-	scrubbers := map[uint32]bool{
-		13335:  true, // Cloudflare
-		20940:  true, // Akamai
-		16509:  true, // Amazon
-		14618:  true, // Amazon
-		15169:  true, // Google
-		8075:   true, // Microsoft
-		32934:  true, // Facebook
-		19324:  true, // Akamai/Prolexic
-		6428:   true, // Radware
-		19551:  true, // Incapsula
-		31898:  true, // Oracle
-		40027:  true, // Oracle
-		36040:  true, // Google Cloud
-		109:    true, // Cisco
-		714:    true, // Apple
-		22822:  true, // LinkedIn
-		13238:  true, // Yandex
-		2906:   true, // Netflix
-		262287: true, // Latitude.sh
-		6939:   true, // Hurricane Electric (Large Backbone)
-		174:    true, // Cogent (Large Backbone)
-		2914:   true, // NTT (Large Backbone)
-		3356:   true, // Level 3 (Large Backbone)
-		6762:   true, // Telecom Italia Sparkle (Large Backbone)
-		1299:   true, // Telia (Large Backbone)
-		6453:   true, // Tata (Large Backbone)
-		1239:   true, // Sprint (Large Backbone)
-		701:    true, // Verizon (Large Backbone)
-		7018:   true, // AT&T (Large Backbone)
-		1273:   true, // Vodafone (Large Backbone)
-		4637:   true, // Telstra (Large Backbone)
-		197730: true, // Sea-Bone (Large Backbone)
-		3223:   true, // Voxility
-		396998: true, // Path Network
-		57724:  true, // DDoS-Guard
-		197068: true, // Qrator (High Load Lab)
-		34309:  true, // Link11
-		59796:  true, // StormWall
-		8757:   true, // NSFOCUS
-		42649:  true, // Baffin Bay Networks
-		23470:  true, // reliablesite.net
-	}
-	return scrubbers[asn]
 }
 
 func (c *Classifier) isSibling(asn1, asn2 uint32) bool {
@@ -873,7 +825,7 @@ func (c *Classifier) isCloud(asn uint32) bool {
 	}
 }
 
-func (c *Classifier) findBadAnomaly(s *prefixStats, elapsed float64) (ClassificationType, bool) {
+func (c *Classifier) findBadAnomaly(s *prefixStats) (ClassificationType, bool) {
 	isNextHopOsc := len(s.uniqueHops) > 1 && s.totalHop >= 10 && s.totalPath <= 2
 	isLinkFlap := s.totalWith >= 5 && float64(s.totalAnn)/float64(s.totalWith) < 2.0
 
