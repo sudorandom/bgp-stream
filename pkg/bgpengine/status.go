@@ -76,8 +76,8 @@ func (e *Engine) calculateSummaryBoxHeight(fontSize float64) float64 {
 }
 
 func (e *Engine) drawAnomalySummary(screen *ebiten.Image, xBase, yBase, boxW, boxH, fontSize float64) {
-	// boxW is already scaled by 1.4 in the caller
-	scaledBoxW := boxW * 1.4
+	// boxW is scaled by 1.8 in the caller
+	scaledBoxW := boxW * 1.8
 	if e.impactBuffer == nil || e.impactBuffer.Bounds().Dx() != int(scaledBoxW) || e.impactBuffer.Bounds().Dy() != int(boxH) {
 		e.impactBuffer = ebiten.NewImage(int(scaledBoxW), int(boxH))
 		e.impactDirty = true
@@ -98,15 +98,7 @@ func (e *Engine) drawAnomalySummary(screen *ebiten.Image, xBase, yBase, boxW, bo
 		textOp.ColorScale.Scale(1, 1, 1, 0.5)
 		text.Draw(e.impactBuffer, impactTitle, e.titleFace, textOp)
 
-		if len(e.prefixCounts) == 0 {
-			textOp.GeoM.Reset()
-			textOp.GeoM.Translate(localX+5, localY+5)
-			textOp.ColorScale.Reset()
-			textOp.ColorScale.Scale(1, 1, 1, 0.3)
-			text.Draw(e.impactBuffer, "Crunching the numbers, please wait...", e.subMonoFace, textOp)
-		} else {
-			e.drawAnomalySummaryContent(localX, localY, scaledBoxW, fontSize, textOp)
-		}
+		e.drawAnomalySummaryContent(localX, localY, scaledBoxW, fontSize, textOp)
 		e.impactDirty = false
 	}
 
@@ -486,7 +478,7 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 		legendH = 150.0
 	}
 
-	summaryW := boxW * 1.4
+	summaryW := boxW * 1.8
 	summaryH := e.calculateSummaryBoxHeight(fontSize)
 
 	// Match heights
