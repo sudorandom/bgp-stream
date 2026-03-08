@@ -686,7 +686,7 @@ func (e *Engine) logVal(v float64) float64 {
 	return math.Log10(v)
 }
 
-func (e *Engine) calculateGlobalLogBounds() (float64, float64) {
+func (e *Engine) calculateGlobalLogBounds() (minLog, maxLog float64) {
 	globalMaxLog := 1.0
 	globalMinLog := 100.0 // higher than any possible log10 for these metrics
 	if len(e.history) < 2 {
@@ -725,7 +725,7 @@ func (e *Engine) calculateGlobalLogBounds() (float64, float64) {
 	return globalMinLog, globalMaxLog
 }
 
-func (e *Engine) calculateGlobalIPBounds() (float64, float64) {
+func (e *Engine) calculateGlobalIPBounds() (minLog, maxLog float64) {
 	globalMaxLog := 1.0
 	globalMinLog := 100.0
 	if len(e.history) < 3 {
@@ -763,7 +763,6 @@ func (e *Engine) calculateGlobalIPBounds() (float64, float64) {
 	}
 	return globalMinLog, globalMaxLog
 }
-
 
 func (e *Engine) drawIPTrendLayers(chartW, chartH, globalMinLog, globalMaxLog float64) {
 	hLen := len(e.history)

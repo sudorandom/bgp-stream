@@ -225,9 +225,6 @@ type Engine struct {
 	trendGridVertices []ebiten.Vertex
 	trendGridIndices  []uint16
 
-	ipTrendVertices []ebiten.Vertex
-	ipTrendIndices  []uint16
-
 	hubChangedAt map[string]time.Time
 	lastHubs     map[string]int
 	hubPosition  map[string]int
