@@ -614,7 +614,7 @@ func (e *Engine) checkSummaryInsight(state *statsWorkerState, prefixCounts []Pre
 	if len(state.asnSortedGroups) > 0 {
 		noisiest := state.asnSortedGroups[0]
 		lines = append(lines, InsightLine{
-			Label: "  Noisiest:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%s", noisiest.asnStr), ValueColor: color.RGBA{255, 255, 0, 255},
+			Label: "  Noisiest:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: noisiest.asnStr, ValueColor: color.RGBA{255, 255, 0, 255},
 		})
 	}
 

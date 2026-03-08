@@ -232,7 +232,6 @@ type Engine struct {
 	streamDirty            bool
 	streamMu               sync.Mutex
 	impactDirty            bool
-	criticalCooldown       map[string]time.Time
 
 	SeenDB  *utils.DiskTrie
 	StateDB *utils.DiskTrie
