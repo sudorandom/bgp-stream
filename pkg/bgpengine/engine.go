@@ -119,39 +119,19 @@ type asnGroupKey struct {
 	Anom string
 }
 
-type CriticalEvent struct {
-	Timestamp time.Time
-	Anom      string
-	ASN       uint32
-	ASNStr    string
-	OrgID     string
-	LeakType  bgp.LeakType
-	LeakerASN uint32
-	VictimASN uint32
-	Locations string
-	Color     color.RGBA
-	UIColor   color.RGBA
+type InsightLine struct {
+	Label      string
+	LabelColor color.RGBA
+	Value      string
+	ValueColor color.RGBA
+}
 
-	ImpactedIPs      uint64
-	ImpactedPrefixes map[string]struct{}
-
-	// Pre-rendered layout values
-	CachedTypeLabel string
-	CachedTypeWidth float64
-	CachedFirstLine string
-
-	CachedLeakerLabel string
-	CachedLeakerVal   string
-	CachedVictimLabel string
-	CachedVictimVal   string
-	CachedASNLabel    string
-	CachedASNVal      string
-	CachedNetLabel    string
-	CachedNetVal      string
-	CachedLocLabel    string
-	CachedLocVal      string
-
-	CachedImpactStr string
+type InsightEvent struct {
+	Timestamp  time.Time
+	Category   string
+	Title      string
+	TitleColor color.RGBA
+	Lines      []InsightLine
 }
 
 type Engine struct {
@@ -247,9 +227,8 @@ type Engine struct {
 	VisualImpact           map[string]*VisualImpact
 	ActiveImpacts          []*VisualImpact
 	ActiveASNImpacts       []*ASNImpact
-	CriticalStream         []*CriticalEvent
-	criticalQueue          []*CriticalEvent
-	lastCriticalAddedAt    time.Time
+	InsightStream          []*InsightEvent
+	lastInsights           map[string]time.Time
 	streamOffset           float64
 	streamDirty            bool
 	streamMu               sync.Mutex
@@ -1182,7 +1161,6 @@ func (e *Engine) Update() error {
 	e.updateVisualQueue()
 	e.updateInput()
 	e.updateMetrics()
-	e.updateCriticalStream()
 	e.updateActivePulses()
 	return nil
 }
@@ -1276,12 +1254,12 @@ func (e *Engine) updateMetrics() {
 
 	e.updateBeaconPercent()
 
-	// Cleanup Critical Event Stream (remove entries older than 10 mins)
+	// Cleanup Insight Stream (remove entries older than 10 mins)
 	now := e.Now()
 	e.streamMu.Lock()
-	activeStream := e.CriticalStream[:0]
+	activeStream := e.InsightStream[:0]
 	removedAny := false
-	for _, ce := range e.CriticalStream {
+	for _, ce := range e.InsightStream {
 		if now.Sub(ce.Timestamp) < 10*time.Minute {
 			activeStream = append(activeStream, ce)
 		} else {
@@ -1289,7 +1267,7 @@ func (e *Engine) updateMetrics() {
 		}
 	}
 	if removedAny {
-		e.CriticalStream = activeStream
+		e.InsightStream = activeStream
 		e.streamDirty = true
 	}
 	e.streamMu.Unlock()
@@ -1490,9 +1468,7 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 	// 3. Buffer city activity
 	e.incrementCityBuffer(ev.lat, ev.lng, c, shape)
 
-	// 4. Record to CriticalStream if it's a critical anomaly
 	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationHijack {
-		e.recordToCriticalStream(ev, c, name)
 	}
 
 	// 5. Update windowed metrics (this drives the dashboard numbers)
@@ -1564,460 +1540,8 @@ func (e *Engine) isIgnoredDDoS(ev *bgpEvent) bool {
 	return false
 }
 
-func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string) {
-	// Filter out ASN 0 for outages as requested
-	if ev.classificationType == bgp.ClassificationOutage && ev.asn == 0 {
-		return
-	}
 
-	// Filter out excluded ASN categories
-	if utils.IsExcludedASN(ev.asn) {
-		return
-	}
 
-	// Filter out invalid DDoS Mitigation events
-	if e.isIgnoredDDoS(ev) {
-		return
-	}
-
-	now := e.Now()
-	asnToUse := ev.asn
-	if asnToUse == 0 {
-		asnToUse = ev.historicalASN
-	}
-
-	asnStr := fmt.Sprintf("AS%d", asnToUse)
-	orgID := ""
-	if e.asnMapping != nil {
-		orgID = e.asnMapping.GetOrgID(asnToUse)
-		if n := e.asnMapping.GetName(asnToUse); n != "" {
-			asnStr += " - " + n
-		}
-	}
-
-	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city)
-
-	e.streamMu.Lock()
-	defer e.streamMu.Unlock()
-
-	// FIRST: Check if this prefix is currently tracked under a DIFFERENT anomaly type
-	// and remove it from that old event if so.
-	if ev.prefix != "" {
-		_, currentAnomName, _ := e.getClassificationVisuals(ev.classificationType)
-		e.removePrefixFromOldEvents(ev.prefix, currentAnomName)
-	}
-
-	// If the event is not critical itself, we are done
-	if ev.classificationType != bgp.ClassificationOutage && ev.classificationType != bgp.ClassificationRouteLeak && ev.classificationType != bgp.ClassificationHijack {
-		return
-	}
-
-	// Check for duplicates across the entire visible stream
-	for _, ce := range e.CriticalStream {
-		if e.isSameEvent(ce, ev, name) {
-			ce.Timestamp = now // Reset expiration timer
-			// If we found an existing event, update it in place
-			if e.updateExistingCriticalEvent(ce, ev) {
-				e.updateCriticalEventCacheStrs(ce)
-			}
-			e.streamDirty = true
-			return
-		}
-	}
-
-	// Also check for duplicates in the pending queue
-	for _, ce := range e.criticalQueue {
-		if e.isSameEvent(ce, ev, name) {
-			ce.Timestamp = now // Reset expiration timer
-			// If we found an existing event, update it in place
-			if e.updateExistingCriticalEvent(ce, ev) {
-				e.updateCriticalEventCacheStrs(ce)
-			}
-			return
-		}
-	}
-
-	// Filter out outages with low impact (< 1000 IPs)
-	// We only add NEW outages to the stream if they meet the threshold.
-	if ev.classificationType == bgp.ClassificationOutage && utils.GetPrefixSize(ev.prefix) < 1000 {
-		return
-	}
-
-	// Only add a new event if it's not on a per-prefix cooldown
-	// Substantial cooldown: 10 minutes
-	if lastTime, ok := e.criticalCooldown[ev.prefix]; ok && now.Sub(lastTime) < 10*time.Minute {
-		return
-	}
-
-	e.criticalCooldown[ev.prefix] = now
-	ce := e.createCriticalEvent(ev, c, name, asnStr, orgID, newLoc, now)
-	e.criticalQueue = append(e.criticalQueue, ce)
-}
-
-func (e *Engine) removePrefixFromOldEvents(prefix, currentAnomName string) {
-	if prefix == "" {
-		return
-	}
-	if e.removeFromCriticalSlice(&e.CriticalStream, prefix, currentAnomName) {
-		e.streamDirty = true
-		return
-	}
-	e.removeFromCriticalSlice(&e.criticalQueue, prefix, currentAnomName)
-}
-
-func (e *Engine) removeFromCriticalSlice(slice *[]*CriticalEvent, prefix, currentAnomName string) bool {
-	for i := 0; i < len(*slice); i++ {
-		ce := (*slice)[i]
-		if ce.ImpactedPrefixes != nil {
-			if _, ok := ce.ImpactedPrefixes[prefix]; ok {
-				if currentAnomName != ce.Anom {
-					e.removePrefixFromEvent(ce, prefix)
-				}
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (e *Engine) removePrefixFromEvent(ce *CriticalEvent, prefix string) {
-	delete(ce.ImpactedPrefixes, prefix)
-	size := utils.GetPrefixSize(prefix)
-	if ce.ImpactedIPs >= size {
-		ce.ImpactedIPs -= size
-	} else {
-		ce.ImpactedIPs = 0
-	}
-	e.updateCriticalEventCacheStrs(ce)
-}
-
-func (e *Engine) isSameEvent(ce *CriticalEvent, ev *bgpEvent, name string) bool {
-	if ce.Anom != name {
-		return false
-	}
-
-	// 1. Exact Prefix Match: If this prefix is already part of this event, it's definitely the same event.
-	if ev.prefix != "" && ce.ImpactedPrefixes != nil {
-		if _, ok := ce.ImpactedPrefixes[ev.prefix]; ok {
-			return true
-		}
-	}
-
-	// For Route Leaks match based on leak details
-	if name == bgp.NameRouteLeak && ev.leakDetail != nil {
-		return (ce.LeakType == bgp.LeakUnknown || ce.LeakType == ev.leakDetail.Type) &&
-			ce.LeakerASN == ev.leakDetail.LeakerASN && ce.VictimASN == ev.leakDetail.VictimASN
-	}
-
-	// For DDoS Mitigation, always match by provider/victim pair
-	if name == bgp.NameDDoSMitigation {
-		leaker := ev.asn
-		victim := ev.historicalASN
-		if ev.leakDetail != nil {
-			leaker = ev.leakDetail.LeakerASN
-			victim = ev.leakDetail.VictimASN
-		}
-		// If both are known/0, we can't safely deduplicate across victims
-		if leaker == 0 && victim == 0 {
-			return false
-		}
-		return ce.LeakerASN == leaker && ce.VictimASN == victim
-	}
-
-	// 4. Origin ASN Match: For other anomalies (like Outages), match by Origin ASN
-	asn := ev.asn
-	if asn == 0 {
-		asn = ev.historicalASN
-	}
-
-	if asn != 0 && ce.ASN != 0 && asn == ce.ASN {
-		return true
-	}
-
-	return false
-}
-
-func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bool {
-	newLoc := e.getBestLocation(ev.prefix, ev.cc, ev.city)
-	needsUpdate := false
-	// Update locations
-	if newLoc != "" && !strings.Contains(ce.Locations, newLoc) {
-		if ce.Locations == "" {
-			ce.Locations = newLoc
-		} else {
-			ce.Locations += " | " + newLoc
-		}
-		needsUpdate = true
-	}
-
-	// Update IP Impact
-	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationHijack {
-		if ce.ImpactedPrefixes == nil {
-			ce.ImpactedPrefixes = make(map[string]struct{})
-		}
-		if _, exists := ce.ImpactedPrefixes[ev.prefix]; !exists {
-			ce.ImpactedPrefixes[ev.prefix] = struct{}{}
-			ce.ImpactedIPs += utils.GetPrefixSize(ev.prefix)
-			needsUpdate = true
-		}
-	}
-
-	// RETROACTIVE UPDATE: If we now have leak details that the previous entry lacked, update it
-	if ce.Anom == bgp.NameDDoSMitigation {
-		if ce.LeakerASN == 0 {
-			if ev.leakDetail != nil && ev.leakDetail.LeakerASN != 0 {
-				ce.LeakerASN = ev.leakDetail.LeakerASN
-				needsUpdate = true
-			} else if ev.asn != 0 {
-				ce.LeakerASN = ev.asn
-				needsUpdate = true
-			}
-		}
-		if ce.VictimASN == 0 {
-			if ev.leakDetail != nil && ev.leakDetail.VictimASN != 0 {
-				ce.VictimASN = ev.leakDetail.VictimASN
-				needsUpdate = true
-			} else if ev.historicalASN != 0 {
-				ce.VictimASN = ev.historicalASN
-				needsUpdate = true
-			}
-		}
-	} else if ce.LeakType == bgp.LeakUnknown && ev.leakDetail != nil {
-		ce.LeakType = ev.leakDetail.Type
-		ce.LeakerASN = ev.leakDetail.LeakerASN
-		ce.VictimASN = ev.leakDetail.VictimASN
-		needsUpdate = true
-	}
-	return needsUpdate
-}
-
-func (e *Engine) createCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, orgID, newLoc string, now time.Time) *CriticalEvent {
-	asnToUse := ev.asn
-	if asnToUse == 0 {
-		asnToUse = ev.historicalASN
-	}
-	ce := &CriticalEvent{
-		Timestamp:        now,
-		Anom:             name,
-		ASN:              asnToUse,
-		ASNStr:           asnStr,
-		OrgID:            orgID,
-		Color:            c,
-		UIColor:          e.getClassificationUIColor(name),
-		Locations:        newLoc,
-		ImpactedPrefixes: make(map[string]struct{}),
-	}
-	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationHijack {
-		ce.ImpactedPrefixes[ev.prefix] = struct{}{}
-		ce.ImpactedIPs = utils.GetPrefixSize(ev.prefix)
-	}
-	if ev.leakDetail != nil {
-		ce.LeakType = ev.leakDetail.Type
-		ce.LeakerASN = ev.leakDetail.LeakerASN
-		ce.VictimASN = ev.leakDetail.VictimASN
-	}
-	if ce.Anom == bgp.NameDDoSMitigation {
-		if ce.LeakerASN == 0 {
-			ce.LeakerASN = ev.asn
-		}
-		if ce.VictimASN == 0 {
-			ce.VictimASN = ev.historicalASN
-		}
-	}
-	e.updateCriticalEventCacheStrs(ce)
-	return ce
-}
-
-func (e *Engine) updateCriticalStream() {
-	e.streamMu.Lock()
-	defer e.streamMu.Unlock()
-
-	now := e.Now()
-
-	// 1. Animate offset towards 0
-	if math.Abs(e.streamOffset) > 0.1 {
-		e.streamOffset *= 0.85
-		e.streamDirty = true
-	} else if e.streamOffset != 0 {
-		e.streamOffset = 0
-		e.streamDirty = true
-	}
-
-	// 2. Handle queue with 1 second gap
-	if len(e.criticalQueue) > 0 && now.Sub(e.lastCriticalAddedAt) >= 1*time.Second {
-		ce := e.criticalQueue[0]
-		e.criticalQueue = e.criticalQueue[1:]
-
-		// Final check: ensure this exact event isn't already in the stream (race prevention)
-		isDup := false
-		for _, existing := range e.CriticalStream {
-			if existing.Anom == ce.Anom && existing.ASN == ce.ASN && existing.LeakerASN == ce.LeakerASN && existing.VictimASN == ce.VictimASN {
-				isDup = true
-				break
-			}
-		}
-		if isDup {
-			return
-		}
-
-		// Calculate height for animation
-		boxW := 280.0
-		fontSize := 18.0
-		if e.Width > 2000 {
-			boxW = 560.0
-			fontSize = 36.0
-		}
-		height := e.calculateEventHeight(ce, boxW*1.1, fontSize)
-		totalSpace := height + 25.0 // height + spacer
-
-		// Shift down existing items by setting negative offset
-		e.streamOffset -= totalSpace
-
-		// Prepend to stream
-		e.CriticalStream = append([]*CriticalEvent{ce}, e.CriticalStream...)
-		e.lastCriticalAddedAt = now
-		e.streamUpdatedAt = now
-		e.streamDirty = true
-
-		// Limit size
-		if len(e.CriticalStream) > 100 {
-			e.CriticalStream = e.CriticalStream[:100]
-		}
-	}
-}
-
-func (e *Engine) updateCriticalEventCacheStrs(ce *CriticalEvent) {
-	ce.CachedTypeLabel = "[" + strings.ToUpper(ce.Anom) + "]"
-	if e.subMonoFace != nil {
-		ce.CachedTypeWidth, _ = text.Measure(ce.CachedTypeLabel, e.subMonoFace, 0)
-	}
-
-	if ce.Anom == bgp.NameHardOutage || ce.Anom == bgp.NameDDoSMitigation || ce.Anom == bgp.NameRouteLeak || ce.Anom == bgp.NameHijack {
-		if ce.Anom == bgp.NameHardOutage && ce.ImpactedIPs == 0 {
-			ce.CachedFirstLine = " FIXED"
-		} else {
-			ce.CachedFirstLine = fmt.Sprintf(" %s IPs Impacted", utils.FormatNumber(ce.ImpactedIPs))
-		}
-		if ce.Anom == bgp.NameHardOutage {
-			e.cacheOutageStrings(ce)
-		} else {
-			e.cacheLeakStrings(ce)
-			e.cacheOutageStrings(ce) // Now also used for Networks line in Leaks/DDoS
-		}
-	} else {
-		ce.CachedFirstLine = ce.ASNStr
-		if ce.Anom == bgp.NameRouteLeak && ce.LeakerASN != 0 {
-			e.cacheLeakStrings(ce)
-		}
-	}
-
-	if ce.ImpactedIPs > 0 && ce.Anom != bgp.NameHardOutage && ce.Anom != bgp.NameDDoSMitigation && ce.Anom != bgp.NameHijack {
-		e.cacheImpactStrings(ce)
-	}
-}
-
-func (e *Engine) cacheLeakStrings(ce *CriticalEvent) {
-	if ce.Anom == bgp.NameRouteLeak {
-		ce.CachedFirstLine = ce.LeakType.String()
-	}
-
-	leakerLabel := "  Leaker: "
-	victimLabel := "  Impacted: "
-	if ce.Anom == bgp.NameDDoSMitigation {
-		leakerLabel = "  Provider: "
-	}
-	if ce.Anom == bgp.NameHijack {
-		leakerLabel = "  Hijacker: "
-		victimLabel = "  Victim: "
-	}
-	ce.CachedLeakerLabel = leakerLabel
-	ce.CachedVictimLabel = victimLabel
-
-	leakerVal := fmt.Sprintf("AS%d", ce.LeakerASN)
-	if e.asnMapping != nil {
-		if n := e.asnMapping.GetName(ce.LeakerASN); n != "" {
-			leakerVal += " - " + n
-		}
-	}
-	ce.CachedLeakerVal = leakerVal
-
-	victimVal := "Unknown"
-	if ce.VictimASN != 0 {
-		victimVal = fmt.Sprintf("AS%d", ce.VictimASN)
-		if e.asnMapping != nil {
-			if n := e.asnMapping.GetName(ce.VictimASN); n != "" {
-				victimVal += " - " + n
-			}
-		}
-	}
-	ce.CachedVictimVal = victimVal
-}
-
-func (e *Engine) cacheOutageStrings(ce *CriticalEvent) {
-	// Impacted ASN line
-	ce.CachedASNLabel = "  Impacted: "
-	ce.CachedASNVal = ce.ASNStr
-
-	// Networks line
-	networks := make([]string, 0, len(ce.ImpactedPrefixes))
-	for p := range ce.ImpactedPrefixes {
-		networks = append(networks, p)
-	}
-	sort.Strings(networks)
-
-	const maxShow = 2
-	displayNets := networks
-	moreCount := 0
-	if len(networks) > maxShow {
-		displayNets = networks[:maxShow]
-		moreCount = len(networks) - maxShow
-	}
-
-	ce.CachedNetLabel = "  Networks: "
-	netVal := strings.Join(displayNets, ", ")
-	if moreCount > 0 {
-		netVal += fmt.Sprintf(", (%d more)", moreCount)
-	}
-	ce.CachedNetVal = netVal
-
-	// Locations line
-	ce.CachedLocLabel = "  Location: "
-	locs := strings.Split(ce.Locations, " | ")
-	if len(locs) <= 2 {
-		ce.CachedLocVal = ce.Locations
-	} else {
-		displayLocs := locs[:2]
-		ce.CachedLocVal = fmt.Sprintf("%s | %s (%d more)", displayLocs[0], displayLocs[1], len(locs)-2)
-	}
-}
-
-func (e *Engine) cacheImpactStrings(ce *CriticalEvent) {
-	impactStr := ""
-	switch {
-	case ce.ImpactedIPs >= 1000000:
-		impactStr = fmt.Sprintf("%.1fM IPs", float64(ce.ImpactedIPs)/1000000.0)
-	case ce.ImpactedIPs >= 1000:
-		impactStr = fmt.Sprintf("%.1fK IPs", float64(ce.ImpactedIPs)/1000.0)
-	default:
-		impactStr = fmt.Sprintf("%d IPs", ce.ImpactedIPs)
-	}
-
-	prefixes := make([]string, 0, len(ce.ImpactedPrefixes))
-	for p := range ce.ImpactedPrefixes {
-		prefixes = append(prefixes, p)
-	}
-	sort.Strings(prefixes)
-
-	pfxStr := ""
-	if len(prefixes) > 0 {
-		pfxStr = prefixes[0]
-		if len(prefixes) > 1 {
-			pfxStr += fmt.Sprintf(" (%d more)", len(prefixes)-1)
-		}
-	}
-
-	ce.CachedImpactStr = fmt.Sprintf("  Impact(%s): %s", impactStr, pfxStr)
-}
 
 func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty, intensity float64, isGlitching bool) {
 	if img == nil {
