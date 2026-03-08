@@ -1468,10 +1468,7 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 	// 3. Buffer city activity
 	e.incrementCityBuffer(ev.lat, ev.lng, c, shape)
 
-	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationHijack {
-	}
-
-	// 5. Update windowed metrics (this drives the dashboard numbers)
+	// 4. Update windowed metrics (this drives the dashboard numbers)
 	e.updateWindowedMetrics(ev.eventType, ev.classificationType, ev.prefix, ev.asn)
 
 	// Filter out invalid DDoS Mitigation events from stats so they don't appear in summaries
@@ -1486,26 +1483,6 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 	default:
 		// Drop stat tracking if channel full to preserve main UI thread
 	}
-}
-
-func (e *Engine) getBestLocation(prefix, cc, city string) string {
-	if city != "" && cc != "" {
-		return fmt.Sprintf("%s, %s", city, cc)
-	}
-
-	// If we have a country but no city, try to re-resolve the IP to see if we can find a city.
-	// This helps when the current event (like a withdrawal) has sparse geo metadata.
-	if cc != "" && city == "" {
-		ip := e.prefixToIP(prefix)
-		if ip != 0 {
-			_, _, _, resolvedCity, _ := e.GetIPCoords(ip)
-			if resolvedCity != "" {
-				return fmt.Sprintf("%s, %s", resolvedCity, cc)
-			}
-		}
-	}
-
-	return cc
 }
 
 func (e *Engine) isIgnoredDDoS(ev *bgpEvent) bool {
@@ -1539,9 +1516,6 @@ func (e *Engine) isIgnoredDDoS(ev *bgpEvent) bool {
 
 	return false
 }
-
-
-
 
 func (e *Engine) drawGlitchImage(screen, img *ebiten.Image, tx, ty, intensity float64, isGlitching bool) {
 	if img == nil {
