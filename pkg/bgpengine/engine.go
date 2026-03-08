@@ -205,20 +205,22 @@ type Engine struct {
 	history   []MetricSnapshot
 	metricsMu sync.Mutex
 
-	CurrentSong      string
-	CurrentArtist    string
-	CurrentExtra     string
-	songChangedAt    time.Time
-	songBuffer       *ebiten.Image
-	artistBuffer     *ebiten.Image
-	extraBuffer      *ebiten.Image
-	impactBuffer     *ebiten.Image
-	streamBuffer     *ebiten.Image
-	streamClipBuffer *ebiten.Image
-	trendLinesBuffer *ebiten.Image
-	trendClipBuffer  *ebiten.Image
-	nowPlayingBuffer *ebiten.Image
-	nowPlayingDirty  bool
+	CurrentSong        string
+	CurrentArtist      string
+	CurrentExtra       string
+	songChangedAt      time.Time
+	songBuffer         *ebiten.Image
+	artistBuffer       *ebiten.Image
+	extraBuffer        *ebiten.Image
+	impactBuffer       *ebiten.Image
+	streamBuffer       *ebiten.Image
+	streamClipBuffer   *ebiten.Image
+	trendLinesBuffer   *ebiten.Image
+	trendClipBuffer    *ebiten.Image
+	ipTrendLinesBuffer *ebiten.Image
+	ipTrendClipBuffer  *ebiten.Image
+	nowPlayingBuffer   *ebiten.Image
+	nowPlayingDirty    bool
 
 	trendGridVertices []ebiten.Vertex
 	trendGridIndices  []uint16
@@ -412,6 +414,8 @@ type MetricSnapshot struct {
 	Flap, TE, Oscill                                       int
 	Hunting, NextHop, Outage                               int
 	Leak, Hijack, Bogon, Attr, Global, DDoS, Dedupe, Uncat int
+
+	GoodIPs, PolyIPs, BadIPs, CritIPs uint64
 }
 
 type asnGroup struct {

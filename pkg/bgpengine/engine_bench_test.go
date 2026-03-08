@@ -153,12 +153,13 @@ func BenchmarkDrawTrendGrid(b *testing.B) {
 	gx, gy := 10.0, 10.0
 	chartW, chartH := 400.0, 200.0
 	titlePadding := 20.0
+	globalMinLog := 0.0
 	globalMaxLog := 5.0
 	fontSize := 16.0
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		e.drawTrendGrid(screen, gx, gy, chartW, chartH, titlePadding, globalMaxLog, fontSize)
+		e.drawTrendGrid(screen, gx, gy, chartW, chartH, titlePadding, globalMinLog, globalMaxLog, fontSize)
 	}
 }
