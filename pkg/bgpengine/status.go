@@ -759,7 +759,8 @@ func (e *Engine) drawIPTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, t
 
 func (e *Engine) calculateGlobalMaxIPs() float64 {
 	var maxIPs float64
-	for _, s := range e.history {
+	for i := range e.history {
+		s := &e.history[i]
 		sum := float64(s.GoodIPs + s.PolyIPs + s.BadIPs + s.CritIPs)
 		if sum > maxIPs {
 			maxIPs = sum
@@ -807,6 +808,7 @@ func (e *Engine) drawIPTrendLayers(chartW, chartH, globalMaxIPs float64) {
 		e.ipTrendVertices = e.ipTrendVertices[:0]
 		e.ipTrendIndices = e.ipTrendIndices[:0]
 
+		//nolint:staticcheck // deprecated in ebiten 2.9, but avoids allocations per frame in tight animation loops
 		e.ipTrendVertices, e.ipTrendIndices = path.AppendVerticesAndIndicesForFilling(e.ipTrendVertices, e.ipTrendIndices)
 
 		cr, cg, cb := float32(c.R)/255.0, float32(c.G)/255.0, float32(c.B)/255.0
@@ -1021,7 +1023,8 @@ func (e *Engine) StartMetricsLoop() {
 
 func (e *Engine) updateMetricSnapshots(interval float64) {
 	var goodIPs, polyIPs, badIPs, critIPs uint64
-	for _, pc := range e.prefixCounts {
+	for i := range e.prefixCounts {
+		pc := &e.prefixCounts[i]
 		if pc.Count == 0 {
 			continue
 		}
