@@ -292,7 +292,7 @@ func (e *Engine) drawInsightStream(screen *ebiten.Image, margin, yBase, boxW, bo
 			text.Draw(e.streamBuffer, "Gathering insights...", e.subMonoFace, textOp)
 		} else {
 			e.streamClipBuffer.Clear()
-			currentY := e.streamOffset
+			currentY := 0.0
 
 			// Use all events for display
 			displayStream := e.InsightStream

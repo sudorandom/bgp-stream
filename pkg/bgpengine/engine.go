@@ -228,8 +228,7 @@ type Engine struct {
 	ActiveImpacts          []*VisualImpact
 	ActiveASNImpacts       []*ASNImpact
 	InsightStream          []*InsightEvent
-	lastInsights           map[string]time.Time
-	streamOffset           float64
+	lastInsightsUpdate     time.Time
 	streamDirty            bool
 	streamMu               sync.Mutex
 	impactDirty            bool
@@ -475,7 +474,6 @@ func NewEngine(width, height int, scale float64) *Engine {
 		tourRegionStayDuration: 10 * time.Second,
 		eventCh:                make(chan *bgpEvent, 250000),
 		statsCh:                make(chan *statsEvent, 250000),
-		criticalCooldown:       make(map[string]time.Time),
 		streamDirty:            true,
 	}
 	e.dataMgr = geoservice.NewDataManager(e.geo)
@@ -1253,24 +1251,6 @@ func (e *Engine) updateMetrics() {
 	}
 
 	e.updateBeaconPercent()
-
-	// Cleanup Insight Stream (remove entries older than 10 mins)
-	now := e.Now()
-	e.streamMu.Lock()
-	activeStream := e.InsightStream[:0]
-	removedAny := false
-	for _, ce := range e.InsightStream {
-		if now.Sub(ce.Timestamp) < 10*time.Minute {
-			activeStream = append(activeStream, ce)
-		} else {
-			removedAny = true
-		}
-	}
-	if removedAny {
-		e.InsightStream = activeStream
-		e.streamDirty = true
-	}
-	e.streamMu.Unlock()
 }
 
 func (e *Engine) updateBeaconPercent() {

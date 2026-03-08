@@ -10,8 +10,9 @@ import (
 
 func TestGenerateInsights(t *testing.T) {
 	e := &Engine{
-		lastInsights: make(map[string]time.Time),
+		virtualTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
+	e.VideoWriter = &fakeWriteCloser{}
 
 	state := &statsWorkerState{
 		asnSortedGroups: []*asnGroup{
@@ -53,8 +54,8 @@ func TestGenerateInsights(t *testing.T) {
 
 	e.generateInsights(state, prefixCounts)
 
-	if len(e.InsightStream) != 3 {
-		t.Fatalf("Expected 3 insights (Outage, DDoS, Churn), got %d", len(e.InsightStream))
+	if len(e.InsightStream) != 4 {
+		t.Fatalf("Expected 4 insights (Summary, Outage, DDoS, Churn), got %d", len(e.InsightStream))
 	}
 
 	// Validate Outage Insight
@@ -65,7 +66,7 @@ func TestGenerateInsights(t *testing.T) {
 			if len(ie.Lines) != 3 { // Impacted, Networks, Worst ASN
 				t.Errorf("Expected 3 lines for Outage, got %d", len(ie.Lines))
 			}
-			if ie.Title != "MAJOR OUTAGE DETECTED" {
+			if ie.Title != "ACTIVE OUTAGES" {
 				t.Errorf("Unexpected title for Outage: %s", ie.Title)
 			}
 		}
@@ -74,9 +75,16 @@ func TestGenerateInsights(t *testing.T) {
 		t.Errorf("Outage insight not found")
 	}
 
-	// Test cooldowns: run again immediately, should not emit new insights
+	// Advance time to pass the 5-second replacement threshold
+	e.virtualTime = e.Now().Add(6 * time.Second)
+
 	e.generateInsights(state, prefixCounts)
-	if len(e.InsightStream) != 3 {
-		t.Fatalf("Expected insights to be throttled, still got %d", len(e.InsightStream))
+	if len(e.InsightStream) != 4 {
+		t.Fatalf("Expected insights to be fully replaced, got %d", len(e.InsightStream))
 	}
 }
+
+type fakeWriteCloser struct{}
+
+func (f *fakeWriteCloser) Write(p []byte) (n int, err error) { return len(p), nil }
+func (f *fakeWriteCloser) Close() error                      { return nil }
