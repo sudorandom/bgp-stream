@@ -453,8 +453,10 @@ func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed 
 		}
 	}
 
+	historicalOriginAsn := c.getHistoricalASN(prefix)
+
 	// 0.5 DDoS Mitigation Detection
-	if ld, ok := c.detectDDoSMitigation(prefix, ctx); ok {
+	if ld, ok := c.detectDDoSMitigation(prefix, ctx, historicalOriginAsn); ok {
 		return ClassificationDDoSMitigation, ld, true
 	}
 
@@ -901,7 +903,55 @@ func (c *Classifier) isBogon(prefix string, ctx *MessageContext) bool {
 	return false
 }
 
-func (c *Classifier) detectDDoSMitigation(prefix string, ctx *MessageContext) (*LeakDetail, bool) {
+func (c *Classifier) isDDoSProvider(asn uint32) bool {
+	// Known Scrubbing ASNs, major clouds, and large tech networks that often trigger RPKI false positives
+	scrubbers := map[uint32]bool{
+		13335:  true, // Cloudflare
+		20940:  true, // Akamai
+		16509:  true, // Amazon
+		14618:  true, // Amazon
+		15169:  true, // Google
+		8075:   true, // Microsoft
+		32934:  true, // Facebook
+		19324:  true, // Akamai/Prolexic
+		6428:   true, // Radware
+		19551:  true, // Incapsula
+		31898:  true, // Oracle
+		40027:  true, // Oracle
+		36040:  true, // Google Cloud
+		109:    true, // Cisco
+		714:    true, // Apple
+		22822:  true, // LinkedIn
+		13238:  true, // Yandex
+		2906:   true, // Netflix
+		262287: true, // Latitude.sh
+		6939:   true, // Hurricane Electric (Large Backbone)
+		174:    true, // Cogent (Large Backbone)
+		2914:   true, // NTT (Large Backbone)
+		3356:   true, // Level 3 (Large Backbone)
+		6762:   true, // Telecom Italia Sparkle (Large Backbone)
+		1299:   true, // Telia (Large Backbone)
+		6453:   true, // Tata (Large Backbone)
+		1239:   true, // Sprint (Large Backbone)
+		701:    true, // Verizon (Large Backbone)
+		7018:   true, // AT&T (Large Backbone)
+		1273:   true, // Vodafone (Large Backbone)
+		4637:   true, // Telstra (Large Backbone)
+		197730: true, // Sea-Bone (Large Backbone)
+		3223:   true, // Voxility
+		396998: true, // Path Network
+		57724:  true, // DDoS-Guard
+		197068: true, // Qrator (High Load Lab)
+		34309:  true, // Link11
+		59796:  true, // StormWall
+		8757:   true, // NSFOCUS
+		42649:  true, // Baffin Bay Networks
+		23470:  true, // reliablesite.net
+	}
+	return scrubbers[asn]
+}
+
+func (c *Classifier) detectDDoSMitigation(prefix string, ctx *MessageContext, historicalOriginAsn uint32) (*LeakDetail, bool) {
 	// Flowspec: look for traffic-rate in communities or specific flowspec communities
 	if strings.Contains(ctx.CommStr, "traffic-rate:") || strings.Contains(ctx.CommStr, "traffic-action:") {
 		return &LeakDetail{Type: DDoSFlowspec}, true
@@ -915,25 +965,48 @@ func (c *Classifier) detectDDoSMitigation(prefix string, ctx *MessageContext) (*
 	}
 
 	// Traffic Redirection: look for scrubbing center characteristics
-	// Heuristic: If we see certain route target communities often used for VRF leaking
-	// or heavy AS-path prepending along with specific next-hop alterations, but
-	// for a simple heuristic, we can check for common scrubbing center ASNs in the path
-	// or specific community strings indicating redirection.
-	// We'll rely on community hints or known scrubbing ASNs in the path.
-	// Cloudflare (13335), Akamai/Prolexic (32787), Imperva (19551), Fastly (54113), Radware (30689)
-	scrubbingASNs := map[uint32]bool{
-		32787: true, // Prolexic
-		19551: true, // Imperva
-		30689: true, // Radware
-	}
-
+	// Heuristic: If the prefix is taken over by a known scrubbing ASN (different from its historical origin),
+	// or the upstream provider changes to a scrubbing ASN while the origin remains the same but with prepending.
 	if ctx.PathStr != "" {
 		fields := strings.Fields(strings.Trim(ctx.PathStr, "[]"))
-		for _, f := range fields {
-			var asn uint32
-			if _, err := fmt.Sscanf(f, "%d", &asn); err == nil {
-				if scrubbingASNs[asn] {
-					return &LeakDetail{Type: DDoSTrafficRedirection}, true
+		if len(fields) >= 1 {
+			var originAsn uint32
+			fmt.Sscanf(fields[len(fields)-1], "%d", &originAsn)
+
+			// If the origin ASN is a known scrubber and it's not the historical origin,
+			// it's a strong signal of traffic redirection.
+			if historicalOriginAsn != 0 && originAsn != historicalOriginAsn && c.isDDoSProvider(originAsn) {
+				return &LeakDetail{Type: DDoSTrafficRedirection, LeakerASN: originAsn, VictimASN: historicalOriginAsn}, true
+			}
+
+			// Check for AS-path prepending first to find the true origin and the upstream provider
+			// Example path: [1234 19324 5678 5678 5678] -> true origin is 5678, upstream is 19324
+			trueOriginAsn := originAsn
+			upstreamIdx := -1
+
+			for i := len(fields) - 2; i >= 0; i-- {
+				var asn uint32
+				fmt.Sscanf(fields[i], "%d", &asn)
+				if asn != trueOriginAsn {
+					upstreamIdx = i
+					break
+				}
+			}
+
+			// Alternatively, check if the upstream is a known scrubber,
+			// which indicates redirection to a scrubbing center before reaching the victim.
+			if upstreamIdx >= 0 {
+				var upstreamAsn uint32
+				fmt.Sscanf(fields[upstreamIdx], "%d", &upstreamAsn)
+				if c.isDDoSProvider(upstreamAsn) {
+					// We need to be careful with Tier-1s as upstream.
+					// A simple heuristic is: look for AS-path prepending (victim prepending)
+					// along with a scrubber upstream. Prepending means the origin ASN appears
+					// multiple times consecutively at the end.
+					prepending := (len(fields) - 1) - upstreamIdx
+					if prepending >= 2 { // Origin ASN repeated at least twice (1 prepends + 1 original)
+						return &LeakDetail{Type: DDoSTrafficRedirection, LeakerASN: upstreamAsn, VictimASN: trueOriginAsn}, true
+					}
 				}
 			}
 		}

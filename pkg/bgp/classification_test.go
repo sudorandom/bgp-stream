@@ -84,7 +84,7 @@ func TestClassification(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			classify("5.5.5.0/24", &MessageContext{
 				Peer: fmt.Sprintf("peer%d", i), Host: fmt.Sprintf("rrc%d", i%2),
-				PathStr: "[3356 500 2914]", PathLen: 11, Now: now.Add(time.Duration(i*30) * time.Second),
+					PathStr: "[12956 500 702]", PathLen: 11, Now: now.Add(time.Duration(i*30) * time.Second),
 			})
 		}
 	})

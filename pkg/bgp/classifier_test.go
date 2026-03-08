@@ -442,23 +442,23 @@ func TestClassifier_FindCriticalAnomaly_DDoS_Detailed(t *testing.T) {
 			wantLeakType: DDoSRTBH,
 		},
 		{
-			name:         "Traffic Redirection via Scrubbing Center ASN (Prolexic)",
+			name:         "Traffic Redirection via Scrubbing Center ASN (Prolexic) - Prepending",
 			prefix:       "1.1.1.0/24",
-			pathStr:      "[1234 32787 5678]",
+			pathStr:      "[1234 19324 5678 5678 5678]",
 			wantType:     ClassificationDDoSMitigation,
 			wantLeakType: DDoSTrafficRedirection,
 		},
 		{
-			name:         "Traffic Redirection via Scrubbing Center ASN (Imperva)",
+			name:         "Traffic Redirection via Scrubbing Center ASN (Imperva) - Origin Takeover",
 			prefix:       "1.1.1.0/24",
-			pathStr:      "[19551]",
+			pathStr:      "[1234 19551]",
 			wantType:     ClassificationDDoSMitigation,
 			wantLeakType: DDoSTrafficRedirection,
 		},
 		{
-			name:         "Traffic Redirection via Scrubbing Center ASN (Radware)",
+			name:         "Traffic Redirection via Scrubbing Center ASN (Radware) - Prepending",
 			prefix:       "1.1.1.0/24",
-			pathStr:      "[100 200 30689 400]",
+			pathStr:      "[100 200 6428 400 400]",
 			wantType:     ClassificationDDoSMitigation,
 			wantLeakType: DDoSTrafficRedirection,
 		},
@@ -485,6 +485,19 @@ func TestClassifier_FindCriticalAnomaly_DDoS_Detailed(t *testing.T) {
 				PathStr:   tt.pathStr,
 				Now:       now,
 			}
+
+			// Create a temporary mock for historical ASN
+			seenDBPath := filepath.Join(t.TempDir(), "test-seen-ddos-redirect.db")
+			seenDB, _ := utils.OpenDiskTrie(seenDBPath)
+			defer func() { _ = seenDB.Close() }()
+
+			oldASN := uint32(5678) // The victim
+			asnData := make([]byte, 4)
+			binary.BigEndian.PutUint32(asnData, oldASN)
+			_, ipNet, _ := net.ParseCIDR("1.1.1.0/24")
+			_ = seenDB.Insert(ipNet, asnData)
+
+			c.seenDB = seenDB
 
 			gotType, gotLD, ok := c.findCriticalAnomaly(tt.prefix, s, 65.0, ctx)
 
