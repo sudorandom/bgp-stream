@@ -30,6 +30,7 @@ import (
 	geojson "github.com/paulmach/go.geojson"
 	"github.com/sudorandom/bgp-stream/pkg/bgp"
 	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgp/proto/v1"
+	"github.com/sudorandom/bgp-stream/pkg/bgpexport"
 	"github.com/sudorandom/bgp-stream/pkg/geoservice"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 	"google.golang.org/protobuf/proto"
@@ -263,6 +264,7 @@ type Engine struct {
 	audioPlayer *AudioPlayer
 	processor   *bgp.BGPProcessor
 	asnMapping  *utils.ASNMapping
+	exporter    *bgpexport.Exporter
 	geoResolver geoservice.GeoResolver
 	dataMgr     *geoservice.DataManager
 	MMDBFiles   []string
@@ -639,6 +641,8 @@ func (e *Engine) LoadRemainingData() error {
 	}
 
 	e.processor = bgp.NewBGPProcessor(e.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.RPKI, e.prefixToIP, e.Now, e.recordEvent)
+
+	e.exporter = bgpexport.NewExporter("data/export")
 
 	// Preload anomalies from state DB to initialize the BGP EVENT SUMMARY
 	e.bgWg.Add(1)
@@ -1497,6 +1501,10 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 
 	// 5. Update windowed metrics (this drives the dashboard numbers)
 	e.updateWindowedMetrics(ev.eventType, ev.classificationType, ev.prefix, ev.asn)
+
+	if e.exporter != nil && ev.prefix != "" {
+		e.exporter.HandleEvent(ev.prefix, ev.asn, ev.classificationType, ev.leakDetail, e.Now())
+	}
 
 	// Filter out invalid DDoS Mitigation events from stats so they don't appear in summaries
 	// We require both provider and victim ASN to be known to show a meaningful summary item.
