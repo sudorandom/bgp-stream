@@ -131,6 +131,8 @@ func (e *Engine) processStatsTrigger(state *statsWorkerState) {
 	e.ActiveASNImpacts = activeASNImpacts
 	e.metricsMu.Unlock()
 
+	e.generateInsights(state, prefixCounts)
+
 	// 3. Advance the rolling window
 	state.currentIdx = (state.currentIdx + 1) % 60
 	// Clear the next bucket
@@ -503,4 +505,158 @@ func (e *Engine) processStatsEvent(msg *statsEvent, state *statsWorkerState) {
 	if ev.cc != "" {
 		state.buckets[state.currentIdx].countryActivity[ev.cc]++
 	}
+}
+
+// checkOutageInsights now always returns the current state of outages, regardless of cooldowns
+func (e *Engine) checkOutageInsights(state *statsWorkerState, prefixCounts []PrefixCount, now time.Time) *InsightEvent {
+	for i := range prefixCounts {
+		pc := &prefixCounts[i]
+		if pc.Type == bgp.ClassificationOutage && pc.Count > 0 {
+			var worstASN *asnGroup
+			for _, g := range state.asnSortedGroups {
+				if g.anom == bgp.NameHardOutage {
+					worstASN = g
+					break
+				}
+			}
+
+			lines := []InsightLine{
+				{Label: "  Impacted:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%d ASNs, %s IPs", pc.ASNCount, utils.FormatShortNumber(pc.IPCount)), ValueColor: color.RGBA{255, 255, 0, 255}},
+				{Label: "  Networks:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%d prefixes offline", pc.Count), ValueColor: color.RGBA{255, 255, 0, 255}},
+			}
+			if worstASN != nil {
+				lines = append(lines, InsightLine{
+					Label: " Worst ASN:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: worstASN.asnStr, ValueColor: color.RGBA{255, 255, 0, 255},
+				})
+			}
+			return &InsightEvent{
+				Timestamp:  now,
+				Category:   "Outage",
+				Title:      "ACTIVE OUTAGES",
+				TitleColor: pc.Color,
+				Lines:      lines,
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Engine) checkDDoSInsights(prefixCounts []PrefixCount, now time.Time) *InsightEvent {
+	for i := range prefixCounts {
+		pc := &prefixCounts[i]
+		if pc.Type == bgp.ClassificationDDoSMitigation && pc.Count > 0 {
+			lines := []InsightLine{
+				{Label: "Mitigating:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%d prefixes", pc.Count), ValueColor: color.RGBA{255, 255, 0, 255}},
+				{Label: "      ASNs:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%d distinct ASNs", pc.ASNCount), ValueColor: color.RGBA{255, 255, 0, 255}},
+			}
+			return &InsightEvent{
+				Timestamp:  now,
+				Category:   "DDoS",
+				Title:      "DDOS MITIGATIONS",
+				TitleColor: pc.Color,
+				Lines:      lines,
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Engine) checkChurnInsights(state *statsWorkerState, now time.Time) *InsightEvent {
+	e.metricsMu.Lock()
+	churnRate := e.rateUpd + e.rateWith
+	e.metricsMu.Unlock()
+
+	if churnRate > 100 { // Adjust threshold for "High" churn to be realistic
+		lines := []InsightLine{
+			{Label: "    Global:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%.0f msgs/sec", churnRate), ValueColor: color.RGBA{255, 255, 0, 255}},
+		}
+
+		if len(state.asnSortedGroups) > 0 {
+			noisiest := state.asnSortedGroups[0]
+			lines = append(lines, InsightLine{
+				Label: "  Noisiest:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%s (%.0f events)", noisiest.asnStr, noisiest.totalCount), ValueColor: color.RGBA{255, 255, 0, 255},
+			})
+		}
+
+		return &InsightEvent{
+			Timestamp:  now,
+			Category:   "Churn",
+			Title:      "ELEVATED BGP CHURN",
+			TitleColor: color.RGBA{255, 165, 0, 255}, // Orange
+			Lines:      lines,
+		}
+	}
+	return nil
+}
+
+func (e *Engine) checkSummaryInsight(state *statsWorkerState, prefixCounts []PrefixCount, now time.Time) *InsightEvent {
+	e.metricsMu.Lock()
+	churnRate := e.rateUpd + e.rateWith
+	e.metricsMu.Unlock()
+
+	var outageCount int
+	var outageIPs uint64
+	for i := range prefixCounts {
+		if prefixCounts[i].Type == bgp.ClassificationOutage {
+			outageCount = prefixCounts[i].Count
+			outageIPs = prefixCounts[i].IPCount
+		}
+	}
+
+	percentIPv4 := (float64(outageIPs) / float64(4294967296)) * 100.0
+
+	lines := []InsightLine{
+		{Label: "    Global:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%.0f msgs/sec", churnRate), ValueColor: color.RGBA{0, 255, 255, 255}},
+		{Label: "   Outages:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%d prefixes", outageCount), ValueColor: color.RGBA{255, 100, 100, 255}},
+		{Label: "  Internet:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: fmt.Sprintf("%.4f%% down", percentIPv4), ValueColor: color.RGBA{255, 100, 100, 255}},
+	}
+
+	if len(state.asnSortedGroups) > 0 {
+		noisiest := state.asnSortedGroups[0]
+		lines = append(lines, InsightLine{
+			Label: "  Noisiest:", LabelColor: color.RGBA{180, 180, 180, 255}, Value: noisiest.asnStr, ValueColor: color.RGBA{255, 255, 0, 255},
+		})
+	}
+
+	return &InsightEvent{
+		Timestamp:  now,
+		Category:   "Summary",
+		Title:      "GENERAL STATE",
+		TitleColor: color.RGBA{100, 255, 100, 255},
+		Lines:      lines,
+	}
+}
+
+func (e *Engine) generateInsights(state *statsWorkerState, prefixCounts []PrefixCount) {
+	now := e.Now()
+
+	// Only update the panel every 5 seconds to prevent flickering
+	if now.Sub(e.lastInsightsUpdate) < 5*time.Second {
+		return
+	}
+	e.lastInsightsUpdate = now
+
+	var newInsights []*InsightEvent
+
+	// We append in order of Priority (Top to Bottom rendering)
+	if ie := e.checkOutageInsights(state, prefixCounts, now); ie != nil {
+		newInsights = append(newInsights, ie)
+	}
+
+	if ie := e.checkDDoSInsights(prefixCounts, now); ie != nil {
+		newInsights = append(newInsights, ie)
+	}
+
+	if ie := e.checkChurnInsights(state, now); ie != nil {
+		newInsights = append(newInsights, ie)
+	}
+
+	if ie := e.checkSummaryInsight(state, prefixCounts, now); ie != nil {
+		newInsights = append(newInsights, ie)
+	}
+
+	e.streamMu.Lock()
+	e.InsightStream = newInsights
+	e.streamDirty = true
+	e.streamMu.Unlock()
 }

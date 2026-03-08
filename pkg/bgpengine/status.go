@@ -44,11 +44,11 @@ func (e *Engine) DrawBGPStatus(screen *ebiten.Image) {
 	}
 
 	e.streamMu.Lock()
-	if len(e.CriticalStream) > 0 {
+	if len(e.InsightStream) > 0 {
 		// Extend to near the bottom of the view
 		maxStreamH := float64(e.Height) - margin - streamY
 		streamH := e.calculateStreamBoxHeight(fontSize, maxStreamH)
-		e.drawCriticalStream(screen, margin-10, streamY, boxW*1.4, streamH, fontSize)
+		e.drawInsightStream(screen, margin-10, streamY, boxW*1.4, streamH, fontSize)
 	}
 	e.streamMu.Unlock()
 
@@ -261,7 +261,7 @@ func (e *Engine) calculateStreamBoxHeight(fontSize, maxHeight float64) float64 {
 	return maxHeight
 }
 
-func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, boxH, fontSize float64) {
+func (e *Engine) drawInsightStream(screen *ebiten.Image, margin, yBase, boxW, boxH, fontSize float64) {
 	if e.streamBuffer == nil || e.streamBuffer.Bounds().Dx() != int(boxW*1.1) || e.streamBuffer.Bounds().Dy() != int(boxH) {
 		e.streamBuffer = ebiten.NewImage(int(boxW*1.1), int(boxH))
 		e.streamClipBuffer = ebiten.NewImage(int(boxW*1.1), int(boxH))
@@ -276,7 +276,7 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 		vector.FillRect(e.streamBuffer, 0, 0, float32(boxW), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 		vector.StrokeRect(e.streamBuffer, 0, 0, float32(boxW), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-		streamTitle := "MAJOR EVENT STREAM (real-time)"
+		streamTitle := "INTERNET STATE REPORT"
 		vector.FillRect(e.streamBuffer, 0, 0, 4, float32(fontSize+10), color.RGBA{255, 50, 50, 255}, false)
 
 		textOp := &text.DrawOptions{}
@@ -284,21 +284,21 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 		textOp.ColorScale.Scale(1, 1, 1, 0.5)
 		text.Draw(e.streamBuffer, streamTitle, e.titleFace, textOp)
 
-		if len(e.CriticalStream) == 0 {
+		if len(e.InsightStream) == 0 {
 			textOp.GeoM.Reset()
 			textOp.GeoM.Translate(localX+5, localY+5)
 			textOp.ColorScale.Reset()
 			textOp.ColorScale.Scale(1, 1, 1, 0.3)
-			text.Draw(e.streamBuffer, "Waiting for major events...", e.subMonoFace, textOp)
+			text.Draw(e.streamBuffer, "Gathering insights...", e.subMonoFace, textOp)
 		} else {
 			e.streamClipBuffer.Clear()
-			currentY := e.streamOffset
+			currentY := 0.0
 
 			// Use all events for display
-			displayStream := e.CriticalStream
+			displayStream := e.InsightStream
 
 			for i, ce := range displayStream {
-				nextY := e.drawCriticalEvent(ce, localX, currentY, boxW, fontSize)
+				nextY := e.drawInsightEvent(ce, localX, currentY, boxW, fontSize)
 
 				// Draw a subtle separator if not the last one
 				if i < len(displayStream)-1 && nextY+12 < boxH {
@@ -330,82 +330,37 @@ func (e *Engine) drawCriticalStream(screen *ebiten.Image, margin, yBase, boxW, b
 	e.drawGlitchImage(screen, e.streamBuffer, margin-10, yBase-fontSize-15, intensity, isGlitching)
 }
 
-func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float64) float64 {
-	// We are now drawing into streamClipBuffer which represents only the events area
+func (e *Engine) drawInsightEvent(ie *InsightEvent, x, y, boxW, fontSize float64) float64 {
 	textOp := &text.DrawOptions{}
-	// Draw Anomaly Type Label (e.g. [OUTAGE])
+
+	// Draw Insight Category Label
 	textOp.GeoM.Translate(x, y)
-	cr, cg, cb := float32(ce.UIColor.R)/255.0, float32(ce.UIColor.G)/255.0, float32(ce.UIColor.B)/255.0
+	cr, cg, cb := float32(ie.TitleColor.R)/255.0, float32(ie.TitleColor.G)/255.0, float32(ie.TitleColor.B)/255.0
 	textOp.ColorScale.Scale(cr, cg, cb, 0.9)
-	text.Draw(e.streamClipBuffer, ce.CachedTypeLabel, e.subMonoFace, textOp)
+	label := fmt.Sprintf("[%s]", ie.Category)
+	text.Draw(e.streamClipBuffer, label, e.subMonoFace, textOp)
 
-	// Draw details next to the label
+	// Measure label to offset the title
+	labelWidth, _ := text.Measure(label, e.subMonoFace, 0)
+
+	// Draw Title next to the label
 	textOp.GeoM.Reset()
-	textOp.GeoM.Translate(x+ce.CachedTypeWidth+10, y)
+	textOp.GeoM.Translate(x+labelWidth+10, y)
+	textOp.ColorScale.Reset()
+	textOp.ColorScale.Scale(cr, cg, cb, 0.7) // Lightened version of base color
 
-	// Use a distinct color for sub-classifications (Route Leak types, DDoS) or Impact
-	if ce.Anom == bgp.NameRouteLeak || ce.Anom == bgp.NameHardOutage || ce.Anom == bgp.NameDDoSMitigation || ce.Anom == bgp.NameHijack {
-		textOp.ColorScale.Reset()
-		if ce.Anom == bgp.NameHardOutage && ce.ImpactedIPs == 0 {
-			textOp.ColorScale.Scale(0, 1, 0, 0.9) // Green for FIXED
-		} else {
-			textOp.ColorScale.Scale(0, 1, 1, 0.9) // Cyan for sub-type or impact
-		}
-	} else {
-		textOp.ColorScale.Reset()
-		textOp.ColorScale.Scale(cr, cg, cb, 0.7) // Lightened version of base color
-	}
-
-	// Calculate available width for the first line
-	firstLineX := x + ce.CachedTypeWidth + 10
+	firstLineX := x + labelWidth + 10
 	availableW := boxW - firstLineX - 5
-	nextY := e.drawWrappedText(e.streamClipBuffer, ce.CachedFirstLine, e.subMonoFace, firstLineX, y, availableW, fontSize, textOp)
+	nextY := e.drawWrappedText(e.streamClipBuffer, ie.Title, e.subMonoFace, firstLineX, y, availableW, fontSize, textOp)
 
-	labelCol := color.RGBA{180, 180, 180, 255} // Light gray
-	valueCol := color.RGBA{255, 255, 0, 255}   // Bright yellow
-
-	// Details for Route Leaks
-	switch ce.Anom {
-	case bgp.NameRouteLeak:
-		if ce.LeakType != bgp.LeakUnknown {
-			// Leaker
-			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-
-			// Impacted
-			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedVictimLabel, ce.CachedVictimVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-
-			// Networks line
-			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-		}
-	case bgp.NameHardOutage:
-		// Impacted ASN line
-		nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedASNLabel, ce.CachedASNVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-
-		// Networks line
-		nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-
-		// Locations line
-		if ce.CachedLocVal != "" {
-			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLocLabel, ce.CachedLocVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-		}
-	case bgp.NameDDoSMitigation, bgp.NameHijack:
-		// Provider/Hijacker - Skip if DDoS and Provider == Victim
-		if ce.Anom != bgp.NameDDoSMitigation || ce.LeakerASN != ce.VictimASN {
-			nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-		}
-
-		// Impacted/Victim
-		nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedVictimLabel, ce.CachedVictimVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
-
-		// Networks line
-		nextY = e.drawLabeledLine(e.streamClipBuffer, ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, labelCol, valueCol)
+	// Draw details
+	indent := 20.0
+	for _, line := range ie.Lines {
+		nextY = e.drawLabeledLine(e.streamClipBuffer, line.Label, line.Value, e.subMonoFace, x+indent, nextY, boxW-indent-5, fontSize, line.LabelColor, line.ValueColor)
 	}
 
 	return nextY
 }
-
-const indent = 20.0
-
 func (e *Engine) drawNowPlaying(screen *ebiten.Image, margin, boxW, fontSize float64, face *text.GoTextFace) {
 	now := e.Now()
 	if e.CurrentSong == "" {
@@ -1287,91 +1242,4 @@ func (e *Engine) drawLabeledLine(dst *ebiten.Image, label, value string, face *t
 	y += fontSize * 1.1
 
 	return y
-}
-
-func (e *Engine) wrapHeight(content string, face *text.GoTextFace, maxWidth, fontSize float64) float64 {
-	if content == "" {
-		return 0
-	}
-	if face == nil {
-		return fontSize * 1.1
-	}
-	words := strings.Fields(content)
-	if len(words) == 0 {
-		return 0
-	}
-	h := fontSize * 1.1
-	line := words[0]
-	for _, word := range words[1:] {
-		testLine := line + " " + word
-		tw, _ := text.Measure(testLine, face, 0)
-		if tw > maxWidth {
-			h += fontSize * 1.1
-			line = word
-		} else {
-			line = testLine
-		}
-	}
-	return h
-}
-
-func (e *Engine) labeledLineHeight(label, value string, face *text.GoTextFace, maxWidth, fontSize float64) float64 {
-	if label == "" && value == "" {
-		return 0
-	}
-	if face == nil {
-		return fontSize * 1.1
-	}
-	labelWidth, _ := text.Measure(label, face, 0)
-	h := fontSize * 1.1
-	words := strings.Fields(value)
-	if len(words) == 0 {
-		return h
-	}
-	line := words[0]
-	firstLine := true
-	for _, word := range words[1:] {
-		testLine := line + " " + word
-		currentMaxW := maxWidth
-		if firstLine {
-			currentMaxW = maxWidth - labelWidth
-		}
-		tw, _ := text.Measure(testLine, face, 0)
-		if tw > currentMaxW {
-			h += fontSize * 1.1
-			line = word
-			firstLine = false
-		} else {
-			line = testLine
-		}
-	}
-	return h
-}
-
-func (e *Engine) calculateEventHeight(ce *CriticalEvent, boxW, fontSize float64) float64 {
-	availableW := boxW - ce.CachedTypeWidth - 20
-	h := e.wrapHeight(ce.CachedFirstLine, e.subMonoFace, availableW, fontSize)
-
-	indent := 20.0
-	detailsW := boxW - indent - 5
-
-	switch ce.Anom {
-	case bgp.NameRouteLeak:
-		if ce.LeakType != bgp.LeakUnknown {
-			h += e.labeledLineHeight(ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, detailsW, fontSize)
-			h += e.labeledLineHeight(ce.CachedVictimLabel, ce.CachedVictimVal, e.subMonoFace, detailsW, fontSize)
-			h += e.labeledLineHeight(ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, detailsW, fontSize)
-		}
-	case bgp.NameHardOutage:
-		h += e.labeledLineHeight(ce.CachedASNLabel, ce.CachedASNVal, e.subMonoFace, detailsW, fontSize)
-		h += e.labeledLineHeight(ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, detailsW, fontSize)
-		if ce.CachedLocVal != "" {
-			h += e.labeledLineHeight(ce.CachedLocLabel, ce.CachedLocVal, e.subMonoFace, detailsW, fontSize)
-		}
-	case bgp.NameDDoSMitigation, bgp.NameHijack:
-		h += e.labeledLineHeight(ce.CachedLeakerLabel, ce.CachedLeakerVal, e.subMonoFace, detailsW, fontSize)
-		h += e.labeledLineHeight(ce.CachedVictimLabel, ce.CachedVictimVal, e.subMonoFace, detailsW, fontSize)
-		h += e.labeledLineHeight(ce.CachedNetLabel, ce.CachedNetVal, e.subMonoFace, detailsW, fontSize)
-	}
-	return h
 }
