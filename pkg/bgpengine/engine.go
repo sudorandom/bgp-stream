@@ -215,13 +215,18 @@ type Engine struct {
 	impactBuffer     *ebiten.Image
 	streamBuffer     *ebiten.Image
 	streamClipBuffer *ebiten.Image
-	trendLinesBuffer *ebiten.Image
-	trendClipBuffer  *ebiten.Image
-	nowPlayingBuffer *ebiten.Image
+	trendLinesBuffer   *ebiten.Image
+	trendClipBuffer    *ebiten.Image
+	ipTrendLinesBuffer *ebiten.Image
+	ipTrendClipBuffer  *ebiten.Image
+	nowPlayingBuffer   *ebiten.Image
 	nowPlayingDirty  bool
 
 	trendGridVertices []ebiten.Vertex
 	trendGridIndices  []uint16
+
+	ipTrendVertices []ebiten.Vertex
+	ipTrendIndices  []uint16
 
 	hubChangedAt map[string]time.Time
 	lastHubs     map[string]int
@@ -412,6 +417,8 @@ type MetricSnapshot struct {
 	Flap, TE, Oscill                                       int
 	Hunting, NextHop, Outage                               int
 	Leak, Hijack, Bogon, Attr, Global, DDoS, Dedupe, Uncat int
+
+	GoodIPs, PolyIPs, BadIPs, CritIPs uint64
 }
 
 type asnGroup struct {

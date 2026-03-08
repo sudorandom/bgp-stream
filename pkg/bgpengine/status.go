@@ -517,15 +517,18 @@ func (e *Engine) drawLegendAndTrends(screen *ebiten.Image) {
 	// Draw Anomaly Summary (Shifted up 100px)
 	e.drawAnomalySummary(screen, summaryX, gy-100, boxW, summaryH, fontSize)
 
-	// Draw Trendlines Box
-	e.drawTrendlines(screen, gx, gy, graphW, trendBoxW, graphH, fontSize, legendH)
+	// Draw Trendlines Boxes
+	halfBoxH := (legendH / 2) - 10
+	halfGraphH := halfBoxH - fontSize - 5
+	e.drawIPTrendlines(screen, gx, gy-halfBoxH-15, graphW, trendBoxW, halfGraphH, fontSize, halfBoxH)
+	e.drawEventTrendlines(screen, gx, gy, graphW, trendBoxW, halfGraphH, fontSize, halfBoxH)
 }
 
-func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64) {
+func (e *Engine) drawEventTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64) {
 	vector.FillRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
 	vector.StrokeRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
 
-	trendTitle := "ACTIVITY TREND (last minute)"
+	trendTitle := "EVENTS OVER TIME"
 	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
 
 	// Draw subtle hacker-green accent
@@ -556,7 +559,11 @@ func (e *Engine) drawTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW,
 	// Use persistent buffer for trendlines to avoid per-frame allocations
 	// We make it slightly wider to accommodate the smooth sliding
 	hLen := len(e.history)
-	step := chartW / float64(hLen-2)
+	numSteps := float64(hLen - 2)
+	if numSteps <= 0 {
+		numSteps = 1
+	}
+	step := chartW / numSteps
 	bufferW := chartW + step
 	if e.trendLinesBuffer == nil || e.trendLinesBuffer.Bounds().Dx() != int(bufferW) || e.trendLinesBuffer.Bounds().Dy() != int(chartH+10) {
 		e.trendLinesBuffer = ebiten.NewImage(int(bufferW), int(chartH+10))
@@ -620,6 +627,226 @@ func (e *Engine) logVal(v int) float64 {
 		return 0
 	}
 	return math.Log10(float64(v) + 1.0)
+}
+
+func (e *Engine) drawIPTrendlines(screen *ebiten.Image, gx, gy, graphW, trendBoxW, graphH, fontSize, boxH float64) {
+	vector.FillRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), color.RGBA{0, 0, 0, 100}, false)
+	vector.StrokeRect(screen, float32(gx-10), float32(gy-fontSize-15), float32(trendBoxW+20), float32(boxH), 1, color.RGBA{36, 42, 53, 255}, false)
+
+	trendTitle := "IP ADDRESSES IN EACH STATE"
+	titleFace := &text.GoTextFace{Source: e.fontSource, Size: fontSize * 0.8}
+
+	// Draw subtle hacker-green accent
+	vector.FillRect(screen, float32(gx-10), float32(gy-fontSize-15), 4, float32(fontSize+10), ColorNew, false)
+
+	trendOp := &text.DrawOptions{}
+	trendOp.GeoM.Translate(gx+5, gy-fontSize-5)
+	trendOp.ColorScale.Scale(1, 1, 1, 0.5)
+	text.Draw(screen, trendTitle, titleFace, trendOp)
+
+	if len(e.history) < 2 {
+		return
+	}
+
+	titlePadding := 15.0 // Extra gap from the title
+	if e.Width > 2000 {
+		titlePadding = 30.0
+	}
+	chartW := graphW + 30.0
+	if e.Width > 2000 {
+		chartW = graphW + 60.0
+	}
+	chartH := graphH - titlePadding
+
+	globalMaxIPs := e.calculateGlobalMaxIPs()
+	e.drawIPTrendGrid(screen, gx, gy, chartW, chartH, titlePadding, globalMaxIPs, fontSize)
+
+	// Use persistent buffer for trendlines to avoid per-frame allocations
+	hLen := len(e.history)
+	numSteps := float64(hLen - 2)
+	if numSteps <= 0 {
+		numSteps = 1
+	}
+	step := chartW / numSteps
+	bufferW := chartW + step
+	if e.ipTrendLinesBuffer == nil || e.ipTrendLinesBuffer.Bounds().Dx() != int(bufferW) || e.ipTrendLinesBuffer.Bounds().Dy() != int(chartH+10) {
+		e.ipTrendLinesBuffer = ebiten.NewImage(int(bufferW), int(chartH+10))
+	}
+
+	if !e.lastMetricsUpdate.Equal(e.lastTrendUpdate) {
+		e.ipTrendLinesBuffer.Clear()
+		e.drawIPTrendLayers(bufferW, chartH, globalMaxIPs)
+	}
+
+	// 1. Draw the scrolling buffer into the clip buffer (sized to chartW) to handle clipping
+	if e.ipTrendClipBuffer == nil || e.ipTrendClipBuffer.Bounds().Dx() != int(chartW) || e.ipTrendClipBuffer.Bounds().Dy() != int(chartH+10) {
+		e.ipTrendClipBuffer = ebiten.NewImage(int(chartW), int(chartH+10))
+	}
+	e.ipTrendClipBuffer.Clear()
+
+	smoothOffset := math.Mod(time.Since(e.lastMetricsUpdate).Seconds(), 1.0)
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(-smoothOffset*step, 0)
+	op.ColorScale.Scale(1, 1, 1, 1.0)
+	e.ipTrendClipBuffer.DrawImage(e.ipTrendLinesBuffer, op)
+
+	// 2. Draw the clipped trend image back to the screen at its final position
+	op.GeoM.Reset()
+	op.GeoM.Translate(gx, gy+titlePadding)
+	op.ColorScale.Reset()
+	op.ColorScale.Scale(1, 1, 1, 0.8) // Apply transparency globally
+	screen.DrawImage(e.ipTrendClipBuffer, op)
+}
+
+func (e *Engine) drawIPTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, titlePadding, globalMaxIPs, fontSize float64) {
+	var gridPath vector.Path
+
+	step := 10.0
+	if globalMaxIPs > 0 {
+		step = math.Pow(10, math.Floor(math.Log10(globalMaxIPs)))
+		if globalMaxIPs/step < 3 {
+			step /= 2
+		}
+	}
+	if step < 1 {
+		step = 1
+	}
+
+	for val := step; val <= globalMaxIPs; val += step {
+		y := math.Round(titlePadding + chartH - (val/globalMaxIPs)*chartH)
+		gridPath.MoveTo(float32(gx), float32(gy+y))
+		gridPath.LineTo(float32(gx+chartW), float32(gy+y))
+
+		labelStr := fmt.Sprintf("%.0f", val)
+		if val >= 1000000 {
+			labelStr = fmt.Sprintf("%.1fm", val/1000000)
+		} else if val >= 1000 {
+			labelStr = fmt.Sprintf("%.1fk", val/1000)
+		}
+		textOp := &text.DrawOptions{}
+		labelX := gx + chartW + 8
+		if e.Width > 2000 {
+			labelX = gx + chartW + 16
+		}
+		textOp.GeoM.Translate(labelX, gy+y-(fontSize*0.3))
+		textOp.ColorScale.Scale(1, 1, 1, 0.6)
+		text.Draw(screen, labelStr, e.titleFace05, textOp)
+	}
+
+	strokeOp := &vector.StrokeOptions{Width: 2.0}
+
+	e.trendGridVertices = e.trendGridVertices[:0]
+	e.trendGridIndices = e.trendGridIndices[:0]
+
+	//nolint:staticcheck // deprecated in ebiten 2.9, but avoids allocations per frame in tight animation loops
+	e.trendGridVertices, e.trendGridIndices = gridPath.AppendVerticesAndIndicesForStroke(e.trendGridVertices, e.trendGridIndices, strokeOp)
+
+	r := float32(40.0 / 255.0)
+	g := float32(40.0 / 255.0)
+	b := float32(40.0 / 255.0)
+	a := float32(1.0)
+
+	for i := range e.trendGridVertices {
+		e.trendGridVertices[i].ColorR = r
+		e.trendGridVertices[i].ColorG = g
+		e.trendGridVertices[i].ColorB = b
+		e.trendGridVertices[i].ColorA = a
+	}
+
+	op := &ebiten.DrawTrianglesOptions{}
+	screen.DrawTriangles(e.trendGridVertices, e.trendGridIndices, e.whitePixel, op)
+}
+
+func (e *Engine) calculateGlobalMaxIPs() float64 {
+	var maxIPs float64
+	for _, s := range e.history {
+		sum := float64(s.GoodIPs + s.PolyIPs + s.BadIPs + s.CritIPs)
+		if sum > maxIPs {
+			maxIPs = sum
+		}
+	}
+	if maxIPs == 0 {
+		return 10.0 // minimum scale
+	}
+	return maxIPs
+}
+
+func (e *Engine) drawIPTrendLayers(chartW, chartH, globalMaxIPs float64) {
+	hLen := len(e.history)
+	numSteps := float64(hLen - 2)
+	if numSteps <= 0 {
+		numSteps = 1
+	}
+	step := chartW / numSteps
+
+	// Colors for the four aggregated lines
+	goodCol := ColorDiscovery // Blue (Normal)
+	polyCol := ColorPolicy    // Purple (Policy)
+	badCol := ColorBad        // Orange (Bad)
+	critCol := ColorCritical  // Pure Red (Critical)
+
+	drawLayer := func(valFunc func(int) float64, baseFunc func(int) float64, c color.RGBA) {
+		var path vector.Path
+
+		path.MoveTo(0, float32(chartH))
+		for j := 0; j < hLen-1; j++ {
+			x := float32(float64(j) * step)
+			val := valFunc(j)
+			y := float32(chartH - (val/globalMaxIPs)*chartH)
+			path.LineTo(x, y)
+		}
+
+		for j := hLen - 2; j >= 0; j-- {
+			x := float32(float64(j) * step)
+			baseVal := baseFunc(j)
+			y := float32(chartH - (baseVal/globalMaxIPs)*chartH)
+			path.LineTo(x, y)
+		}
+		path.Close()
+
+		e.ipTrendVertices = e.ipTrendVertices[:0]
+		e.ipTrendIndices = e.ipTrendIndices[:0]
+
+		e.ipTrendVertices, e.ipTrendIndices = path.AppendVerticesAndIndicesForFilling(e.ipTrendVertices, e.ipTrendIndices)
+
+		cr, cg, cb := float32(c.R)/255.0, float32(c.G)/255.0, float32(c.B)/255.0
+		for i := range e.ipTrendVertices {
+			e.ipTrendVertices[i].ColorR = cr
+			e.ipTrendVertices[i].ColorG = cg
+			e.ipTrendVertices[i].ColorB = cb
+			e.ipTrendVertices[i].ColorA = 1.0
+		}
+
+		op := &ebiten.DrawTrianglesOptions{}
+		op.Blend = ebiten.BlendLighter
+		e.ipTrendLinesBuffer.DrawTriangles(e.ipTrendVertices, e.ipTrendIndices, e.whitePixel, op)
+	}
+
+	avgMetrics := func(idx int) (float64, float64, float64, float64) {
+		if idx <= 0 {
+			s := e.history[0]
+			return float64(s.GoodIPs), float64(s.PolyIPs), float64(s.BadIPs), float64(s.CritIPs)
+		}
+		s1 := e.history[idx-1]
+		s2 := e.history[idx]
+		return float64(s1.GoodIPs+s2.GoodIPs) / 2, float64(s1.PolyIPs+s2.PolyIPs) / 2, float64(s1.BadIPs+s2.BadIPs) / 2, float64(s1.CritIPs+s2.CritIPs) / 2
+	}
+
+	critValFunc := func(j int) float64 { _, _, _, c := avgMetrics(j); return c }
+	critBaseFunc := func(j int) float64 { return 0 }
+	drawLayer(critValFunc, critBaseFunc, critCol)
+
+	badValFunc := func(j int) float64 { _, _, b, c := avgMetrics(j); return c + b }
+	badBaseFunc := func(j int) float64 { _, _, _, c := avgMetrics(j); return c }
+	drawLayer(badValFunc, badBaseFunc, badCol)
+
+	polyValFunc := func(j int) float64 { _, p, b, c := avgMetrics(j); return c + b + p }
+	polyBaseFunc := func(j int) float64 { _, _, b, c := avgMetrics(j); return c + b }
+	drawLayer(polyValFunc, polyBaseFunc, polyCol)
+
+	goodValFunc := func(j int) float64 { g, p, b, c := avgMetrics(j); return c + b + p + g }
+	goodBaseFunc := func(j int) float64 { _, p, b, c := avgMetrics(j); return c + b + p }
+	drawLayer(goodValFunc, goodBaseFunc, goodCol)
 }
 
 func (e *Engine) drawTrendGrid(screen *ebiten.Image, gx, gy, chartW, chartH, titlePadding, globalMaxLog, fontSize float64) {
@@ -793,6 +1020,23 @@ func (e *Engine) StartMetricsLoop() {
 }
 
 func (e *Engine) updateMetricSnapshots(interval float64) {
+	var goodIPs, polyIPs, badIPs, critIPs uint64
+	for _, pc := range e.prefixCounts {
+		if pc.Count == 0 {
+			continue
+		}
+		switch pc.Type {
+		case bgp.ClassificationDiscovery:
+			goodIPs += pc.IPCount
+		case bgp.ClassificationTrafficEngineering, bgp.ClassificationPathHunting, bgp.ClassificationDDoSMitigation:
+			polyIPs += pc.IPCount
+		case bgp.ClassificationFlap:
+			badIPs += pc.IPCount
+		case bgp.ClassificationOutage, bgp.ClassificationRouteLeak, bgp.ClassificationHijack:
+			critIPs += pc.IPCount
+		}
+	}
+
 	snap := MetricSnapshot{
 		New:    int(e.windowNew),
 		Upd:    int(e.windowUpd),
@@ -816,6 +1060,11 @@ func (e *Engine) updateMetricSnapshots(interval float64) {
 		DDoS:    int(e.windowDDoS),
 		Hijack:  int(e.windowHijack),
 		Bogon:   int(e.windowBogon),
+
+		GoodIPs: goodIPs,
+		PolyIPs: polyIPs,
+		BadIPs:  badIPs,
+		CritIPs: critIPs,
 	}
 	e.rateNew, e.rateUpd, e.rateWith, e.rateGossip = float64(snap.New)/interval, float64(snap.Upd)/interval, float64(snap.With)/interval, float64(snap.Gossip)/interval
 	e.rateNote, e.ratePeer, e.rateOpen = float64(snap.Note)/interval, float64(snap.Peer)/interval, float64(snap.Open)/interval
