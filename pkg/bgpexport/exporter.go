@@ -92,7 +92,10 @@ func (e *Exporter) endIncident(incident *Incident, now time.Time) {
 }
 
 func (e *Exporter) writeIncident(incident *Incident) {
-	os.MkdirAll(e.dir, 0755)
+	if err := os.MkdirAll(e.dir, 0755); err != nil {
+		fmt.Printf("Error creating incident directory: %v\n", err)
+		return
+	}
 	filePath := filepath.Join(e.dir, fmt.Sprintf("%s.json", incident.ID))
 	data, err := json.MarshalIndent(incident, "", "  ")
 	if err != nil {
