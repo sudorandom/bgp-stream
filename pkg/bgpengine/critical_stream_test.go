@@ -82,86 +82,6 @@ func TestCriticalStreamDeduplication(t *testing.T) {
 		t.Errorf("Expected 2 events (ASN 0 ignored), got %d", len(e.CriticalStream))
 	}
 
-	// Event 5: DDoS Mitigation, Provider 13335, Victim 9999, Prefix 3.3.0.0/16
-	nameDDoS := bgp.NameDDoSMitigation
-	ev5 := &bgpEvent{
-		classificationType: bgp.ClassificationDDoSMitigation,
-		prefix:             "3.3.0.0/16",
-		asn:                13335,
-		historicalASN:      9999,
-		cc:                 "NL",
-		leakDetail: &bgp.LeakDetail{
-			LeakerASN: 13335,
-			VictimASN: 9999,
-		},
-	}
-	e.recordToCriticalStream(ev5, c, nameDDoS)
-	e.lastCriticalAddedAt = time.Now().Add(-2 * time.Second)
-	e.updateCriticalStream()
-
-	if len(e.CriticalStream) != 3 {
-		t.Fatalf("Expected 3 events, got %d", len(e.CriticalStream))
-	}
-
-	// Event 6: Same DDoS Mitigation, different prefix
-	// This should now be deduplicated
-	ev6 := &bgpEvent{
-		classificationType: bgp.ClassificationDDoSMitigation,
-		prefix:             "3.4.0.0/16",
-		asn:                13335,
-		historicalASN:      9999,
-		cc:                 "NL",
-		leakDetail: &bgp.LeakDetail{
-			LeakerASN: 13335,
-			VictimASN: 9999,
-		},
-	}
-	e.recordToCriticalStream(ev6, c, nameDDoS)
-	if len(e.CriticalStream) != 3 {
-		t.Errorf("Expected 3 events after deduplication of DDoS mitigation, got %d", len(e.CriticalStream))
-	}
-
-	// Verify both prefixes are in the DDoS event
-	var ddosEvent *CriticalEvent
-	for _, ce := range e.CriticalStream {
-		if ce.Anom == bgp.NameDDoSMitigation {
-			ddosEvent = ce
-			break
-		}
-	}
-	if ddosEvent == nil {
-		t.Fatal("DDoS event not found in stream")
-	}
-	if len(ddosEvent.ImpactedPrefixes) != 2 {
-		t.Errorf("Expected 2 prefixes in DDoS event, got %d", len(ddosEvent.ImpactedPrefixes))
-	}
-	if _, ok := ddosEvent.ImpactedPrefixes["3.3.0.0/16"]; !ok {
-		t.Error("Prefix 3.3.0.0/16 not found in DDoS event")
-	}
-	if _, ok := ddosEvent.ImpactedPrefixes["3.4.0.0/16"]; !ok {
-		t.Error("Prefix 3.4.0.0/16 not found in DDoS event")
-	}
-
-	// Event 7: Cloudflare Self-Mitigation (Provider == Victim)
-	// This was previously ignored, now should be allowed.
-	ev7 := &bgpEvent{
-		classificationType: bgp.ClassificationDDoSMitigation,
-		prefix:             "1.3.0.0/16",
-		asn:                13335,
-		historicalASN:      13335,
-		cc:                 "US",
-		leakDetail: &bgp.LeakDetail{
-			LeakerASN: 13335,
-			VictimASN: 13335,
-		},
-	}
-	e.recordToCriticalStream(ev7, c, nameDDoS)
-	e.lastCriticalAddedAt = time.Now().Add(-2 * time.Second)
-	e.updateCriticalStream()
-
-	if len(e.CriticalStream) != 4 {
-		t.Errorf("Expected 4 events (including Cloudflare self-mitigation), got %d", len(e.CriticalStream))
-	}
 }
 
 type fakeWriteCloser struct{}
@@ -297,7 +217,9 @@ func TestCriticalStreamTransition(t *testing.T) {
 	}
 	e.recordToCriticalStream(ev2Recovery, color.RGBA{}, name)
 
-	if len(e.CriticalStream) != 0 {
-		t.Errorf("Expected event to be removed from stream after all prefixes recovered, but still have %d events", len(e.CriticalStream))
+	// In the updated logic, we DO NOT remove the event from the stream when its prefixes reach 0
+	// to avoid a jarring UI stutter. So the length should remain 1.
+	if len(e.CriticalStream) != 1 {
+		t.Errorf("Expected event to remain in stream (to avoid stutter), but got %d events", len(e.CriticalStream))
 	}
 }

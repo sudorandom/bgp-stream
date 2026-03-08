@@ -346,7 +346,11 @@ func (e *Engine) drawCriticalEvent(ce *CriticalEvent, x, y, boxW, fontSize float
 	// Use a distinct color for sub-classifications (Route Leak types, DDoS) or Impact
 	if ce.Anom == bgp.NameRouteLeak || ce.Anom == bgp.NameHardOutage || ce.Anom == bgp.NameDDoSMitigation || ce.Anom == bgp.NameHijack {
 		textOp.ColorScale.Reset()
-		textOp.ColorScale.Scale(0, 1, 1, 0.9) // Cyan for sub-type or impact
+		if ce.Anom == bgp.NameHardOutage && ce.ImpactedIPs == 0 {
+			textOp.ColorScale.Scale(0, 1, 0, 0.9) // Green for FIXED
+		} else {
+			textOp.ColorScale.Scale(0, 1, 1, 0.9) // Cyan for sub-type or impact
+		}
 	} else {
 		textOp.ColorScale.Reset()
 		textOp.ColorScale.Scale(cr, cg, cb, 0.7) // Lightened version of base color

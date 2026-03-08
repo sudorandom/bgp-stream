@@ -3,6 +3,7 @@ package bgpengine
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -312,6 +313,10 @@ type Engine struct {
 
 	eventCh chan *bgpEvent
 	statsCh chan *statsEvent
+
+	ctx       context.Context
+	cancelCtx context.CancelFunc
+	bgWg      sync.WaitGroup
 }
 
 type bgpEvent struct {
@@ -444,7 +449,11 @@ func NewEngine(width, height int, scale float64) *Engine {
 		log.Printf("Fatal: failed to load Mono font: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	e := &Engine{
+		ctx:        ctx,
+		cancelCtx:  cancel,
 		Width:      width,
 		Height:     height,
 		FPS:        30,
@@ -628,6 +637,7 @@ func (e *Engine) LoadRemainingData() error {
 	e.processor = bgp.NewBGPProcessor(e.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.RPKI, e.prefixToIP, e.Now, e.recordEvent)
 
 	// Preload anomalies from state DB to initialize the BGP EVENT SUMMARY
+	e.bgWg.Add(1)
 	go e.preloadActiveAnomalies()
 
 	log.Println("Engine startup complete. Listening for events...")
@@ -636,6 +646,8 @@ func (e *Engine) LoadRemainingData() error {
 }
 
 func (e *Engine) preloadActiveAnomalies() {
+	defer e.bgWg.Done()
+
 	if e.StateDB == nil {
 		return
 	}
@@ -643,6 +655,12 @@ func (e *Engine) preloadActiveAnomalies() {
 	log.Println("Preloading active anomalies from StateDB...")
 	count := 0
 	err := e.StateDB.ForEach(func(k []byte, v []byte) error {
+		select {
+		case <-e.ctx.Done():
+			return e.ctx.Err()
+		default:
+		}
+
 		if len(k) != 5 {
 			return nil
 		}
@@ -1469,7 +1487,7 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 	e.incrementCityBuffer(ev.lat, ev.lng, c, shape)
 
 	// 4. Record to CriticalStream if it's a critical anomaly
-	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationDDoSMitigation || ev.classificationType == bgp.ClassificationHijack {
+	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationHijack {
 		e.recordToCriticalStream(ev, c, name)
 	}
 
@@ -1586,7 +1604,7 @@ func (e *Engine) recordToCriticalStream(ev *bgpEvent, c color.RGBA, name string)
 	}
 
 	// If the event is not critical itself, we are done
-	if ev.classificationType != bgp.ClassificationOutage && ev.classificationType != bgp.ClassificationRouteLeak && ev.classificationType != bgp.ClassificationDDoSMitigation && ev.classificationType != bgp.ClassificationHijack {
+	if ev.classificationType != bgp.ClassificationOutage && ev.classificationType != bgp.ClassificationRouteLeak && ev.classificationType != bgp.ClassificationHijack {
 		return
 	}
 
@@ -1650,9 +1668,6 @@ func (e *Engine) removeFromCriticalSlice(slice *[]*CriticalEvent, prefix, curren
 			if _, ok := ce.ImpactedPrefixes[prefix]; ok {
 				if currentAnomName != ce.Anom {
 					e.removePrefixFromEvent(ce, prefix)
-					if len(ce.ImpactedPrefixes) == 0 {
-						*slice = append((*slice)[:i], (*slice)[i+1:]...)
-					}
 				}
 				return true
 			}
@@ -1732,7 +1747,7 @@ func (e *Engine) updateExistingCriticalEvent(ce *CriticalEvent, ev *bgpEvent) bo
 	}
 
 	// Update IP Impact
-	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationDDoSMitigation || ev.classificationType == bgp.ClassificationHijack {
+	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationHijack {
 		if ce.ImpactedPrefixes == nil {
 			ce.ImpactedPrefixes = make(map[string]struct{})
 		}
@@ -1788,7 +1803,7 @@ func (e *Engine) createCriticalEvent(ev *bgpEvent, c color.RGBA, name, asnStr, o
 		Locations:        newLoc,
 		ImpactedPrefixes: make(map[string]struct{}),
 	}
-	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationDDoSMitigation || ev.classificationType == bgp.ClassificationHijack {
+	if ev.classificationType == bgp.ClassificationOutage || ev.classificationType == bgp.ClassificationRouteLeak || ev.classificationType == bgp.ClassificationHijack {
 		ce.ImpactedPrefixes[ev.prefix] = struct{}{}
 		ce.ImpactedIPs = utils.GetPrefixSize(ev.prefix)
 	}
@@ -1874,7 +1889,11 @@ func (e *Engine) updateCriticalEventCacheStrs(ce *CriticalEvent) {
 	}
 
 	if ce.Anom == bgp.NameHardOutage || ce.Anom == bgp.NameDDoSMitigation || ce.Anom == bgp.NameRouteLeak || ce.Anom == bgp.NameHijack {
-		ce.CachedFirstLine = fmt.Sprintf(" %s IPs Impacted", utils.FormatNumber(ce.ImpactedIPs))
+		if ce.Anom == bgp.NameHardOutage && ce.ImpactedIPs == 0 {
+			ce.CachedFirstLine = " FIXED"
+		} else {
+			ce.CachedFirstLine = fmt.Sprintf(" %s IPs Impacted", utils.FormatNumber(ce.ImpactedIPs))
+		}
 		if ce.Anom == bgp.NameHardOutage {
 			e.cacheOutageStrings(ce)
 		} else {
@@ -2491,6 +2510,12 @@ func (e *Engine) scheduleVisualPulses(nextBatch []QueuedPulse) {
 }
 
 func (e *Engine) Stop() {
+	if e.cancelCtx != nil {
+		e.cancelCtx()
+	}
+
+	e.bgWg.Wait()
+
 	if e.VideoWriter != nil {
 		log.Printf("Closing video writer and finalizing video...")
 		if err := e.VideoWriter.Close(); err != nil {
