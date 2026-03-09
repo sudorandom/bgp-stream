@@ -26,7 +26,7 @@ func TestExporter(t *testing.T) {
 	asn := uint32(12345)
 
 	// Start an incident
-	exporter.HandleEvent(prefix, asn, bgp.ClassificationOutage, nil, now)
+	exporter.HandleEvent(prefix, asn, bgp.ClassificationOutage, nil, nil, now)
 
 	// Read the file
 	files, err := os.ReadDir(tempDir)
@@ -63,7 +63,7 @@ func TestExporter(t *testing.T) {
 
 	// End the incident
 	now2 := now.Add(time.Minute)
-	exporter.HandleEvent(prefix, asn, bgp.ClassificationNone, nil, now2)
+	exporter.HandleEvent(prefix, asn, bgp.ClassificationNone, nil, nil, now2)
 
 	// Read the file again
 	fileContent, err = os.ReadFile(filepath.Join(tempDir, files[0].Name()))

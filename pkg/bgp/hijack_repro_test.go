@@ -47,7 +47,7 @@ func TestClassifier_HijackReproduction(t *testing.T) {
 			Now:            now,
 		}
 
-		et, _, ok := c.findCriticalAnomaly("140.213.1.0/24", s, 65.0, ctx)
+		et, _, _, ok := c.findCriticalAnomaly("140.213.1.0/24", s, 65.0, ctx)
 		if ok && et == ClassificationRouteLeak {
 			t.Errorf("Expected suppression (ClassificationNone), got %v", et)
 		}
@@ -71,7 +71,7 @@ func TestClassifier_HijackReproduction(t *testing.T) {
 			Now:            now,
 		}
 
-		et, _, ok := c.findCriticalAnomaly("140.213.1.0/24", s, 65.0, ctx)
+		et, _, _, ok := c.findCriticalAnomaly("140.213.1.0/24", s, 65.0, ctx)
 		// This should return ClassificationNone (not ok) because names match on first word
 		if ok && et == ClassificationRouteLeak {
 			t.Errorf("Expected fuzzy name suppression, got %v", et)

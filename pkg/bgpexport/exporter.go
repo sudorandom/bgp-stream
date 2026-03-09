@@ -1,4 +1,3 @@
-// Package bgpexport handles exporting BGP incidents to JSON files. It tracks active incidents and updates them as events occur.
 package bgpexport
 
 import (
@@ -37,7 +36,7 @@ func NewExporter(dir string) *Exporter {
 	}
 }
 
-func (e *Exporter) HandleEvent(prefix string, asn uint32, classType bgp.ClassificationType, leakDetail *bgp.LeakDetail, now time.Time) {
+func (e *Exporter) HandleEvent(prefix string, asn uint32, classType bgp.ClassificationType, leakDetail *bgp.LeakDetail, anomalyDetails *bgp.AnomalyDetails, now time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -58,11 +57,11 @@ func (e *Exporter) HandleEvent(prefix string, asn uint32, classType bgp.Classifi
 			} else {
 				// Transition to a NEW bad state
 				e.endIncident(active, now)
-				e.startIncident(prefix, asn, classType, leakDetail, now)
+				e.startIncident(prefix, asn, classType, leakDetail, anomalyDetails, now)
 			}
 		} else {
 			// Start new incident
-			e.startIncident(prefix, asn, classType, leakDetail, now)
+			e.startIncident(prefix, asn, classType, leakDetail, anomalyDetails, now)
 		}
 	} else {
 		if exists {
@@ -73,7 +72,14 @@ func (e *Exporter) HandleEvent(prefix string, asn uint32, classType bgp.Classifi
 	}
 }
 
-func (e *Exporter) startIncident(prefix string, asn uint32, classType bgp.ClassificationType, leakDetail *bgp.LeakDetail, now time.Time) {
+func (e *Exporter) startIncident(prefix string, asn uint32, classType bgp.ClassificationType, leakDetail *bgp.LeakDetail, anomalyDetails *bgp.AnomalyDetails, now time.Time) {
+	var details interface{}
+	if leakDetail != nil {
+		details = leakDetail
+	} else if anomalyDetails != nil {
+		details = anomalyDetails
+	}
+
 	incident := &Incident{
 		ID:        uuid.New().String(),
 		Prefix:    prefix,
@@ -81,7 +87,7 @@ func (e *Exporter) startIncident(prefix string, asn uint32, classType bgp.Classi
 		Type:      classType,
 		TypeName:  classType.String(),
 		StartTime: now,
-		Details:   leakDetail, // Store extra details if needed
+		Details:   details,
 	}
 	e.activeIncidents[prefix] = incident
 	e.writeIncident(incident)
@@ -93,7 +99,7 @@ func (e *Exporter) endIncident(incident *Incident, now time.Time) {
 }
 
 func (e *Exporter) writeIncident(incident *Incident) {
-	if err := os.MkdirAll(e.dir, 0o755); err != nil {
+	if err := os.MkdirAll(e.dir, 0755); err != nil {
 		fmt.Printf("Error creating incident directory: %v\n", err)
 		return
 	}
@@ -103,7 +109,7 @@ func (e *Exporter) writeIncident(incident *Incident) {
 		fmt.Printf("Error marshalling incident: %v\n", err)
 		return
 	}
-	err = os.WriteFile(filePath, data, 0o644)
+	err = os.WriteFile(filePath, data, 0644)
 	if err != nil {
 		fmt.Printf("Error writing incident file: %v\n", err)
 	}

@@ -345,7 +345,7 @@ func handlePrefix(localClassifier, masterClassifier *bgp_pkg.Classifier, prefix 
 		newType := bgp_pkg.ClassificationType(state.ClassifiedType)
 
 		if oldType != newType {
-			masterClassifier.RecordClassification(prefix, state, newType, ctx.Now.Unix(), ctx, ev.HistoricalASN, ev.LeakDetail)
+			masterClassifier.RecordClassification(prefix, state, newType, ctx.Now.Unix(), ctx, ev.HistoricalASN, ev.LeakDetail, ev.AnomalyDetails)
 
 			csvMu.Lock()
 			_ = writer.Write([]string{

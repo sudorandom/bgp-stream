@@ -272,7 +272,7 @@ func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixSt
 		return PendingEvent{}, false
 	}
 
-	anomType, leakDetail, classified := c.findClassification(prefix, &stats, elapsed, ctx)
+	anomType, leakDetail, anomalyDetails, classified := c.findClassification(prefix, &stats, elapsed, ctx)
 
 	if classified {
 		if state.ClassifiedType != 0 {
@@ -301,10 +301,11 @@ func (c *Classifier) evaluatePrefixState(prefix string, state *bgpproto.PrefixSt
 					EventType:          ctx.EventType(),
 					ClassificationType: ClassificationType(state.ClassifiedType),
 					LeakDetail:         ld,
+					AnomalyDetails:     anomalyDetails,
 				}, true
 			}
 		}
-		return c.RecordClassification(prefix, state, anomType, ctx.Now.Unix(), ctx, historicalOriginAsn, leakDetail), true
+		return c.RecordClassification(prefix, state, anomType, ctx.Now.Unix(), ctx, historicalOriginAsn, leakDetail, anomalyDetails), true
 	}
 	return PendingEvent{}, false
 }
@@ -384,23 +385,23 @@ func (c *Classifier) aggregateRecentBuckets(state *bgpproto.PrefixState, now tim
 	return s
 }
 
-func (c *Classifier) findClassification(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
+func (c *Classifier) findClassification(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, *AnomalyDetails, bool) {
 	// 1. Critical
-	if et, ld, ok := c.findCriticalAnomaly(prefix, s, elapsed, ctx); ok {
-		return et, ld, true
+	if et, ld, ad, ok := c.findCriticalAnomaly(prefix, s, elapsed, ctx); ok {
+		return et, ld, ad, true
 	}
 
 	// 2. Bad
-	if et, ok := c.findBadAnomaly(s); ok {
-		return et, nil, true
+	if et, ad, ok := c.findBadAnomaly(s); ok {
+		return et, nil, ad, true
 	}
 
 	// 3. Normal / Policy
 	if et, ok := c.findNormalAnomaly(s, elapsed); ok {
-		return et, nil, true
+		return et, nil, nil, true
 	}
 
-	return ClassificationNone, nil, false
+	return ClassificationNone, nil, nil, false
 }
 
 func (c *Classifier) getHistoricalASN(prefix string) uint32 {
@@ -429,7 +430,7 @@ func (c *Classifier) getHistoricalASN(prefix string) uint32 {
 	return 0
 }
 
-func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
+func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed float64, ctx *MessageContext) (ClassificationType, *LeakDetail, *AnomalyDetails, bool) {
 	peerCount := len(s.uniquePeers)
 	hostCount := len(s.uniqueHosts)
 	withdrawnPeerCount := len(s.withdrawnPeers)
@@ -438,18 +439,29 @@ func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed 
 
 	// 0. Bogon Detection
 	if c.isBogon(prefix, ctx) {
-		return ClassificationBogon, nil, true
+		return ClassificationBogon, nil, nil, true
 	}
 
 	// Outage heuristic based on host diversity and total peers tracking the prefix
 	// Industry standard: A prefix is considered in outage if it loses all its paths (peerCount == 0)
 	if elapsed > 60 && totalKnownPeers > 0 && peerCount == 0 && withdrawnPeerCount > 0 {
+		isOutage := false
 		if withdrawnPeerCount >= 3 && withdrawnHostCount >= 2 {
 			// Sufficient diversity across collectors and peers to confirm an outage
-			return ClassificationOutage, nil, true
+			isOutage = true
 		} else if withdrawnPeerCount >= totalKnownPeers && withdrawnHostCount >= 2 {
 			// For smaller prefixes (<= 2 peers), require all known peers and multiple hosts to have withdrawn
-			return ClassificationOutage, nil, true
+			isOutage = true
+		}
+
+		if isOutage {
+			ad := &AnomalyDetails{
+				NumCollectors:    withdrawnHostCount,
+				NumPeers:         withdrawnPeerCount,
+				NumWithdrawals:   int(s.totalWith),
+				NumAnnouncements: int(s.totalAnn),
+			}
+			return ClassificationOutage, nil, ad, true
 		}
 	}
 
@@ -457,20 +469,20 @@ func (c *Classifier) findCriticalAnomaly(prefix string, s *prefixStats, elapsed 
 
 	// 0.5 DDoS Mitigation Detection
 	if ld, ok := c.detectDDoSMitigation(prefix, ctx, historicalOriginAsn); ok {
-		return ClassificationDDoSMitigation, ld, true
+		return ClassificationDDoSMitigation, ld, nil, true
 	}
 
 	// 1. Hijack Detection (RPKI Signal)
 	if anom, ld, ok := c.detectHijack(prefix, peerCount, hostCount, ctx); ok {
-		return anom, ld, true
+		return anom, ld, nil, true
 	}
 
 	// 2. Route Leak Detection (AS Path Heuristic)
 	if anom, ld, ok := c.detectRouteLeak(prefix, peerCount, hostCount, ctx); ok {
-		return anom, ld, true
+		return anom, ld, nil, true
 	}
 
-	return ClassificationNone, nil, false
+	return ClassificationNone, nil, nil, false
 }
 
 func (c *Classifier) detectHijack(prefix string, peerCount, hostCount int, ctx *MessageContext) (ClassificationType, *LeakDetail, bool) {
@@ -726,15 +738,22 @@ func (c *Classifier) isCloud(asn uint32) bool {
 	}
 }
 
-func (c *Classifier) findBadAnomaly(s *prefixStats) (ClassificationType, bool) {
+func (c *Classifier) findBadAnomaly(s *prefixStats) (ClassificationType, *AnomalyDetails, bool) {
 	isNextHopOsc := len(s.uniqueHops) > 1 && s.totalHop >= 10 && s.totalPath <= 2
 	isLinkFlap := s.totalWith >= 5 && float64(s.totalAnn)/float64(s.totalWith) < 2.0
 
 	if isNextHopOsc || isLinkFlap {
-		return ClassificationFlap, true
+		ad := &AnomalyDetails{
+			NumCollectors:    len(s.uniqueHosts),
+			NumPeers:         len(s.uniquePeers),
+			NumWithdrawals:   int(s.totalWith),
+			NumAnnouncements: int(s.totalAnn),
+			FlapCount:        int(s.totalWith) + int(s.totalAnn),
+		}
+		return ClassificationFlap, ad, true
 	}
 
-	return ClassificationNone, false
+	return ClassificationNone, nil, false
 }
 
 func (c *Classifier) findNormalAnomaly(s *prefixStats, elapsed float64) (ClassificationType, bool) {
@@ -765,7 +784,7 @@ func (c *Classifier) GetASNMapping() *utils.ASNMapping {
 	return c.asnMapping
 }
 
-func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixState, anomType ClassificationType, now int64, ctx *MessageContext, historicalOriginAsn uint32, leakDetail ...*LeakDetail) PendingEvent {
+func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixState, anomType ClassificationType, now int64, ctx *MessageContext, historicalOriginAsn uint32, leakDetail *LeakDetail, anomalyDetails *AnomalyDetails) PendingEvent {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.classificationStats[anomType]++
@@ -792,8 +811,8 @@ func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixS
 	state.ClassifiedTimeTs = now
 
 	var ld *LeakDetail
-	if len(leakDetail) > 0 {
-		ld = leakDetail[0]
+	if leakDetail != nil {
+		ld = leakDetail
 	}
 
 	if ld != nil {
@@ -839,6 +858,7 @@ func (c *Classifier) RecordClassification(prefix string, state *bgpproto.PrefixS
 		EventType:          ctx.EventType(),
 		ClassificationType: anomType,
 		LeakDetail:         ld,
+		AnomalyDetails:     anomalyDetails,
 	}
 }
 

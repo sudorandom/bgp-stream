@@ -333,6 +333,7 @@ type bgpEvent struct {
 	asn                uint32
 	historicalASN      uint32
 	leakDetail         *bgp.LeakDetail
+	anomalyDetails     *bgp.AnomalyDetails
 }
 
 type VisualHub struct {
@@ -1468,13 +1469,9 @@ func (e *Engine) processEventBatch(batch []*bgpEvent) {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType bgp.EventType, classificationType bgp.ClassificationType, prefix string, asn, historicalASN uint32, leakDetail ...*bgp.LeakDetail) {
-	var ld *bgp.LeakDetail
-	if len(leakDetail) > 0 {
-		ld = leakDetail[0]
-	}
+func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType bgp.EventType, classificationType bgp.ClassificationType, prefix string, asn, historicalASN uint32, leakDetail *bgp.LeakDetail, anomalyDetails *bgp.AnomalyDetails) {
 	select {
-	case e.eventCh <- &bgpEvent{lat, lng, cc, city, eventType, classificationType, prefix, asn, historicalASN, ld}:
+	case e.eventCh <- &bgpEvent{lat, lng, cc, city, eventType, classificationType, prefix, asn, historicalASN, leakDetail, anomalyDetails}:
 	default:
 		// Drop event if engine is too busy
 	}
@@ -1503,7 +1500,7 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 	e.updateWindowedMetrics(ev.eventType, ev.classificationType, ev.prefix, ev.asn)
 
 	if e.exporter != nil && ev.prefix != "" {
-		e.exporter.HandleEvent(ev.prefix, ev.asn, ev.classificationType, ev.leakDetail, e.Now())
+		e.exporter.HandleEvent(ev.prefix, ev.asn, ev.classificationType, ev.leakDetail, ev.anomalyDetails, e.Now())
 	}
 
 	// Filter out invalid DDoS Mitigation events from stats so they don't appear in summaries

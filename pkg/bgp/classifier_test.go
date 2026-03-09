@@ -116,7 +116,7 @@ func TestClassifier_FindCriticalAnomaly_Outage(t *testing.T) {
 		for i := 1; i <= 20; i++ {
 			s.withdrawnPeers[fmt.Sprintf("p%d", i)] = true
 		}
-		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, &MessageContext{Now: now})
+		et, _, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, &MessageContext{Now: now})
 		if !ok || et != ClassificationOutage {
 			t.Errorf("findCriticalAnomaly() expected Outage, got %v, %v", et, ok)
 		}
@@ -130,7 +130,7 @@ func TestClassifier_FindCriticalAnomaly_Outage(t *testing.T) {
 				uniquePeers:    map[string]bool{},
 				uniqueHosts:    map[string]bool{},
 			}
-			et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", sSmall, 65.0, &MessageContext{Now: now})
+			et, _, _, ok := c.findCriticalAnomaly("1.1.1.0/24", sSmall, 65.0, &MessageContext{Now: now})
 			if !ok || et != ClassificationOutage {
 				t.Errorf("findCriticalAnomaly() expected Outage for small prefix, got %v, %v", et, ok)
 			}
@@ -145,7 +145,7 @@ func TestClassifier_FindCriticalAnomaly_Outage(t *testing.T) {
 				withdrawnPeers: map[string]bool{"p1": true, "p2": true, "p3": true},
 				withdrawnHosts: map[string]bool{"h1": true, "h2": true},
 			}
-			et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s2, 65.0, &MessageContext{Now: now})
+			et, _, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s2, 65.0, &MessageContext{Now: now})
 			if ok && et == ClassificationOutage {
 				t.Errorf("findCriticalAnomaly() detected Outage but 2 peers still see the prefix!")
 			}
@@ -185,7 +185,7 @@ func TestClassifier_FindCriticalAnomaly_Hijack(t *testing.T) {
 			Now:            now,
 		}
 
-		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
+		et, _, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
 		if !ok || et != ClassificationHijack {
 			t.Errorf("findCriticalAnomaly() expected BGP Hijack, got %v, %v", et, ok)
 		}
@@ -222,7 +222,7 @@ func TestClassifier_FindCriticalAnomaly_DDoS(t *testing.T) {
 			Now:            now,
 		}
 
-		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
+		et, _, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
 		if !ok || et != ClassificationDDoSMitigation {
 			if et != ClassificationDDoSMitigation {
 				t.Errorf("findCriticalAnomaly() expected DDoSMitigation, got %v, %v", et, ok)
@@ -300,7 +300,7 @@ func TestClassifier_FindCriticalAnomaly_DDoS(t *testing.T) {
 			Now:            now,
 		}
 
-		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
+		et, _, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
 		if !ok || et != ClassificationDDoSMitigation {
 			if et != ClassificationDDoSMitigation {
 				t.Errorf("findCriticalAnomaly() expected DDoS Mitigation for self-mitigation, got %v", et)
@@ -340,7 +340,7 @@ func TestClassifier_FindCriticalAnomaly_DDoS(t *testing.T) {
 			Now:            now,
 		}
 
-		et, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
+		et, _, _, ok := c.findCriticalAnomaly("1.1.1.0/24", s, 65.0, ctx)
 		if !ok || et != ClassificationDDoSMitigation {
 			if et != ClassificationDDoSMitigation {
 				t.Errorf("findCriticalAnomaly() expected DDoS Mitigation for sibling mitigation, got %v", et)
@@ -499,7 +499,7 @@ func TestClassifier_FindCriticalAnomaly_DDoS_Detailed(t *testing.T) {
 
 			c.seenDB = seenDB
 
-			gotType, gotLD, ok := c.findCriticalAnomaly(tt.prefix, s, 65.0, ctx)
+			gotType, gotLD, _, ok := c.findCriticalAnomaly(tt.prefix, s, 65.0, ctx)
 
 			if tt.wantType == ClassificationNone {
 				if ok && gotType == ClassificationDDoSMitigation {
