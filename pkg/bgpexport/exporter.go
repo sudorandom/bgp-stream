@@ -1,3 +1,4 @@
+// Package bgpexport handles exporting BGP incidents to JSON files. It tracks active incidents and updates them as events occur.
 package bgpexport
 
 import (
@@ -92,7 +93,7 @@ func (e *Exporter) endIncident(incident *Incident, now time.Time) {
 }
 
 func (e *Exporter) writeIncident(incident *Incident) {
-	if err := os.MkdirAll(e.dir, 0755); err != nil {
+	if err := os.MkdirAll(e.dir, 0o755); err != nil {
 		fmt.Printf("Error creating incident directory: %v\n", err)
 		return
 	}
@@ -102,7 +103,7 @@ func (e *Exporter) writeIncident(incident *Incident) {
 		fmt.Printf("Error marshalling incident: %v\n", err)
 		return
 	}
-	err = os.WriteFile(filePath, data, 0644)
+	err = os.WriteFile(filePath, data, 0o644)
 	if err != nil {
 		fmt.Printf("Error writing incident file: %v\n", err)
 	}
