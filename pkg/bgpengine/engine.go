@@ -30,6 +30,7 @@ import (
 	geojson "github.com/paulmach/go.geojson"
 	"github.com/sudorandom/bgp-stream/pkg/bgp"
 	bgpproto "github.com/sudorandom/bgp-stream/pkg/bgp/proto/v1"
+	"github.com/sudorandom/bgp-stream/pkg/bgpexport"
 	"github.com/sudorandom/bgp-stream/pkg/geoservice"
 	"github.com/sudorandom/bgp-stream/pkg/utils"
 	"google.golang.org/protobuf/proto"
@@ -263,6 +264,7 @@ type Engine struct {
 	audioPlayer *AudioPlayer
 	processor   *bgp.BGPProcessor
 	asnMapping  *utils.ASNMapping
+	exporter    *bgpexport.Exporter
 	geoResolver geoservice.GeoResolver
 	dataMgr     *geoservice.DataManager
 	MMDBFiles   []string
@@ -331,6 +333,7 @@ type bgpEvent struct {
 	asn                uint32
 	historicalASN      uint32
 	leakDetail         *bgp.LeakDetail
+	anomalyDetails     *bgp.AnomalyDetails
 }
 
 type VisualHub struct {
@@ -639,6 +642,8 @@ func (e *Engine) LoadRemainingData() error {
 	}
 
 	e.processor = bgp.NewBGPProcessor(e.GetIPCoords, e.SeenDB, e.StateDB, e.asnMapping, e.RPKI, e.prefixToIP, e.Now, e.recordEvent)
+
+	e.exporter = bgpexport.NewExporter("data/export")
 
 	// Preload anomalies from state DB to initialize the BGP EVENT SUMMARY
 	e.bgWg.Add(1)
@@ -1464,13 +1469,9 @@ func (e *Engine) processEventBatch(batch []*bgpEvent) {
 	}
 }
 
-func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType bgp.EventType, classificationType bgp.ClassificationType, prefix string, asn, historicalASN uint32, leakDetail ...*bgp.LeakDetail) {
-	var ld *bgp.LeakDetail
-	if len(leakDetail) > 0 {
-		ld = leakDetail[0]
-	}
+func (e *Engine) recordEvent(lat, lng float64, cc, city string, eventType bgp.EventType, classificationType bgp.ClassificationType, prefix string, asn, historicalASN uint32, leakDetail *bgp.LeakDetail, anomalyDetails *bgp.AnomalyDetails) {
 	select {
-	case e.eventCh <- &bgpEvent{lat, lng, cc, city, eventType, classificationType, prefix, asn, historicalASN, ld}:
+	case e.eventCh <- &bgpEvent{lat, lng, cc, city, eventType, classificationType, prefix, asn, historicalASN, leakDetail, anomalyDetails}:
 	default:
 		// Drop event if engine is too busy
 	}
@@ -1497,6 +1498,10 @@ func (e *Engine) processEventLocked(ev *bgpEvent) {
 
 	// 5. Update windowed metrics (this drives the dashboard numbers)
 	e.updateWindowedMetrics(ev.eventType, ev.classificationType, ev.prefix, ev.asn)
+
+	if e.exporter != nil && ev.prefix != "" {
+		e.exporter.HandleEvent(ev.prefix, ev.asn, ev.classificationType, ev.leakDetail, ev.anomalyDetails, e.Now())
+	}
 
 	// Filter out invalid DDoS Mitigation events from stats so they don't appear in summaries
 	// We require both provider and victim ASN to be known to show a meaningful summary item.

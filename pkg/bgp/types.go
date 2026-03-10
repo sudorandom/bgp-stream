@@ -77,6 +77,14 @@ type LeakDetail struct {
 	VictimASN uint32
 }
 
+type AnomalyDetails struct {
+	NumCollectors    int
+	NumPeers         int
+	NumWithdrawals   int
+	NumAnnouncements int
+	FlapCount        int
+}
+
 type ClassificationType int
 
 const (

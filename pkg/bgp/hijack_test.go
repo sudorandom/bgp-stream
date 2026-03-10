@@ -166,7 +166,7 @@ func TestHijackDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var lastAnom ClassificationType
-			onEvent := func(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn, historicalASN uint32, leakDetail ...*LeakDetail) {
+			onEvent := func(lat, lng float64, cc, city string, eventType EventType, classificationType ClassificationType, prefix string, asn, historicalASN uint32, leakDetail *LeakDetail, anomalyDetails *AnomalyDetails) {
 				if classificationType != ClassificationNone {
 					lastAnom = classificationType
 				}
@@ -190,7 +190,7 @@ func TestHijackDetection(t *testing.T) {
 			for _, ctx := range tt.updates {
 				wIdx := int(utils.HashUint32(p.prefixToIP(tt.prefix)) % uint32(len(p.workers)))
 				if e, ok := p.workers[wIdx].classifier.ClassifyEvent(tt.prefix, ctx); ok {
-					p.onEvent(0, 0, "US", "New York", e.EventType, e.ClassificationType, e.Prefix, e.ASN, e.HistoricalASN, e.LeakDetail)
+					p.onEvent(0, 0, "US", "New York", e.EventType, e.ClassificationType, e.Prefix, e.ASN, e.HistoricalASN, e.LeakDetail, e.AnomalyDetails)
 				}
 			}
 
