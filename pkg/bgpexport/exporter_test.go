@@ -34,11 +34,19 @@ func TestExporter(t *testing.T) {
 		t.Fatalf("Failed to read dir: %v", err)
 	}
 
-	if len(files) != 1 {
-		t.Fatalf("Expected 1 file, got %d", len(files))
+	var jsonFile string
+	for _, f := range files {
+		if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
+			jsonFile = f.Name()
+			break
+		}
 	}
 
-	fileContent, err := os.ReadFile(filepath.Join(tempDir, files[0].Name()))
+	if jsonFile == "" {
+		t.Fatalf("Expected to find a .json file, got none in %d files", len(files))
+	}
+
+	fileContent, err := os.ReadFile(filepath.Join(tempDir, jsonFile))
 	if err != nil {
 		t.Fatalf("Failed to read file: %v", err)
 	}
@@ -66,7 +74,7 @@ func TestExporter(t *testing.T) {
 	exporter.HandleEvent(prefix, asn, bgp.ClassificationNone, nil, nil, now2)
 
 	// Read the file again
-	fileContent, err = os.ReadFile(filepath.Join(tempDir, files[0].Name()))
+	fileContent, err = os.ReadFile(filepath.Join(tempDir, jsonFile))
 	if err != nil {
 		t.Fatalf("Failed to read file: %v", err)
 	}

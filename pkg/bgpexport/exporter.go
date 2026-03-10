@@ -1,3 +1,4 @@
+// Package bgpexport provides logic for exporting BGP incident data.
 package bgpexport
 
 import (
@@ -99,18 +100,17 @@ func (e *Exporter) endIncident(incident *Incident, now time.Time) {
 }
 
 func (e *Exporter) writeIncident(incident *Incident) {
-	dirPath := filepath.Join(e.dir, time.Now().Format("20060102_15"))
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
+	if err := os.MkdirAll(e.dir, 0o755); err != nil {
 		fmt.Printf("Error creating incident directory: %v\n", err)
 		return
 	}
-	filePath := filepath.Join(dirPath, fmt.Sprintf("%s.json", incident.ID))
+	filePath := filepath.Join(e.dir, fmt.Sprintf("%s.json", incident.ID))
 	data, err := json.MarshalIndent(incident, "", "  ")
 	if err != nil {
 		fmt.Printf("Error marshalling incident: %v\n", err)
 		return
 	}
-	err = os.WriteFile(filePath, data, 0644)
+	err = os.WriteFile(filePath, data, 0o644)
 	if err != nil {
 		fmt.Printf("Error writing incident file: %v\n", err)
 	}
